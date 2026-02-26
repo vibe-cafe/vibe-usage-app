@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Build Vibe Usage.app from SPM release binary
-# Usage: ./scripts/build-app.sh
+# Usage: ./scripts/build-app.sh [--notarize]
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -12,7 +12,15 @@ EXECUTABLE="VibeUsage"
 BUILD_DIR="$PROJECT_DIR/.build/release"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+ZIP_PATH="$DIST_DIR/$APP_NAME.zip"
 ICON_SOURCE_DIR="$PROJECT_DIR/VibeUsage/Resources/Assets.xcassets/AppIcon.appiconset"
+SIGN_IDENTITY="Developer ID Application: Yin Ming (D33463FWDZ)"
+NOTARIZE_PROFILE="VibeUsage"
+
+NOTARIZE=false
+if [[ "${1:-}" == "--notarize" ]]; then
+    NOTARIZE=true
+fi
 
 echo "==> Building release binary..."
 cd "$PROJECT_DIR"
@@ -58,13 +66,46 @@ iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET_DIR")"
 echo "    Generated AppIcon.icns"
 
-# Ad-hoc codesign
-echo "==> Codesigning (ad-hoc)..."
-codesign --force --deep --sign - "$APP_BUNDLE"
+# Codesign with Developer ID
+echo "==> Codesigning with Developer ID..."
+codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+echo "    Signed with: $SIGN_IDENTITY"
 
-echo ""
-echo "==> Done! App bundle at:"
-echo "    $APP_BUNDLE"
-echo ""
-echo "    To install: cp -R \"$APP_BUNDLE\" /Applications/"
-echo "    To run:     open \"$APP_BUNDLE\""
+# Verify signature
+codesign --verify --deep --strict "$APP_BUNDLE"
+echo "    Signature verified"
+
+if $NOTARIZE; then
+    # Zip for notarization
+    echo "==> Zipping for notarization..."
+    rm -f "$ZIP_PATH"
+    ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+
+    # Submit for notarization
+    echo "==> Submitting for notarization (this may take a few minutes)..."
+    xcrun notarytool submit "$ZIP_PATH" \
+        --keychain-profile "$NOTARIZE_PROFILE" \
+        --wait
+
+    # Staple the ticket
+    echo "==> Stapling notarization ticket..."
+    xcrun stapler staple "$APP_BUNDLE"
+
+    # Re-zip with stapled ticket for distribution
+    echo "==> Creating distribution zip..."
+    rm -f "$ZIP_PATH"
+    ditto -c -k --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+
+    echo ""
+    echo "==> Done! Signed + notarized app bundle at:"
+    echo "    $APP_BUNDLE"
+    echo "    $ZIP_PATH (ready for distribution)"
+else
+    echo ""
+    echo "==> Done! Signed app bundle at:"
+    echo "    $APP_BUNDLE"
+    echo ""
+    echo "    To notarize: $0 --notarize"
+    echo "    To install:  cp -R \"$APP_BUNDLE\" /Applications/"
+    echo "    To run:      open \"$APP_BUNDLE\""
+fi
