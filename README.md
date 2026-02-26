@@ -7,9 +7,12 @@ Replaces the manual `npx @vibe-cafe/vibe-usage sync` workflow with background po
 ## Features
 
 - Menu bar app — no Dock icon, runs in the background
+- Custom pixel-art menu bar icon (template image, auto light/dark)
 - Auto-syncs usage data every 5 minutes via `@vibe-cafe/vibe-usage` CLI
 - Dashboard popover with summary cards, stacked bar chart, and multi-category filters
+- Inline onboarding with API key validation
 - Time range selector: 1D / 7D / 30D
+- Menu bar label: optional cost and/or token count next to icon
 - Auto-start on login (via SMAppService)
 - Manages CLI session hooks (removes on start, restores on quit)
 
@@ -26,10 +29,10 @@ Replaces the manual `npx @vibe-cafe/vibe-usage sync` workflow with background po
 git clone https://github.com/vibe-cafe/vibe-usage-app.git
 cd vibe-usage-app
 
-# Build (debug)
+# Build (debug — uses localhost:3000 + config.dev.json)
 swift build
 
-# Build (release)
+# Build (release — uses vibecafe.ai + config.json)
 swift build -c release
 
 # Run
@@ -47,24 +50,34 @@ open Package.swift
 ## Architecture
 
 ```
-App (SwiftUI)
- ├─ reads ~/.vibe-usage/config.json (read-only)
- ├─ calls vibe-usage CLI for config writes (via CLIBridge)
+App (SwiftUI MenuBarExtra)
+ ├─ reads ~/.vibe-usage/config[.dev].json via ConfigManager
+ ├─ writes config directly via ConfigManager.save()
  ├─ calls vibe-usage CLI for sync (via SyncEngine)
  └─ calls GET /api/usage directly for dashboard data (via APIClient)
 ```
 
-The Mac app never writes to `config.json` directly. All config mutations go through the `@vibe-cafe/vibe-usage` CLI, which owns the config file format.
+### Debug vs Release
+
+| | Debug (`swift build`) | Release (`swift build -c release`) |
+|---|---|---|
+| API URL | `http://localhost:3000` | `https://vibecafe.ai` |
+| Config file | `~/.vibe-usage/config.dev.json` | `~/.vibe-usage/config.json` |
+| CLI env var | `VIBE_USAGE_DEV=1` | (not set) |
+| UI badge | Shows "DEBUG" next to title | Hidden |
+
+All debug/release branching flows through `AppConfig.swift` (`#if DEBUG`).
 
 ### Key modules
 
 | Module | Purpose |
 |--------|---------|
+| `AppConfig` | `#if DEBUG` compile-time config (URL, config filename, isDev flag) |
 | `AppState` | `@Observable` global state, lifecycle, data fetching |
 | `SyncEngine` | Shells out to `npx/bunx @vibe-cafe/vibe-usage sync` |
-| `CLIBridge` | Shells out to `vibe-usage config set/get` for config writes |
+| `CLIBridge` | Shells out to `vibe-usage config set/get` for config operations |
 | `APIClient` | HTTP client for `GET /api/usage` (Bearer auth with API Key) |
-| `ConfigManager` | Read-only access to `~/.vibe-usage/config.json` |
+| `ConfigManager` | Read/write access to `~/.vibe-usage/config[.dev].json` |
 | `HookManager` | Removes/restores CLI session hooks, writes PID marker |
 | `SyncScheduler` | GCD timer for 5-minute polling interval |
 | `RuntimeDetector` | Finds `bun` or `npx` in PATH and common install locations |
@@ -73,71 +86,16 @@ The Mac app never writes to `config.json` directly. All config mutations go thro
 
 | View | Purpose |
 |------|---------|
-| `PopoverView` | Main dashboard (header, cards, filters, chart, footer) |
+| `PopoverView` | Main dashboard with inline onboarding, header, cards, filters, chart, footer |
 | `SummaryCardsView` | Cost, total/input/output/cached token cards |
-| `FilterTagsView` | Multi-category tag filters (source, model, project, hostname) |
+| `FilterTagsView` | Multi-category tag filters (hostname, source, model, project) |
 | `BarChartView` | Stacked daily bar chart with hover tooltips |
-| `OnboardingView` | API Key + URL setup window |
-| `SettingsView` | Config display/edit, auto-start toggle, reset |
-
-## Local Development Testing
-
-For testing the full stack locally without deploying to production:
-
-### 1. Start the vibe-cafe web app
-
-```bash
-cd /path/to/vibe-cafe/apps/web
-bun run dev
-# Runs on http://localhost:3000
-```
-
-### 2. Get a test API Key
-
-Open http://localhost:3000/usage/setup in your browser, sign in with your dev account, and generate an API key.
-
-### 3. Configure the Mac app for local
-
-Option A — via the app UI:
-
-1. Run the Mac app: `swift run`
-2. In the onboarding window, expand "高级设置"
-3. Change API URL to `http://localhost:3000`
-4. Paste your test API Key and click "开始使用"
-
-Option B — via CLI:
-
-```bash
-# Point config at local server
-npx @vibe-cafe/vibe-usage config set apiUrl http://localhost:3000
-
-# Set your test API key
-npx @vibe-cafe/vibe-usage config set apiKey vbu_your_test_key
-
-# Verify
-npx @vibe-cafe/vibe-usage config show
-```
-
-Then run the Mac app — it reads `~/.vibe-usage/config.json` on launch.
-
-### 4. Verify
-
-- Click the menu bar icon to open the popover
-- The dashboard should load data from `localhost:3000`
-- Click the refresh button (↻) to trigger a manual sync
-- Check Settings (⚙) to confirm the API URL shows `http://localhost:3000`
-
-### Switching back to production
-
-```bash
-npx @vibe-cafe/vibe-usage config set apiUrl https://vibecafe.ai
-```
-
-Or use "修改" in Settings → API URL.
+| `SettingsView` | Menu bar display toggles, auto-start, version, reset |
+| `MenuBarIcon` | Custom template icon loaded from PNG bundle resource |
 
 ## Config
 
-Shared config at `~/.vibe-usage/config.json`:
+Shared config at `~/.vibe-usage/config.json` (release) or `config.dev.json` (debug):
 
 ```json
 {
@@ -147,7 +105,20 @@ Shared config at `~/.vibe-usage/config.json`:
 }
 ```
 
-Both the Mac app and the `@vibe-cafe/vibe-usage` CLI read from this file. The CLI owns writes.
+Both the Mac app and the `@vibe-cafe/vibe-usage` CLI read/write this file.
+
+## Icon
+
+Source SVG at `icon-source.svg`. To regenerate PNGs:
+
+```bash
+python3 -m venv /tmp/svg-convert
+/tmp/svg-convert/bin/pip install cairosvg
+/tmp/svg-convert/bin/python3 generate-icons.py
+```
+
+- App icon: `Assets.xcassets/AppIcon.appiconset/` (all macOS sizes)
+- Menu bar icon: `Resources/menubar-icon.png` (36x36 @2x, loaded as NSImage template)
 
 ## Related
 

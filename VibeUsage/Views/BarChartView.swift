@@ -152,6 +152,7 @@ struct BarChartView: View {
                             .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                             .fixedSize()
                             .position(x: clampedX, y: 40)
+                            .allowsHitTesting(false)
                         }
                     }
                 }

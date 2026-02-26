@@ -64,9 +64,9 @@ enum CLIBridge {
             process.environment = env
 
             // In dev mode, tell CLI to use config.dev.json
-            if AppConfig.isDev {
-                process.environment?["VIBE_USAGE_DEV"] = "1"
-            }
+            #if DEBUG
+            env["VIBE_USAGE_DEV"] = "1"
+            #endif
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()

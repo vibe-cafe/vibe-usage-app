@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct VibeUsageApp: App {
@@ -10,19 +11,33 @@ struct VibeUsageApp: App {
             PopoverView()
                 .environment(appState)
         } label: {
-            MenuBarLabel(appState: appState)
+            // MenuBarExtra label ignores HStack spacing / padding.
+            // Must use NSImage with explicit size for custom icons.
+            let icon: NSImage = {
+                if let url = Bundle.module.url(forResource: "menubar-icon", withExtension: "png"),
+                   let img = NSImage(contentsOf: url) {
+                    let ratio = img.size.height / img.size.width
+                    img.size.height = 18
+                    img.size.width = 18 / ratio
+                    img.isTemplate = true
+                    return img
+                }
+                return NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: nil)!
+            }()
+
+            if appState.isConfigured && !appState.buckets.isEmpty,
+               !menuBarText.isEmpty {
+                // Use Text with icon character + spacing for gap control
+                Image(nsImage: icon)
+                Text("  " + menuBarText)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+            } else {
+                Image(nsImage: icon)
+            }
         }
         .menuBarExtraStyle(.window)
 
-        // Onboarding window — shown only when no API Key configured
-        Window("Vibe Usage", id: "onboarding") {
-            OnboardingView()
-                .environment(appState)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 480, height: 480)
-        .windowResizability(.contentSize)
-
+        // Settings managed by SettingsWindowController (NSWindow)
         // Settings managed by SettingsWindowController (NSWindow)
         // SwiftUI Window/Settings scenes don't work in LSUIElement menu bar apps
     }
@@ -31,25 +46,6 @@ struct VibeUsageApp: App {
         appState.initialize()
         HookManager.writeMarker()
         HookManager.removeHooks()
-    }
-}
-
-/// Menu bar label: icon + optional cost/tokens text
-struct MenuBarLabel: View {
-    let appState: AppState
-
-    var body: some View {
-        HStack(spacing: 4) {
-            MenuBarIcon(state: appState.syncStatus)
-
-            if appState.isConfigured && !appState.buckets.isEmpty {
-                let parts = menuBarText
-                if !parts.isEmpty {
-                    Text(parts)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                }
-            }
-        }
     }
 
     private var menuBarText: String {

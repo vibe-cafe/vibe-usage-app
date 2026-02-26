@@ -71,10 +71,12 @@ struct SettingsView: View {
                     get: { appState.showCostInMenuBar },
                     set: { appState.showCostInMenuBar = $0 }
                 ))
+                .tint(.green)
                 Toggle("菜单栏显示 Token", isOn: Binding(
                     get: { appState.showTokensInMenuBar },
                     set: { appState.showTokensInMenuBar = $0 }
                 ))
+                .tint(.green)
             } header: {
                 Text("菜单栏")
             } footer: {
@@ -85,6 +87,7 @@ struct SettingsView: View {
             // Auto-start + general
             Section {
                 Toggle("开机自启动", isOn: $autoStartEnabled)
+                    .tint(.green)
                     .onChange(of: autoStartEnabled) { _, newValue in
                         setAutoStart(newValue)
                     }
@@ -157,7 +160,7 @@ struct SettingsView: View {
 
     private func resetConfig() {
         let configPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".vibe-usage/config.json")
+            .appendingPathComponent(".vibe-usage/\(AppConfig.configFileName)")
         try? FileManager.default.removeItem(at: configPath)
 
         appState.isConfigured = false
