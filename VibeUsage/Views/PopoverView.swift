@@ -307,7 +307,7 @@ struct PopoverView: View {
 
             Spacer()
 
-            // Refresh button with label
+            // Refresh button
             Button {
                 Task {
                     await appState.triggerSync()
@@ -323,6 +323,21 @@ struct PopoverView: View {
             }
             .buttonStyle(.plain)
             .disabled(appState.syncStatus == .syncing)
+
+            // Quit button
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "power")
+                        .font(.system(size: 11))
+                    Text("关闭")
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(Color(white: 0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, 12)
         }
     }
 
