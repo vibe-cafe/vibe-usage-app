@@ -46,6 +46,7 @@ actor SyncEngine {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: runtime.executablePath)
             process.arguments = runtime.syncArguments
+            debugLog("[SyncEngine] CMD: \(runtime.executablePath) \(runtime.syncArguments.joined(separator: " "))")
 
             // Inherit environment for PATH, HOME, etc.
             var env = ProcessInfo.processInfo.environment
@@ -60,6 +61,7 @@ actor SyncEngine {
             // In dev mode, tell CLI to use config.dev.json
             #if DEBUG
             env["VIBE_USAGE_DEV"] = "1"
+            debugLog("[SyncEngine] VIBE_USAGE_DEV=1 (using config.dev.json)")
             #endif
             process.environment = env
 
@@ -85,6 +87,9 @@ actor SyncEngine {
                 let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                 let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                debugLog("[SyncEngine] Exit: \(process.terminationStatus)")
+                debugLog("[SyncEngine] stdout: \(stdout.prefix(500))")
+                debugLog("[SyncEngine] stderr: \(stderr.prefix(500))")
 
                 let combined = "\(stdout)\n\(stderr)"
 

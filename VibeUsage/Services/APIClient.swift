@@ -7,7 +7,10 @@ struct APIClient: Sendable {
 
     /// Fetch usage buckets for the dashboard
     func fetchUsage(days: Int) async throws -> UsageResponse {
-        guard let url = URL(string: "\(baseURL)/api/usage?days=\(days)") else {
+        let urlString = "\(baseURL)/api/usage?days=\(days)"
+        debugLog("[APIClient] GET \(urlString)")
+        debugLog("[APIClient] Authorization: Bearer \(apiKey.prefix(12))...")
+        guard let url = URL(string: urlString) else {
             throw APIError.invalidURL
         }
 
@@ -18,8 +21,12 @@ struct APIClient: Sendable {
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            debugLog("[APIClient] ERROR: invalid response type")
             throw APIError.invalidResponse
         }
+
+        let body = String(data: data, encoding: .utf8) ?? "(non-utf8)"
+        debugLog("[APIClient] Status: \(httpResponse.statusCode), Body: \(body.prefix(200))")
 
         switch httpResponse.statusCode {
         case 200:

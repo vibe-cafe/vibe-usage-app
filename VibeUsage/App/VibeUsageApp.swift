@@ -56,7 +56,7 @@ struct VibeUsageApp: App {
             parts.append(Formatters.formatCost(appState.menuBarCost))
         }
         if appState.showTokensInMenuBar {
-            parts.append("\u{2B21} " + Formatters.formatNumber(appState.menuBarTokens))
+            parts.append("\u{1F143}" + Formatters.formatNumber(appState.menuBarTokens))
         }
         return parts.joined(separator: "  ")
     }

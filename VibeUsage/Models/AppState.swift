@@ -107,9 +107,7 @@ final class AppState {
     func configure(apiKey: String, apiUrl: String = AppConfig.defaultApiUrl) {
         var cfg = ConfigManager.load() ?? VibeUsageConfig()
         cfg.apiKey = apiKey
-        if apiUrl != AppConfig.defaultApiUrl {
-            cfg.apiUrl = apiUrl
-        }
+        cfg.apiUrl = apiUrl
         ConfigManager.save(cfg)
 
         self.config = ConfigManager.load()

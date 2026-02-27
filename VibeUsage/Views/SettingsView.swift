@@ -8,24 +8,59 @@ struct SettingsView: View {
     @State private var apiKeyDisplay: String = ""
     @State private var autoStartEnabled: Bool = false
     @State private var showingResetConfirmation = false
+    @State private var isEditingApiKey = false
+    @State private var newApiKey = ""
+    @State private var isValidatingKey = false
+    @State private var apiKeyError: String?
 
     var body: some View {
         Form {
             // Sync section
             Section {
                 LabeledContent("API Key") {
-                    HStack(spacing: 8) {
-                        Text(apiKeyDisplay)
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundStyle(Color(white: 0.5))
-
-                        Button {
-                            if let url = URL(string: "\(AppConfig.defaultApiUrl)/usage/setup") {
-                                NSWorkspace.shared.open(url)
-                            }
-                        } label: {
-                            Text("管理")
+                    if isEditingApiKey {
+                        VStack(alignment: .trailing, spacing: 6) {
+                            TextField("", text: $newApiKey)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(width: 220)
+                            HStack(spacing: 8) {
+                                if let apiKeyError {
+                                    Text(apiKeyError)
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Button("取消") {
+                                    isEditingApiKey = false
+                                    newApiKey = ""
+                                    apiKeyError = nil
+                                }
                                 .font(.caption)
+                                Button("保存") {
+                                    Task { await validateAndUpdateKey() }
+                                }
+                                .font(.caption)
+                                .disabled(newApiKey.isEmpty || !newApiKey.hasPrefix("vbu_") || isValidatingKey)
+                            }
+                            if isValidatingKey {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Text(apiKeyDisplay)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(Color(white: 0.5))
+
+                            Button("修改") {
+                                newApiKey = ""
+                                apiKeyError = nil
+                                isEditingApiKey = true
+                            }
+                            .font(.caption)
                         }
                     }
                 }
@@ -99,7 +134,7 @@ struct SettingsView: View {
             // About & Updates
             Section {
                 LabeledContent("版本") {
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -161,6 +196,35 @@ struct SettingsView: View {
             }
         } catch {
             print("Failed to set auto-start: \(error)")
+        }
+    }
+
+    private func validateAndUpdateKey() async {
+        apiKeyError = nil
+        isValidatingKey = true
+        defer { isValidatingKey = false }
+
+        debugLog("[Settings] Validating key: \(newApiKey.prefix(12))... against \(AppConfig.defaultApiUrl)")
+        let client = APIClient(baseURL: AppConfig.defaultApiUrl, apiKey: newApiKey)
+        do {
+            let response = try await client.validateKeyAndFetch()
+            debugLog("[Settings] Key valid! Saving config...")
+            appState.configure(apiKey: newApiKey, apiUrl: AppConfig.defaultApiUrl)
+            appState.buckets = response.buckets
+            appState.hasAnyData = response.hasAnyData
+            isEditingApiKey = false
+            newApiKey = ""
+            loadSettings()
+        } catch let error as APIClient.APIError {
+            debugLog("[Settings] APIError: \(error)")
+            if case .unauthorized = error {
+                apiKeyError = "API Key \u{65E0}\u{6548}"
+            } else {
+                apiKeyError = "\u{7F51}\u{7EDC}\u{9519}\u{8BEF}: \(error.localizedDescription)"
+            }
+        } catch {
+            debugLog("[Settings] Error: \(error)")
+            apiKeyError = "\u{9A8C}\u{8BC1}\u{5931}\u{8D25}: \(error.localizedDescription)"
         }
     }
 

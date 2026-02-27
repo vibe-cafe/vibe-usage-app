@@ -51,12 +51,16 @@ enum Formatters {
         return "\(Int(interval / 86400)) 天前"
     }
 
-    /// Format hour key for chart axis: "yyyy-MM-ddTHH" → "14:00"
+    /// Format hour key for chart axis: "yyyy-MM-ddTHH" (UTC) → local "15:00"
     static func formatHourShort(_ hourKey: String) -> String {
-        // hourKey is like "2026-02-27T14"
-        if hourKey.count >= 13 {
-            let hour = String(hourKey.suffix(2))
-            return "\(hour):00"
+        // hourKey is UTC like "2026-02-27T14"
+        let utcFormatter = DateFormatter()
+        utcFormatter.dateFormat = "yyyy-MM-dd'T'HH"
+        utcFormatter.timeZone = TimeZone(identifier: "UTC")
+        if let date = utcFormatter.date(from: hourKey) {
+            let localFormatter = DateFormatter()
+            localFormatter.dateFormat = "HH:mm"
+            return localFormatter.string(from: date)
         }
         return hourKey
     }
