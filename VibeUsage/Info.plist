@@ -27,7 +27,7 @@
     <key>SUFeedURL</key>
     <string>https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml</string>
     <key>SUPublicEDKey</key>
-    <string>PLACEHOLDER_ED25519_PUBLIC_KEY</string>
+    <string>hBlxWYhFghf0xevkVxU+CZfu+8H7I/+CveobdjyKoDo=</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
     <key>SUAutomaticallyUpdate</key>

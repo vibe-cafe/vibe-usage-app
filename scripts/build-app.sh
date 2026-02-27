@@ -81,17 +81,19 @@ iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET_DIR")"
 echo "    Generated AppIcon.icns"
 
-# Codesign: frameworks first, then app bundle
+# Codesign: sign all Sparkle internals inside-out, then framework, then app
 echo "==> Codesigning with Developer ID..."
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+SPARKLE_FW="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Autoupdate"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$SPARKLE_FW/Versions/B/Updater.app"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 echo "    Signed with: $SIGN_IDENTITY"
 
 # Verify signature
 codesign --verify --deep --strict "$APP_BUNDLE"
-echo "    Signature verified"
 
 if $NOTARIZE; then
     # Zip for notarization
