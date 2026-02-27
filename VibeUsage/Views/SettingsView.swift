@@ -3,6 +3,7 @@ import ServiceManagement
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
+    @EnvironmentObject var updaterViewModel: UpdaterViewModel
 
     @State private var apiKeyDisplay: String = ""
     @State private var autoStartEnabled: Bool = false
@@ -95,13 +96,18 @@ struct SettingsView: View {
                 Text("通用")
             }
 
-            // About
+            // About & Updates
             Section {
                 LabeledContent("版本") {
                     Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                Button("检查更新") {
+                    updaterViewModel.checkForUpdates()
+                }
+                .disabled(!updaterViewModel.canCheckForUpdates)
             } header: {
                 Text("关于")
             }

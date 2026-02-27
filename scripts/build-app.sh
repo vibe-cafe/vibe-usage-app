@@ -31,6 +31,21 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
+# Embed Sparkle.framework
+echo "==> Embedding Sparkle.framework..."
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build/artifacts" -name "Sparkle.framework" -path "*/macos-*" | head -1)
+if [ -z "$SPARKLE_FRAMEWORK" ]; then
+    # Fallback: search in the build directory
+    SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build" -name "Sparkle.framework" -not -path "*/Sparkle.framework/Versions/*" | head -1)
+fi
+if [ -d "$SPARKLE_FRAMEWORK" ]; then
+    cp -R "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
+    echo "    Embedded Sparkle.framework from: $SPARKLE_FRAMEWORK"
+else
+    echo "    ERROR: Sparkle.framework not found in build artifacts"
+    exit 1
+fi
 # Copy binary
 cp "$BUILD_DIR/$EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/"
 
@@ -66,9 +81,12 @@ iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET_DIR")"
 echo "    Generated AppIcon.icns"
 
-# Codesign with Developer ID
+# Codesign: frameworks first, then app bundle
 echo "==> Codesigning with Developer ID..."
-codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 echo "    Signed with: $SIGN_IDENTITY"
 
 # Verify signature

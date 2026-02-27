@@ -9,7 +9,7 @@ final class SettingsWindowController {
 
     private var window: NSWindow?
 
-    func show(appState: AppState) {
+    func show(appState: AppState, updaterViewModel: UpdaterViewModel) {
         if let window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -18,6 +18,7 @@ final class SettingsWindowController {
 
         let settingsView = SettingsView()
             .environment(appState)
+            .environmentObject(updaterViewModel)
 
         let hostingController = NSHostingController(rootView: settingsView)
 

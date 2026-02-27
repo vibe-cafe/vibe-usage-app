@@ -5,11 +5,13 @@ import AppKit
 struct VibeUsageApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
+    @StateObject private var updaterViewModel = UpdaterViewModel()
 
     var body: some Scene {
         MenuBarExtra {
             PopoverView()
                 .environment(appState)
+                .environmentObject(updaterViewModel)
         } label: {
             // MenuBarExtra label ignores HStack spacing / padding.
             // Must use NSImage with explicit size for custom icons.

@@ -24,6 +24,14 @@
     <string>AppIcon</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright (c) 2025 VibeCafe. All rights reserved.</string>
+    <key>SUFeedURL</key>
+    <string>https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>PLACEHOLDER_ED25519_PUBLIC_KEY</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUAutomaticallyUpdate</key>
+    <false/>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

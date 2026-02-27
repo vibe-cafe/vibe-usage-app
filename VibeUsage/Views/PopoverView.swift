@@ -3,6 +3,7 @@ import SwiftUI
 /// Main popover container — full dashboard view
 struct PopoverView: View {
     @Environment(AppState.self) private var appState
+    @EnvironmentObject var updaterViewModel: UpdaterViewModel
     @State private var setupApiKey = ""
     @State private var isValidatingKey = false
     @State private var setupError: String?
@@ -249,7 +250,7 @@ struct PopoverView: View {
 
             // Settings — NSWindow directly (SwiftUI scenes don't work in LSUIElement MenuBarExtra)
             Button {
-                SettingsWindowController.shared.show(appState: appState)
+                SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
             } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 13))
