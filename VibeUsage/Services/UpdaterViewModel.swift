@@ -2,30 +2,39 @@ import SwiftUI
 import Sparkle
 
 /// Bridges Sparkle's SPUUpdater to SwiftUI.
-/// Observes `canCheckForUpdates` so the "Check for Updates" button
-/// disables itself while an update check is already in progress.
+/// Only activates when running inside a real .app bundle —
+/// `swift run` has no Info.plist so Sparkle would fail.
 @MainActor
 final class UpdaterViewModel: ObservableObject {
-    private let updaterController: SPUStandardUpdaterController
+    private var updaterController: SPUStandardUpdaterController?
 
     @Published var canCheckForUpdates = false
 
+    /// Whether Sparkle is available (real .app bundle with SUFeedURL).
+    var isAvailable: Bool { updaterController != nil }
+
     init() {
-        // Create the updater controller.
-        // startingUpdater: true — starts the update cycle automatically on launch.
-        // updaterDelegate / userDriverDelegate: nil — use defaults.
-        updaterController = SPUStandardUpdaterController(
+        // Only initialize Sparkle inside a proper .app bundle.
+        // swift run / debug builds without a bundle lack Info.plist,
+        // which causes Sparkle to block or crash.
+        guard Bundle.main.bundlePath.hasSuffix(".app"),
+              Bundle.main.infoDictionary?["SUFeedURL"] != nil else {
+            return
+        }
+
+        let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        self.updaterController = controller
 
         // Observe canCheckForUpdates via KVO and publish to SwiftUI.
-        updaterController.updater.publisher(for: \.canCheckForUpdates)
+        controller.updater.publisher(for: \.canCheckForUpdates)
             .assign(to: &$canCheckForUpdates)
     }
 
     func checkForUpdates() {
-        updaterController.checkForUpdates(nil)
+        updaterController?.checkForUpdates(nil)
     }
 }
