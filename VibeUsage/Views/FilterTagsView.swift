@@ -116,20 +116,23 @@ struct FilterTagsView: View {
                     .font(.system(size: 10))
                 Text(label)
                     .font(.system(size: 11))
-                if let eyeToggle {
-                    Button {
-                        eyeToggle()
-                    } label: {
-                        Image(systemName: masked ? "eye.slash" : "eye")
-                            .font(.system(size: 9))
-                            .foregroundStyle(Color(white: masked ? 0.35 : 0.6))
-                    }
-                    .buttonStyle(.plain)
-                    .help(masked ? "显示项目名称" : "隐藏项目名称")
-                }
             }
             .foregroundStyle(Color(white: 0.5))
-            .frame(width: 56, alignment: .trailing)
+            .frame(width: 44, alignment: .trailing)
+            .padding(.vertical, 3) // match tag vertical padding for baseline alignment
+
+            if let eyeToggle {
+                Button {
+                    eyeToggle()
+                } label: {
+                    Image(systemName: masked ? "eye.slash" : "eye")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color(white: masked ? 0.35 : 0.6))
+                        .frame(height: 11 + 6) // match tag height (font 11 + padding 3*2)
+                }
+                .buttonStyle(.plain)
+                .help(masked ? "\u{663E}\u{793A}\u{9879}\u{76EE}\u{540D}\u{79F0}" : "\u{9690}\u{85CF}\u{9879}\u{76EE}\u{540D}\u{79F0}")
+            }
 
             FlowLayout(spacing: 4) {
                 ForEach(values, id: \.self) { value in
@@ -137,7 +140,7 @@ struct FilterTagsView: View {
                     Button {
                         toggle(value)
                     } label: {
-                        Text(masked ? "•••" : (value.isEmpty ? "未知" : value))
+                        Text(masked ? "\u{2022}\u{2022}\u{2022}" : (value.isEmpty ? "\u{672A}\u{77E5}" : value))
                             .font(.system(size: 11))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
