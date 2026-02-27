@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FilterTagsView: View {
     @Environment(AppState.self) private var appState
+    @State private var showProjects: Bool = UserDefaults.standard.object(forKey: "showProjects") as? Bool ?? false
 
     private var uniqueSources: [String] {
         Array(Set(appState.buckets.map(\.source))).sorted()
@@ -73,7 +74,12 @@ struct FilterTagsView: View {
                     icon: "folder",
                     label: "项目",
                     values: uniqueProjects,
-                    selected: state.filters.projects
+                    selected: state.filters.projects,
+                    masked: !showProjects,
+                    eyeToggle: {
+                        showProjects.toggle()
+                        UserDefaults.standard.set(showProjects, forKey: "showProjects")
+                    }
                 ) { value in
                     if state.filters.projects.contains(value) {
                         state.filters.projects.remove(value)
@@ -100,6 +106,8 @@ struct FilterTagsView: View {
         label: String,
         values: [String],
         selected: Set<String>,
+        masked: Bool = false,
+        eyeToggle: (() -> Void)? = nil,
         toggle: @escaping (String) -> Void
     ) -> some View {
         HStack(alignment: .top, spacing: 8) {
@@ -108,9 +116,20 @@ struct FilterTagsView: View {
                     .font(.system(size: 10))
                 Text(label)
                     .font(.system(size: 11))
+                if let eyeToggle {
+                    Button {
+                        eyeToggle()
+                    } label: {
+                        Image(systemName: masked ? "eye.slash" : "eye")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Color(white: masked ? 0.35 : 0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help(masked ? "显示项目名称" : "隐藏项目名称")
+                }
             }
             .foregroundStyle(Color(white: 0.5))
-            .frame(width: 44, alignment: .trailing)
+            .frame(width: 56, alignment: .trailing)
 
             FlowLayout(spacing: 4) {
                 ForEach(values, id: \.self) { value in
@@ -118,7 +137,7 @@ struct FilterTagsView: View {
                     Button {
                         toggle(value)
                     } label: {
-                        Text(value.isEmpty ? "未知" : value)
+                        Text(masked ? "•••" : (value.isEmpty ? "未知" : value))
                             .font(.system(size: 11))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)

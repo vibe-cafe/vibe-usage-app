@@ -51,6 +51,16 @@ enum Formatters {
         return "\(Int(interval / 86400)) 天前"
     }
 
+    /// Format hour key for chart axis: "yyyy-MM-ddTHH" → "14:00"
+    static func formatHourShort(_ hourKey: String) -> String {
+        // hourKey is like "2026-02-27T14"
+        if hourKey.count >= 13 {
+            let hour = String(hourKey.suffix(2))
+            return "\(hour):00"
+        }
+        return hourKey
+    }
+
     /// Parse "yyyy-MM-dd" to Date
     static func dateFromDayKey(_ key: String) -> Date? {
         let formatter = DateFormatter()

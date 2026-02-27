@@ -31,6 +31,11 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     var dayKey: String {
         String(bucketStart.prefix(10))
     }
+
+    /// Hour string (yyyy-MM-ddTHH) for hourly grouping
+    var hourKey: String {
+        String(bucketStart.prefix(13))
+    }
 }
 
 struct UsageResponse: Codable {
