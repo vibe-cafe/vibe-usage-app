@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Prerequisites:
 #   1. Ed25519 private key in Keychain (created via Sparkle's generate_keys)
-#   2. dist/Vibe Usage.zip exists (signed + notarized)
+#   2. dist/VibeUsage.zip exists (signed + notarized)
 #
 # Usage: ./scripts/generate-appcast.sh
 #
@@ -16,8 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$PROJECT_DIR/dist"
 
-if [ ! -f "$DIST_DIR/Vibe Usage.zip" ]; then
-    echo "ERROR: dist/Vibe Usage.zip not found."
+if [ ! -f "$DIST_DIR/VibeUsage.zip" ]; then
+    echo "ERROR: dist/VibeUsage.zip not found."
     echo "       Run ./scripts/build-app.sh --notarize first."
     exit 1
 fi
@@ -43,7 +43,7 @@ if [ -f "$DIST_DIR/appcast.xml" ]; then
     echo "    $DIST_DIR/appcast.xml"
     echo ""
     echo "Upload both files to GitHub Release:"
-    echo "    - dist/Vibe Usage.zip"
+    echo "    - dist/VibeUsage.zip"
     echo "    - dist/appcast.xml"
 else
     echo "ERROR: appcast.xml was not generated."
