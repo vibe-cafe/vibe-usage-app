@@ -49,6 +49,9 @@ fi
 # Copy binary
 cp "$BUILD_DIR/$EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/"
 
+# Fix rpath: SPM sets @loader_path but we need @loader_path/../Frameworks
+install_name_tool -add_rpath @loader_path/../Frameworks "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE" 2>/dev/null || true
+
 # Copy Info.plist
 cp "$PROJECT_DIR/VibeUsage/Info.plist" "$APP_BUNDLE/Contents/"
 
@@ -83,31 +86,35 @@ echo "    Generated AppIcon.icns"
 
 # Codesign: sign all Sparkle internals inside-out, then framework, then app
 # Extract entitlements first to avoid --preserve-metadata timestamp errors
-echo "==> Codesigning with Developer ID..."
+echo "==> Codesigning..."
 SPARKLE_FW="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
-SPARKLE_BINS=(
-    "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
-    "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
-    "$SPARKLE_FW/Versions/B/Autoupdate"
-    "$SPARKLE_FW/Versions/B/Updater.app"
-)
-for BIN in "${SPARKLE_BINS[@]}"; do
-    ENT=$(mktemp /tmp/ent.XXXXXX.plist)
-    # :- prefix outputs XML plist format (not binary DER)
-    codesign -d --entitlements :- "$BIN" > "$ENT" 2>/dev/null || true
-    if [ -s "$ENT" ] && grep -q '<key>' "$ENT" 2>/dev/null; then
-        codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --entitlements "$ENT" "$BIN"
-    else
-        codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BIN"
-    fi
-    rm -f "$ENT"
-done
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
-echo "    Signed with: $SIGN_IDENTITY"
 
-# Verify signature
-codesign --verify --deep --strict "$APP_BUNDLE"
+# Check if Developer ID certificate is available
+if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
+    echo "    Using Developer ID: $SIGN_IDENTITY"
+    SPARKLE_BINS=(
+        "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
+        "$SPARKLE_FW/Versions/B/XPCServices/Downloader.xpc"
+        "$SPARKLE_FW/Versions/B/Autoupdate"
+        "$SPARKLE_FW/Versions/B/Updater.app"
+    )
+    for BIN in "${SPARKLE_BINS[@]}"; do
+        ENT=$(mktemp /tmp/ent.XXXXXX.plist)
+        codesign -d --entitlements :- "$BIN" > "$ENT" 2>/dev/null || true
+        if [ -s "$ENT" ] && grep -q '<key>' "$ENT" 2>/dev/null; then
+            codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --entitlements "$ENT" "$BIN"
+        else
+            codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BIN"
+        fi
+        rm -f "$ENT"
+    done
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+    codesign --verify --deep --strict "$APP_BUNDLE"
+else
+    echo "    Developer ID not found, using ad-hoc signing (local use only)"
+    codesign --force --deep -s - "$APP_BUNDLE"
+fi
 
 if $NOTARIZE; then
     # Zip for notarization
