@@ -7,7 +7,7 @@ struct MenuBarIcon: View {
     let state: SyncStatus
 
     private static let iconImage: NSImage? = {
-        guard let url = Bundle.module.url(forResource: "menubar-icon", withExtension: "png"),
+        guard let url = Bundle.appResources.url(forResource: "menubar-icon", withExtension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }
         image.size = NSSize(width: 18, height: 18)
         image.isTemplate = true

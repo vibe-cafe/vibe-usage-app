@@ -16,7 +16,7 @@ struct VibeUsageApp: App {
             // MenuBarExtra label ignores HStack spacing / padding.
             // Must use NSImage with explicit size for custom icons.
             let icon: NSImage = {
-                if let url = Bundle.module.url(forResource: "menubar-icon", withExtension: "png"),
+                if let url = Bundle.appResources.url(forResource: "menubar-icon", withExtension: "png"),
                    let img = NSImage(contentsOf: url) {
                     let ratio = img.size.height / img.size.width
                     img.size.height = 18
