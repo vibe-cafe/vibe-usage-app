@@ -166,6 +166,7 @@ struct PopoverView: View {
                         FilterTagsView()
                         SummaryCardsView()
                         BarChartView()
+                        DistributionChartsView()
                     }
                 }
                 .padding(16)
