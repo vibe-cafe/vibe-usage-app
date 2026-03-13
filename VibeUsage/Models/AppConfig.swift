@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppConfig {
-    static let version = "0.2.4"
+    static let version = "0.2.5"
 
     #if DEBUG
     static let defaultApiUrl = "http://localhost:3000"
