@@ -138,21 +138,69 @@ struct FilterTagsView: View {
             }
 
             if !uniqueProjects.isEmpty {
-                filterRow(
-                    icon: "folder",
-                    label: "项目",
-                    values: uniqueProjects,
-                    selected: state.filters.projects,
-                    masked: !showProjects,
-                    eyeToggle: {
-                        showProjects.toggle()
-                        UserDefaults.standard.set(showProjects, forKey: "showProjects")
+                HStack(alignment: .top, spacing: 8) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 10))
+                        Text("项目")
+                            .font(.system(size: 11))
                     }
-                ) { value in
-                    if state.filters.projects.contains(value) {
-                        state.filters.projects.remove(value)
-                    } else {
-                        state.filters.projects.insert(value)
+                    .foregroundStyle(Color(white: 0.5))
+                    .frame(width: 44, alignment: .trailing)
+                    .padding(.vertical, 3)
+
+                    HStack(spacing: 2) {
+                        Button {
+                            showProjects.toggle()
+                            UserDefaults.standard.set(showProjects, forKey: "showProjects")
+                        } label: {
+                            Image(systemName: showProjects ? "eye" : "eye.slash")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Color(white: showProjects ? 0.6 : 0.35))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 4)
+                                .background(Color(white: 0.09))
+                                .cornerRadius(4)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .stroke(Color(white: 0.16), lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .help(showProjects ? "隐藏项目名称" : "显示项目名称")
+
+                        HoverChevronButton(isExpanded: showProjects) {
+                            showProjects.toggle()
+                            UserDefaults.standard.set(showProjects, forKey: "showProjects")
+                        }
+                    }
+
+                    if showProjects {
+                        FlowLayout(spacing: 4) {
+                            ForEach(uniqueProjects, id: \.self) { value in
+                                let isActive = state.filters.projects.contains(value)
+                                Button {
+                                    if state.filters.projects.contains(value) {
+                                        state.filters.projects.remove(value)
+                                    } else {
+                                        state.filters.projects.insert(value)
+                                    }
+                                } label: {
+                                    Text(value.isEmpty ? "未知" : value)
+                                        .font(.system(size: 11))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(isActive ? Color.white : Color(white: 0.09))
+                                        .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
+                                        .cornerRadius(4)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .stroke(Color(white: isActive ? 0.0 : 0.16), lineWidth: 1)
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                 }
             }
