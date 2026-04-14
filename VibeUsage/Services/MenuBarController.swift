@@ -31,12 +31,17 @@ private struct MenuBarLabel: View {
     }
 }
 
-/// NSHostingView subclass that passes mouse events through to its superview.
-/// Required when hosting SwiftUI inside an NSStatusBarButton — the default
-/// NSHostingView consumes hit-tests, which swallows the button's click action
-/// and the popover never opens.
-private final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
+/// NSHostingView subclass that passes all mouse events to the superview (NSStatusBarButton),
+/// so the button's target-action mechanism fires normally on click.
+/// Two-pronged approach:
+///   1. hitTest returns nil → AppKit routes the event to the button directly.
+///   2. mouseDown/mouseUp forward to superview → handles cases where SwiftUI's
+///      internal responder chain receives the event anyway.
+private final class PassthroughHostingView<V: View>: NSHostingView<V> {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+    override func mouseDown(with event: NSEvent) { superview?.mouseDown(with: event) }
+    override func mouseUp(with event: NSEvent) { superview?.mouseUp(with: event) }
 }
 
 /// Owns the menu-bar status item and the borderless popover panel.
@@ -49,7 +54,7 @@ final class MenuBarController: NSObject {
     private let updaterViewModel: UpdaterViewModel
 
     private let statusItem: NSStatusItem
-    private var hostingView: PassThroughHostingView<MenuBarLabel>!
+    private var hostingView: PassthroughHostingView<MenuBarLabel>!
     private var panel: PopoverPanel?
     private var hostingController: NSHostingController<AnyView>?
     private var globalEventMonitor: Any?
@@ -110,7 +115,7 @@ final class MenuBarController: NSObject {
         button.target = self
         button.action = #selector(handleClick(_:))
 
-        let host = PassThroughHostingView(rootView: MenuBarLabel(icon: Self.iconRaw, lines: []))
+        let host = PassthroughHostingView(rootView: MenuBarLabel(icon: Self.iconRaw, lines: []))
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([
@@ -204,7 +209,11 @@ final class MenuBarController: NSObject {
                 .environmentObject(updaterViewModel)
         )
         let host = NSHostingController(rootView: rootView)
-        host.sizingOptions = [.intrinsicContentSize]
+        // sizingOptions = [] prevents SwiftUI from overriding the panel size.
+        // preferredContentSize must be set explicitly; otherwise contentViewController
+        // assignment resizes the panel to (0,0) before SwiftUI has laid out.
+        host.sizingOptions = []
+        host.preferredContentSize = NSSize(width: Self.panelWidth, height: 620)
         hostingController = host
 
         let panel = PopoverPanel(
@@ -214,6 +223,8 @@ final class MenuBarController: NSObject {
             defer: false
         )
         panel.contentViewController = host
+        // Re-assert size after contentViewController may have overridden it.
+        panel.setContentSize(NSSize(width: Self.panelWidth, height: 620))
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -272,7 +283,10 @@ final class MenuBarController: NSObject {
     private static let easeIn = CAMediaTimingFunction(controlPoints: 0.5, 0, 0.9, 0.4)
 
     private func animateOpen(_ panel: PopoverPanel) {
-        guard let layer = panel.contentView?.layer else { return }
+        guard let layer = panel.contentView?.layer else {
+            panel.alphaValue = 1
+            return
+        }
         isAnimating = true
 
         // Anchor at top-right so scale and translation both appear to originate at
