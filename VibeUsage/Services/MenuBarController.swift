@@ -31,6 +31,14 @@ private struct MenuBarLabel: View {
     }
 }
 
+/// NSHostingView subclass that passes mouse events through to its superview.
+/// Required when hosting SwiftUI inside an NSStatusBarButton — the default
+/// NSHostingView consumes hit-tests, which swallows the button's click action
+/// and the popover never opens.
+private final class PassThroughHostingView<Content: View>: NSHostingView<Content> {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Owns the menu-bar status item and the borderless popover panel.
 /// Replaces SwiftUI MenuBarExtra so we can:
 ///   - render stacked text (cost over tokens) via NSHostingView
@@ -41,7 +49,7 @@ final class MenuBarController: NSObject {
     private let updaterViewModel: UpdaterViewModel
 
     private let statusItem: NSStatusItem
-    private var hostingView: NSHostingView<MenuBarLabel>!
+    private var hostingView: PassThroughHostingView<MenuBarLabel>!
     private var panel: PopoverPanel?
     private var hostingController: NSHostingController<AnyView>?
     private var globalEventMonitor: Any?
@@ -66,6 +74,13 @@ final class MenuBarController: NSObject {
 
         configureStatusItem()
         observeStateChanges()
+
+        // Popup sits at .popUpMenu level (above everything) normally. Lower to
+        // .normal while Settings is visible so clicking/dragging Settings can
+        // bring it to the front through standard z-ordering.
+        ActivationCoordinator.shared.onSettingsVisibilityChange = { [weak self] visible in
+            self?.panel?.level = visible ? .normal : .popUpMenu
+        }
     }
 
     // MARK: - Status item
@@ -95,7 +110,7 @@ final class MenuBarController: NSObject {
         button.target = self
         button.action = #selector(handleClick(_:))
 
-        let host = NSHostingView(rootView: MenuBarLabel(icon: Self.iconRaw, lines: []))
+        let host = PassThroughHostingView(rootView: MenuBarLabel(icon: Self.iconRaw, lines: []))
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([
@@ -159,8 +174,10 @@ final class MenuBarController: NSObject {
 
         Task { await appState.fetchUsageDataIfNeeded() }
 
-        // Activation policy bump so TextFields (unconfigured screen) receive keys.
-        NSApp.setActivationPolicy(.accessory)
+        // Bump activation policy so TextFields (unconfigured screen) receive keys.
+        // ActivationCoordinator reconciles .regular/.accessory/.prohibited based
+        // on whether Settings is also visible — avoids clobbering Settings state.
+        ActivationCoordinator.shared.popupDidOpen()
         NSApp.activate(ignoringOtherApps: true)
 
         panel.alphaValue = 0
@@ -173,7 +190,7 @@ final class MenuBarController: NSObject {
         guard let panel, panel.isVisible, !isAnimating else { return }
         animateClose(panel) { [weak self] in
             panel.orderOut(nil)
-            NSApp.setActivationPolicy(.prohibited)
+            ActivationCoordinator.shared.popupDidClose()
             self?.removeEventMonitors()
         }
     }
