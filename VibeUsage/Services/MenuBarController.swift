@@ -39,7 +39,7 @@ private struct MenuBarLabel: View {
 ///      internal responder chain receives the event anyway.
 private final class PassthroughHostingView<V: View>: NSHostingView<V> {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { superview?.mouseDown(with: event) }
     override func mouseUp(with event: NSEvent) { superview?.mouseUp(with: event) }
 }
@@ -62,6 +62,7 @@ final class MenuBarController: NSObject {
     private var isAnimating = false
 
     private static let panelWidth: CGFloat = 520
+    private static let panelHeight: CGFloat = 620
     private static let panelTopGap: CGFloat = 6
     private static let openDuration: CFTimeInterval = 0.22
     private static let closeDuration: CFTimeInterval = 0.14
@@ -213,18 +214,18 @@ final class MenuBarController: NSObject {
         // preferredContentSize must be set explicitly; otherwise contentViewController
         // assignment resizes the panel to (0,0) before SwiftUI has laid out.
         host.sizingOptions = []
-        host.preferredContentSize = NSSize(width: Self.panelWidth, height: 620)
+        host.preferredContentSize = NSSize(width: Self.panelWidth, height: Self.panelHeight)
         hostingController = host
 
         let panel = PopoverPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.contentViewController = host
         // Re-assert size after contentViewController may have overridden it.
-        panel.setContentSize(NSSize(width: Self.panelWidth, height: 620))
+        panel.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
