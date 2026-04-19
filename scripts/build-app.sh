@@ -23,6 +23,22 @@ if [[ "${1:-}" == "--notarize" ]]; then
     NOTARIZE=true
 fi
 
+# Fall back to ad-hoc signing when Developer ID is unavailable (e.g. local dev install).
+# Notarization obviously cannot work in that mode, and hardened runtime's library
+# validation rejects ad-hoc dylib loads across bundles, so we drop --options runtime.
+CS_EXTRA_FLAGS=("--timestamp")
+CS_OPTIONS=("--options" "runtime")
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_IDENTITY"; then
+    if $NOTARIZE; then
+        echo "ERROR: --notarize requires Developer ID ('$SIGN_IDENTITY') but it is not in the keychain." >&2
+        exit 1
+    fi
+    echo "==> Developer ID not found — falling back to ad-hoc signing."
+    SIGN_IDENTITY="-"
+    CS_EXTRA_FLAGS=()
+    CS_OPTIONS=()
+fi
+
 echo "==> Checking version sync..."
 "$SCRIPT_DIR/check-version.sh"
 
@@ -83,7 +99,7 @@ echo "    Generated AppIcon.icns"
 
 # Codesign: sign all Sparkle internals inside-out, then framework, then app
 # Extract entitlements first to avoid --preserve-metadata timestamp errors
-echo "==> Codesigning with Developer ID..."
+echo "==> Codesigning ($SIGN_IDENTITY)..."
 SPARKLE_FW="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 SPARKLE_BINS=(
     "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
@@ -92,17 +108,19 @@ SPARKLE_BINS=(
     "$SPARKLE_FW/Versions/B/Updater.app"
 )
 for BIN in "${SPARKLE_BINS[@]}"; do
-    ENT=$(mktemp /tmp/ent.XXXXXX.plist)
+    [ -e "$BIN" ] || continue
+    # BSD mktemp requires trailing Xs — keep the template simple, no suffix.
+    ENT=$(mktemp -t vibe-usage-ent) || { echo "mktemp failed" >&2; exit 1; }
     codesign -d --entitlements :- "$BIN" > "$ENT" 2>/dev/null || true
     if [ -s "$ENT" ] && grep -q '<key>' "$ENT" 2>/dev/null; then
-        codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --entitlements "$ENT" "$BIN"
+        codesign --force ${CS_OPTIONS[@]+"${CS_OPTIONS[@]}"} ${CS_EXTRA_FLAGS[@]+"${CS_EXTRA_FLAGS[@]}"} --sign "$SIGN_IDENTITY" --entitlements "$ENT" "$BIN"
     else
-        codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$BIN"
+        codesign --force ${CS_OPTIONS[@]+"${CS_OPTIONS[@]}"} ${CS_EXTRA_FLAGS[@]+"${CS_EXTRA_FLAGS[@]}"} --sign "$SIGN_IDENTITY" "$BIN"
     fi
-    rm -f "$ENT"
+    [ -n "$ENT" ] && rm -f "$ENT"
 done
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
-codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+codesign --force ${CS_OPTIONS[@]+"${CS_OPTIONS[@]}"} ${CS_EXTRA_FLAGS[@]+"${CS_EXTRA_FLAGS[@]}"} --sign "$SIGN_IDENTITY" "$SPARKLE_FW"
+codesign --force ${CS_OPTIONS[@]+"${CS_OPTIONS[@]}"} ${CS_EXTRA_FLAGS[@]+"${CS_EXTRA_FLAGS[@]}"} --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 echo "    Signed with: $SIGN_IDENTITY"
 
 codesign --verify --deep --strict "$APP_BUNDLE"
