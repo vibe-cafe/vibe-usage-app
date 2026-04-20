@@ -36,7 +36,7 @@ struct BarChartView: View {
             if buckets[key] == nil {
                 buckets[key] = BarData(id: key)
             }
-            buckets[key]!.input += bucket.inputTokens
+            buckets[key]!.input += bucket.inputTokens + bucket.cacheCreationInputTokens
             buckets[key]!.output += bucket.outputTokens
             buckets[key]!.cost += bucket.estimatedCost ?? 0
         }

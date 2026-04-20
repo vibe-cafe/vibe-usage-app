@@ -12,14 +12,15 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     let bucketStart: String
     let inputTokens: Int
     let outputTokens: Int
+    let cacheCreationInputTokens: Int
     let cachedInputTokens: Int
     let reasoningOutputTokens: Int
     let totalTokens: Int
     let estimatedCost: Double?
 
-    /// Non-cached total (input + output + reasoning)
+    /// Full billable total (input + cacheCreation + output + reasoning)
     var computedTotal: Int {
-        inputTokens + outputTokens + reasoningOutputTokens
+        inputTokens + cacheCreationInputTokens + outputTokens + reasoningOutputTokens
     }
 
     /// Date parsed from bucketStart ISO string
@@ -35,6 +36,22 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     /// Hour string (yyyy-MM-ddTHH) for hourly grouping
     var hourKey: String {
         String(bucketStart.prefix(13))
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        source = try container.decode(String.self, forKey: .source)
+        model = try container.decode(String.self, forKey: .model)
+        project = try container.decode(String.self, forKey: .project)
+        hostname = try container.decode(String.self, forKey: .hostname)
+        bucketStart = try container.decode(String.self, forKey: .bucketStart)
+        inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+        outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+        cacheCreationInputTokens = try container.decodeIfPresent(Int.self, forKey: .cacheCreationInputTokens) ?? 0
+        cachedInputTokens = try container.decode(Int.self, forKey: .cachedInputTokens)
+        reasoningOutputTokens = try container.decode(Int.self, forKey: .reasoningOutputTokens)
+        totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+        estimatedCost = try container.decodeIfPresent(Double.self, forKey: .estimatedCost)
     }
 }
 
