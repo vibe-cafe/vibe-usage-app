@@ -73,7 +73,7 @@ LSUIElement menu bar app — no dock icon, no main window. `AppDelegate` owns a 
 ### View Hierarchy
 ```
 VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
-└── PopoverView (520px wide, hosted in NSHostingController)
+└── PopoverView (520px wide, hosted in NSHostingView pinned to panel.contentView)
     ├── unconfiguredView          # First-run API key setup
     └── dashboardView
         ├── headerBar             # Title, "查看详情" link, time range (1D/7D/30D), settings gear
@@ -110,7 +110,10 @@ Settings uses a raw `NSWindow` via `SettingsWindowController` because SwiftUI `S
 `ActivationCoordinator` is the only place that calls `setActivationPolicy`. Without it, closing one surface could strand the other — e.g. dismissing the popup would drop the app to `.prohibited` and AppKit would tear down the still-visible Settings window. It also emits `onSettingsVisibilityChange`, which `MenuBarController` uses to lower the popover panel from `.popUpMenu` to `.normal` while Settings is visible (so standard z-ordering lets a click on Settings bring it forward).
 
 ### Menu-Bar Click Handling
-The status item renders SwiftUI via `NSHostingView` inside the `NSStatusBarButton`. A vanilla `NSHostingView` consumes hit-tests and swallows the button's action — use `PassThroughHostingView` (defined inside `MenuBarController.swift`), which overrides `hitTest(_:) -> nil` so clicks fall through to the button's `#selector(handleClick:)`.
+The status item renders SwiftUI via `NSHostingView` inside the `NSStatusBarButton`. A vanilla `NSHostingView` swallows the button's action — use `PassthroughHostingView` (defined inside `MenuBarController.swift`), which overrides `hitTest(_:) -> nil` (routes events to the button), `acceptsFirstMouse(for:) -> true` (first click registers when the app is inactive), and `mouseDown`/`mouseUp` forwarding to `superview` (fallback when SwiftUI's responder chain receives the event instead of the button).
+
+### Popover Panel Sizing
+`ensurePanel()` attaches `NSHostingView` as a subview of `panel.contentView` pinned by autolayout — **not** as `panel.contentViewController`. The controller path breaks in opposite directions across macOS versions: on Sequoia (15.x) it collapses the panel to 0×0 (intrinsic size read before first layout is (0,0)); on Tahoe (26.x) the same content-size bridge feeds a reentrant layout loop that stack-overflows `ViewGraph`'s renderer. `sizingOptions = [.minSize, .maxSize]` (macOS 13+) drops the default `.intrinsicContentSize` so SwiftUI is never probed with a 0×0 proposal. Panel size comes from the initial `contentRect` + autolayout pinning; nothing else drives it.
 
 ### Auto-Updates (Sparkle)
 - `SPUStandardUpdaterController` initialized in `UpdaterViewModel`

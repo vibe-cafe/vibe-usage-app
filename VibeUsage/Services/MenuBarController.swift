@@ -56,7 +56,6 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private var hostingView: PassthroughHostingView<MenuBarLabel>!
     private var panel: PopoverPanel?
-    private var hostingController: NSHostingController<AnyView>?
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
     private var isAnimating = false
@@ -204,18 +203,22 @@ final class MenuBarController: NSObject {
     private func ensurePanel() -> PopoverPanel {
         if let panel { return panel }
 
+        // NSHostingView as contentView's subview, pinned by autolayout.
+        // Avoid NSHostingController.contentViewController here: its default intrinsic-size
+        // bridge collapses the panel to 0×0 on Sequoia (pre-layout intrinsic is (0,0)),
+        // and on Tahoe the same bridge feeds a reentrant layout loop that stack-overflows
+        // SwiftUI's ViewGraph renderer. sizingOptions drops .intrinsicContentSize from
+        // NSHostingView's default so it never probes SwiftUI with a 0×0 proposal either.
         let rootView = AnyView(
             PopoverView()
                 .environment(appState)
                 .environmentObject(updaterViewModel)
         )
-        let host = NSHostingController(rootView: rootView)
-        // sizingOptions = [] prevents SwiftUI from overriding the panel size.
-        // preferredContentSize must be set explicitly; otherwise contentViewController
-        // assignment resizes the panel to (0,0) before SwiftUI has laid out.
-        host.sizingOptions = []
-        host.preferredContentSize = NSSize(width: Self.panelWidth, height: Self.panelHeight)
-        hostingController = host
+        let host = NSHostingView(rootView: rootView)
+        host.translatesAutoresizingMaskIntoConstraints = false
+        if #available(macOS 13, *) {
+            host.sizingOptions = [.minSize, .maxSize]
+        }
 
         let panel = PopoverPanel(
             contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight),
@@ -223,9 +226,6 @@ final class MenuBarController: NSObject {
             backing: .buffered,
             defer: false
         )
-        panel.contentViewController = host
-        // Re-assert size after contentViewController may have overridden it.
-        panel.setContentSize(NSSize(width: Self.panelWidth, height: Self.panelHeight))
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -234,8 +234,14 @@ final class MenuBarController: NSObject {
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-        // Rounded corners on the hosting view's layer so the SwiftUI background gets clipped.
         if let contentView = panel.contentView {
+            contentView.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+                host.topAnchor.constraint(equalTo: contentView.topAnchor),
+                host.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            ])
             contentView.wantsLayer = true
             contentView.layer?.cornerRadius = 12
             contentView.layer?.masksToBounds = true
