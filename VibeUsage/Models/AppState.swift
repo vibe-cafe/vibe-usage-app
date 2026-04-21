@@ -96,7 +96,7 @@ final class AppState {
     }
 
     var menuBarTokens: Int {
-        buckets.reduce(0) { $0 + $1.computedTotal }
+        buckets.reduce(0) { $0 + $1.computedTotal + $1.cachedInputTokens }
     }
     // MARK: - Services (initialized after launch)
     private var syncScheduler: SyncScheduler?

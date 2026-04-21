@@ -19,7 +19,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   └── Config.swift           # Persistent config (apiKey, apiUrl) in ~/.vibe-usage/
 │   ├── Views/
 │   │   ├── PopoverView.swift      # Main dashboard container (520px wide popover)
-│   │   ├── SummaryCardsView.swift # 5 stat cards (cost, total, input, output, cached)
+│   │   ├── SummaryCardsView.swift # 5 stat cards (cost, total tokens, cached tokens, active duration, total duration)
 │   │   ├── BarChartView.swift     # Custom-drawn bar chart (hourly/daily trend)
 │   │   ├── DistributionChartsView.swift  # 4 donut pie charts (terminal, tool, model, project)
 │   │   ├── FilterTagsView.swift   # Filter pills for source/model/project/hostname
@@ -65,7 +65,7 @@ swift build -c release                   # Release build
 ## Architecture
 
 ### App Type
-LSUIElement menu bar app — no dock icon, no main window. `AppDelegate` owns a `MenuBarController` that manages an `NSStatusItem` plus a borderless `PopoverPanel` (custom NSPanel) hosting the SwiftUI dashboard. We dropped `MenuBarExtra` so the status item can render a multi-line `attributedTitle` (cost over tokens) and the panel can use a custom CASpring open/close animation anchored to the icon.
+LSUIElement menu bar app — no dock icon, no main window. `AppDelegate` owns a `MenuBarController` that manages an `NSStatusItem` plus a borderless `PopoverPanel` (custom NSPanel) hosting the SwiftUI dashboard. We dropped `MenuBarExtra` so the status item can render multi-line text via `NSHostingView` (cost over tokens) and the panel can use a custom open/close animation anchored to the icon.
 
 ### State Management
 `AppState` is `@Observable` and injected via `@Environment`. All views read from it. No Combine, no ObservableObject (except `UpdaterViewModel` which bridges Sparkle's KVO).
@@ -139,11 +139,17 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     let totalTokens: Int
     let estimatedCost: Double?      // Server-calculated cost (nil if model unmatched)
 
-    var computedTotal: Int           // inputTokens + outputTokens + reasoningOutputTokens
+    var computedTotal: Int           // inputTokens + outputTokens + reasoningOutputTokens (excludes cachedInputTokens, matches web "总 Token")
     var dayKey: String               // "yyyy-MM-dd" from bucketStart
     var hourKey: String              // "yyyy-MM-ddTHH" from bucketStart
 }
 ```
+
+Token aggregation conventions (aligned with the web Vibe Usage page):
+- Popup summary "总 Token" card → `computedTotal` (no cache reads)
+- Popup summary "缓存 Token" card → `cachedInputTokens` (cache reads only)
+- Menu-bar token line → `computedTotal + cachedInputTokens` (sum of both, so cache reads are visible in the single-number menu-bar display)
+- `estimatedCost` already accounts for cache reads (server-side, at `cacheReadMtok` rate)
 
 ## Styling Conventions
 
