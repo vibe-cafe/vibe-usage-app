@@ -11,11 +11,16 @@ struct RateLimitCardView: View {
         let claude = snapshot(for: .claudeCode)
 
         if shouldShowCard(codex) || shouldShowCard(claude) {
-            HStack(alignment: .top, spacing: 8) {
-                ProviderCard(snapshot: codex)
-                ProviderCard(snapshot: claude)
+            // Grid gives both row cells the same height by default — exactly the
+            // "top-align content but match outer height" behaviour we want.
+            // HStack alone keeps each cell at its intrinsic height which leaves
+            // a noticeable height gap when content amounts differ.
+            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                GridRow {
+                    ProviderCard(snapshot: codex)
+                    ProviderCard(snapshot: claude)
+                }
             }
-            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -44,7 +49,7 @@ private struct ProviderCard: View {
             header
             content
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
         .background(Color(white: 0.09))
