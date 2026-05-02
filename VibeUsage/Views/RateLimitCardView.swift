@@ -222,6 +222,10 @@ private struct QuotaRow: View {
                 .foregroundStyle(barColor)
                 .frame(width: 36, alignment: .trailing)
         }
+        // Lift the entire row above its siblings while hovered so the
+        // overflow tooltip can paint on top of any later QuotaRow / status
+        // banner that follows in the parent VStack.
+        .zIndex(isHovered ? 1 : 0)
     }
 
     private var percentText: String {
