@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 
 /// Side-by-side subscription quota cards for Codex (left) and Claude (right).
-/// Each card stays the same size regardless of state to keep the row balanced.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
@@ -11,10 +10,9 @@ struct RateLimitCardView: View {
         let claude = snapshot(for: .claudeCode)
 
         if shouldShowCard(codex) || shouldShowCard(claude) {
-            // Grid gives both row cells the same height by default — exactly the
-            // "top-align content but match outer height" behaviour we want.
-            // HStack alone keeps each cell at its intrinsic height which leaves
-            // a noticeable height gap when content amounts differ.
+            // Grid keeps both row cells the same height by default — needed
+            // for visual symmetry when one provider has more rows than the
+            // other (e.g. free Codex with only 7d, vs Claude Pro with 5h+7d).
             Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
                 GridRow {
                     ProviderCard(snapshot: codex)
@@ -29,9 +27,8 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    /// Hide a card entirely if the provider has nothing to surface (e.g. Codex
-    /// not installed at all). Always show Claude so the enable/disable affordance
-    /// stays discoverable.
+    /// Always show Claude (so the enable affordance stays discoverable).
+    /// Hide Codex if there is no recent session data at all.
     private func shouldShowCard(_ snap: ProviderRateLimit) -> Bool {
         if snap.provider == .claudeCode { return true }
         return snap.status != .noData
@@ -44,6 +41,13 @@ private struct ProviderCard: View {
     @Environment(AppState.self) private var appState
     let snapshot: ProviderRateLimit
 
+    /// Which window-label is currently hovered (`"5h"` / `"7d"`). Lifted to the
+    /// card level so the tooltip can render as ONE overlay on the rows VStack
+    /// instead of per-row — overlay paints after its parent's content, which
+    /// gives us the correct stacking automatically without any zIndex hacks.
+    /// (See `BarChartView` for the same pattern with multi-bar tooltips.)
+    @State private var hoveredLabel: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
@@ -52,10 +56,10 @@ private struct ProviderCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
-        // Background-shape pattern (instead of `.cornerRadius`) keeps the
-        // card's rounded chrome without clipping descendant overlays —
-        // crucial so the per-row hover tooltips can extend below the card
-        // edge and remain fully visible.
+        // Background-shape pattern (vs `.cornerRadius`) keeps the card's
+        // rounded chrome but avoids `clipShape`'s clipping of descendant
+        // overlays — needed so the rows-overlay tooltip can extend below
+        // the card edge.
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color(white: 0.09))
@@ -65,6 +69,8 @@ private struct ProviderCard: View {
                 .stroke(Color(white: 0.16), lineWidth: 1)
         )
     }
+
+    // MARK: Header
 
     private var header: some View {
         HStack(spacing: 6) {
@@ -86,39 +92,90 @@ private struct ProviderCard: View {
         }
     }
 
+    // MARK: Content (varies by status)
+
     @ViewBuilder
     private var content: some View {
         switch snapshot.status {
-        case .ok:
-            quotaRows
-        case .disabled:
-            disabledContent
-        case .unauthorized:
-            messageContent(text: "未授权或登录已过期", action: "重试")
-        case .error(let msg):
-            messageContent(text: msg, action: "重试")
-        case .noData:
-            // Reached only for Codex when there is no installed-but-unused state we want to show.
-            EmptyView()
+        case .ok:           quotaRows
+        case .disabled:     disabledContent
+        case .unauthorized: messageContent(text: "未授权或登录已过期", action: "重试")
+        case .error(let m): messageContent(text: m, action: "重试")
+        case .noData:       EmptyView()
         }
+    }
+
+    /// Visible quota rows in display order, paired with the label we use as
+    /// the hover key. Computing this once lets us share between the rows
+    /// VStack and the tooltip overlay.
+    private var visibleRows: [(label: String, window: RateLimitWindow)] {
+        var out: [(String, RateLimitWindow)] = []
+        if let w = snapshot.fiveHour { out.append(("5h", w)) }
+        if let w = snapshot.sevenDay { out.append(("7d", w)) }
+        return out
     }
 
     @ViewBuilder
     private var quotaRows: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let win = snapshot.fiveHour {
-                QuotaRow(label: "5h", window: win)
+        let rows = visibleRows
+        VStack(alignment: .leading, spacing: rowSpacing) {
+            ForEach(Array(rows.enumerated()), id: \.element.label) { _, row in
+                QuotaRow(label: row.label, window: row.window) { hovering in
+                    hoveredLabel = hovering ? row.label : (hoveredLabel == row.label ? nil : hoveredLabel)
+                }
+                .frame(height: rowHeight)
             }
-            if let win = snapshot.sevenDay {
-                QuotaRow(label: "7d", window: win)
-            }
-            if snapshot.fiveHour == nil && snapshot.sevenDay == nil {
+            if rows.isEmpty {
                 Text("暂无配额数据")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.45))
             }
         }
+        // The tooltip overlay attached HERE — at the rows VStack — paints
+        // above all child rows as a natural property of how SwiftUI composes
+        // overlays (overlay always renders after its underlying content,
+        // so it cannot be obscured by sibling rows). No zIndex needed.
+        .overlay(alignment: .topLeading) {
+            if let hovered = hoveredLabel,
+               let idx = rows.firstIndex(where: { $0.label == hovered }) {
+                let win = rows[idx].window
+                TooltipView(
+                    title: tooltipTitle(for: hovered),
+                    tokenPercentText: win.percentText,
+                    tokenColor: ProgressBar.color(for: win.utilization),
+                    elapsedPercentText: win.elapsedPercentText,
+                    remainingText: win.remainingText
+                )
+                .fixedSize()
+                .offset(y: tooltipOffsetY(rowIndex: idx))
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: hoveredLabel)
     }
+
+    // Fixed row metrics so the tooltip can be positioned deterministically.
+    private var rowHeight: CGFloat { 16 }
+    private var rowSpacing: CGFloat { 6 }
+
+    /// Y-offset where the tooltip's top-leading corner should sit, measured
+    /// from the rows-VStack top. Places the tooltip 6pt below the bottom
+    /// edge of the hovered row.
+    private func tooltipOffsetY(rowIndex: Int) -> CGFloat {
+        let bottomOfRow = CGFloat(rowIndex + 1) * rowHeight + CGFloat(rowIndex) * rowSpacing
+        return bottomOfRow + 6
+    }
+
+    private func tooltipTitle(for label: String) -> String {
+        switch label {
+        case "5h": return "5 小时窗口"
+        case "7d": return "7 天窗口"
+        default:   return label
+        }
+    }
+
+    // MARK: Disabled / error states
 
     private var disabledContent: some View {
         HStack(spacing: 8) {
@@ -129,7 +186,6 @@ private struct ProviderCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             Button {
-                print("[rate-limit] enable button tapped")
                 Task { await appState.enableClaudeRateLimit() }
             } label: {
                 Text("启用")
@@ -170,10 +226,13 @@ private struct ProviderCard: View {
 
 // MARK: - Quota row
 
+/// Pure presentation: bars + label + percent. No tooltip / hover state
+/// owned here — the parent ProviderCard observes hover through `onHover`
+/// and renders the tooltip at its own layer.
 private struct QuotaRow: View {
     let label: String
     let window: RateLimitWindow
-    @State private var isHovered = false
+    let onHover: (Bool) -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
@@ -185,94 +244,23 @@ private struct QuotaRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 ProgressBar(value: window.utilization)
                     .frame(height: 6)
-                ProgressBar(value: elapsedPercent ?? 0, fill: Color(white: 0.42), background: Color(white: 0.14))
-                    .frame(height: 3)
-                    .opacity(elapsedPercent != nil ? 1 : 0)
+                ProgressBar(
+                    value: window.elapsedPercent ?? 0,
+                    fill: Color(white: 0.42),
+                    background: Color(white: 0.14)
+                )
+                .frame(height: 3)
+                .opacity(window.elapsedPercent != nil ? 1 : 0)
             }
             .contentShape(Rectangle())
-            .onHover { hovering in
-                isHovered = hovering
-            }
-            // Float the rich tooltip below the bar stack on hover (the
-            // rate-limit section sits at the top of the dashboard, so an
-            // upward tooltip gets clipped by the popover boundary). Sized
-            // via .fixedSize so the panel extends beyond the row bounds
-            // without affecting layout. zIndex keeps it above neighboring
-            // rows when overlap occurs in the dense card.
-            .overlay(alignment: .topLeading) {
-                if isHovered {
-                    TooltipView(
-                        title: tooltipTitle,
-                        tokenPercentText: percentText,
-                        tokenColor: barColor,
-                        elapsedPercentText: elapsedPercentText,
-                        remainingText: remainingText
-                    )
-                    .fixedSize()
-                    .offset(y: barStackHeight + 6)  // small gap below bars
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-                    .zIndex(100)
-                }
-            }
-            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .onHover { hovering in onHover(hovering) }
 
-            Text(percentText)
+            Text(window.percentText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(barColor)
+                .foregroundStyle(ProgressBar.color(for: window.utilization))
                 .frame(width: 36, alignment: .trailing)
         }
-        // Lift the entire row above its siblings while hovered so the
-        // overflow tooltip can paint on top of any later QuotaRow / status
-        // banner that follows in the parent VStack.
-        .zIndex(isHovered ? 1 : 0)
     }
-
-    private var percentText: String {
-        if window.utilization < 0.05 { return "0%" }
-        if window.utilization < 1 { return String(format: "%.1f%%", window.utilization) }
-        return "\(Int(window.utilization.rounded()))%"
-    }
-
-    /// What fraction of the rolling window has elapsed since it started.
-    /// Hidden when we lack either the duration or the reset target — falls back
-    /// to a transparent 0-width bar to keep vertical alignment between rows.
-    private var elapsedPercent: Double? {
-        guard let resetsAt = window.resetsAt,
-              let duration = window.windowDuration,
-              duration > 0
-        else { return nil }
-        let remaining = max(0, resetsAt.timeIntervalSinceNow)
-        let elapsed = max(0, duration - remaining)
-        return min(100, elapsed / duration * 100)
-    }
-
-    private var elapsedPercentText: String? {
-        guard let p = elapsedPercent else { return nil }
-        if p < 0.05 { return "0%" }
-        if p < 1 { return String(format: "%.1f%%", p) }
-        return "\(Int(p.rounded()))%"
-    }
-
-    private var remainingText: String? {
-        guard let resetsAt = window.resetsAt else { return nil }
-        return Formatters.formatTimeUntil(resetsAt)
-    }
-
-    private var tooltipTitle: String {
-        switch label {
-        case "5h": return "5 小时窗口"
-        case "7d": return "7 天窗口"
-        default:   return label
-        }
-    }
-
-    /// Height of the bar VStack (token 6pt + spacing 2pt + time 3pt).
-    /// The tooltip is offset by this amount + 6pt of breathing room so it
-    /// sits cleanly below the bars regardless of its own height.
-    private var barStackHeight: CGFloat { 11 }
-
-    private var barColor: Color { ProgressBar.color(for: window.utilization) }
 }
 
 // MARK: - Tooltip panel
@@ -320,7 +308,10 @@ private struct TooltipView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Color.black)
-        .cornerRadius(5)
+        // Same background-shape trick: rounded chrome without clipping.
+        // (The tooltip itself doesn't host descendants that need to escape,
+        // but staying consistent keeps the rendering simple.)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(white: 0.22), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
     }
@@ -343,14 +334,13 @@ private struct TooltipView: View {
 
 private struct ProgressBar: View {
     let value: Double
-    var fill: Color? = nil       // nil → derive from utilization (token bar default)
+    var fill: Color? = nil
     var background: Color = Color(white: 0.18)
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(background)
+                Capsule().fill(background)
                 Capsule()
                     .fill(fill ?? Self.color(for: value))
                     .frame(width: geo.size.width * CGFloat(min(max(value, 0), 100) / 100))
@@ -385,7 +375,6 @@ private struct ProviderIcon: View {
         }
     }
 
-    /// Cache so we don't re-decode the SVG on every render.
     private static var cache: [ProviderRateLimit.Provider: NSImage] = [:]
 
     private static func image(for provider: ProviderRateLimit.Provider) -> NSImage? {
@@ -395,12 +384,44 @@ private struct ProviderIcon: View {
         case .codex:      resource = "codex-icon"
         case .claudeCode: resource = "claude-icon"
         }
-        // Try PNG first (Claude ships its product mark as PNG), fall back to SVG.
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
             ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
         guard let url, let img = NSImage(contentsOf: url) else { return nil }
         cache[provider] = img
         return img
+    }
+}
+
+// MARK: - Window display helpers
+
+/// Shared formatting so both the row UI and the tooltip read from the same
+/// source of truth without duplicating arithmetic.
+private extension RateLimitWindow {
+    var percentText: String {
+        if utilization < 0.05 { return "0%" }
+        if utilization < 1 { return String(format: "%.1f%%", utilization) }
+        return "\(Int(utilization.rounded()))%"
+    }
+
+    /// Fraction of the rolling window that has elapsed, derived from how
+    /// much remains until reset. nil if either component is missing.
+    var elapsedPercent: Double? {
+        guard let resetsAt, let duration = windowDuration, duration > 0 else { return nil }
+        let remaining = max(0, resetsAt.timeIntervalSinceNow)
+        let elapsed = max(0, duration - remaining)
+        return min(100, elapsed / duration * 100)
+    }
+
+    var elapsedPercentText: String? {
+        guard let p = elapsedPercent else { return nil }
+        if p < 0.05 { return "0%" }
+        if p < 1 { return String(format: "%.1f%%", p) }
+        return "\(Int(p.rounded()))%"
+    }
+
+    var remainingText: String? {
+        guard let resetsAt else { return nil }
+        return Formatters.formatTimeUntil(resetsAt)
     }
 }
 
