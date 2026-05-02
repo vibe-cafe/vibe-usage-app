@@ -166,25 +166,26 @@ private struct QuotaRow: View {
     let window: RateLimitWindow
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             Text(label)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color(white: 0.6))
                 .frame(width: 20, alignment: .leading)
 
-            ProgressBar(value: window.utilization)
-                .frame(height: 6)
+            VStack(alignment: .leading, spacing: 2) {
+                ProgressBar(value: window.utilization)
+                    .frame(height: 6)
+                ProgressBar(value: elapsedPercent ?? 0, fill: Color(white: 0.42), background: Color(white: 0.14))
+                    .frame(height: 3)
+                    .opacity(elapsedPercent != nil ? 1 : 0)
+            }
 
             Text(percentText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(barColor)
-                .frame(width: 32, alignment: .trailing)
-
-            Text(resetText)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(white: 0.45))
-                .frame(width: 46, alignment: .trailing)
+                .frame(width: 36, alignment: .trailing)
         }
+        .help(tooltipText)
     }
 
     private var percentText: String {
@@ -193,9 +194,31 @@ private struct QuotaRow: View {
         return "\(Int(window.utilization.rounded()))%"
     }
 
-    private var resetText: String {
-        guard let resetsAt = window.resetsAt else { return "—" }
-        return Formatters.formatTimeUntil(resetsAt)
+    /// What fraction of the rolling window has elapsed since it started.
+    /// Hidden when we lack either the duration or the reset target — falls back
+    /// to a transparent 0-width bar to keep vertical alignment between rows.
+    private var elapsedPercent: Double? {
+        guard let resetsAt = window.resetsAt,
+              let duration = window.windowDuration,
+              duration > 0
+        else { return nil }
+        let remaining = max(0, resetsAt.timeIntervalSinceNow)
+        let elapsed = max(0, duration - remaining)
+        return min(100, elapsed / duration * 100)
+    }
+
+    private var tooltipText: String {
+        var lines = ["Token：已使用 \(percentText)"]
+        if let elapsed = elapsedPercent, let resetsAt = window.resetsAt {
+            let elapsedStr = elapsed < 1
+                ? String(format: "%.1f%%", elapsed)
+                : "\(Int(elapsed.rounded()))%"
+            let remaining = Formatters.formatTimeUntil(resetsAt)
+            lines.append("时间：已过去 \(elapsedStr)，剩余 \(remaining)")
+        } else {
+            lines.append("时间：未知")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private var barColor: Color { ProgressBar.color(for: window.utilization) }
@@ -205,14 +228,16 @@ private struct QuotaRow: View {
 
 private struct ProgressBar: View {
     let value: Double
+    var fill: Color? = nil       // nil → derive from utilization (token bar default)
+    var background: Color = Color(white: 0.18)
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color(white: 0.18))
+                    .fill(background)
                 Capsule()
-                    .fill(Self.color(for: value))
+                    .fill(fill ?? Self.color(for: value))
                     .frame(width: geo.size.width * CGFloat(min(max(value, 0), 100) / 100))
             }
         }

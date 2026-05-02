@@ -4,6 +4,9 @@ import Foundation
 struct RateLimitWindow: Equatable {
     var utilization: Double  // 0-100
     var resetsAt: Date?
+    /// Total length of the rolling window (5 hours, 7 days, etc.). Used to
+    /// compute "% time elapsed" for the secondary bar by combining with `resetsAt`.
+    var windowDuration: TimeInterval?
 }
 
 /// Pay-as-you-go credits beyond the base subscription quota (Claude only).

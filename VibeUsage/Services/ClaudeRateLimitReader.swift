@@ -178,8 +178,10 @@ enum ClaudeRateLimitReader {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .init(provider: .claudeCode, status: .error("malformed JSON"), fetchedAt: Date())
         }
-        let opus = parseTier(obj["seven_day_opus"])
-        let sonnet = parseTier(obj["seven_day_sonnet"])
+        let fiveHourDur: TimeInterval = 5 * 3600
+        let sevenDayDur: TimeInterval = 7 * 86_400
+        let opus = parseTier(obj["seven_day_opus"], duration: sevenDayDur)
+        let sonnet = parseTier(obj["seven_day_sonnet"], duration: sevenDayDur)
         // Claude's OAuth usage endpoint doesn't expose plan_type directly,
         // but Max-tier subscriptions are the only ones with the per-model
         // sub-quotas. Use that as a soft signal.
@@ -187,8 +189,8 @@ enum ClaudeRateLimitReader {
 
         return ProviderRateLimit(
             provider: .claudeCode,
-            fiveHour: parseTier(obj["five_hour"]),
-            sevenDay: parseTier(obj["seven_day"]),
+            fiveHour: parseTier(obj["five_hour"], duration: fiveHourDur),
+            sevenDay: parseTier(obj["seven_day"], duration: sevenDayDur),
             sevenDayOpus: opus,
             sevenDaySonnet: sonnet,
             extraUsage: parseExtraUsage(obj["extra_usage"]),
@@ -198,7 +200,7 @@ enum ClaudeRateLimitReader {
         )
     }
 
-    private static func parseTier(_ raw: Any?) -> RateLimitWindow? {
+    private static func parseTier(_ raw: Any?, duration: TimeInterval) -> RateLimitWindow? {
         guard let dict = raw as? [String: Any] else { return nil }
         let utilization: Double
         if let v = dict["utilization"] as? Double {
@@ -218,7 +220,7 @@ enum ClaudeRateLimitReader {
             resetsAt = Date(timeIntervalSince1970: secs)
         }
 
-        return RateLimitWindow(utilization: utilization, resetsAt: resetsAt)
+        return RateLimitWindow(utilization: utilization, resetsAt: resetsAt, windowDuration: duration)
     }
 
     private static func parseExtraUsage(_ raw: Any?) -> ExtraUsage? {

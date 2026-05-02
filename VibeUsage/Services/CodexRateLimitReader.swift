@@ -131,7 +131,11 @@ enum CodexRateLimitReader {
         }
 
         return ParsedWindow(
-            window: RateLimitWindow(utilization: usedPercent, resetsAt: resetsAt),
+            window: RateLimitWindow(
+                utilization: usedPercent,
+                resetsAt: resetsAt,
+                windowDuration: TimeInterval(windowMinutes * 60)
+            ),
             windowMinutes: windowMinutes
         )
     }
