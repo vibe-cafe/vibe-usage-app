@@ -2,40 +2,40 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>Vibe Usage</string>
-    <key>CFBundleDisplayName</key>
-    <string>Vibe Usage</string>
-    <key>CFBundleIdentifier</key>
-    <string>ai.vibecafe.vibe-usage</string>
-    <key>CFBundleVersion</key>
-    <string>11</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.3.4</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleExecutable</key>
-    <string>VibeUsage</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>NSHumanReadableCopyright</key>
-    <string>Copyright (c) 2025 VibeCafe. All rights reserved.</string>
-    <key>SUFeedURL</key>
-    <string>https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>0GXdx5+udtV3oD0t8FQNih6WGLcwpn0EZrsvT4w7AyM=</string>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
-    <key>SUAutomaticallyUpdate</key>
-    <false/>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
+	<key>CFBundleDisplayName</key>
+	<string>Vibe Usage</string>
+	<key>CFBundleExecutable</key>
+	<string>VibeUsage</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.vibecafe.vibe-usage</string>
+	<key>CFBundleName</key>
+	<string>Vibe Usage</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.5</string>
+	<key>CFBundleVersion</key>
+	<string>12</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2025 VibeCafe. All rights reserved.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>0GXdx5+udtV3oD0t8FQNih6WGLcwpn0EZrsvT4w7AyM=</string>
 </dict>
 </plist>
