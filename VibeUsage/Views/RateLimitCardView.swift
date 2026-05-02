@@ -56,17 +56,19 @@ private struct ProviderCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
-        // Background-shape pattern (vs `.cornerRadius`) keeps the card's
-        // rounded chrome but avoids `clipShape`'s clipping of descendant
-        // overlays — needed so the rows-overlay tooltip can extend below
-        // the card edge.
+        // Compose the rounded fill and the border stroke into a single
+        // BACKGROUND layer. If the stroke were a separate `.overlay` it
+        // would paint after (i.e. on top of) the card's content — the
+        // bottom-edge stroke would then cut through any tooltip that
+        // overflows past the card's lower border. Putting both inside
+        // `.background` keeps them entirely behind the content.
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color(white: 0.09))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 4)
-                .stroke(Color(white: 0.16), lineWidth: 1)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(Color(white: 0.16), lineWidth: 1)
+                )
         )
     }
 
