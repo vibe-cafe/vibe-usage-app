@@ -113,7 +113,7 @@ private struct ProviderCard: View {
 
     private var disabledContent: some View {
         HStack(spacing: 8) {
-            Text("授权 keychain 后查看配额")
+            Text("查看 5 小时 / 7 天 用量")
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.5))
                 .lineLimit(1)
