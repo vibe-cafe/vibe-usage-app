@@ -120,6 +120,7 @@ private struct ProviderCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             Button {
+                print("[rate-limit] enable button tapped")
                 Task { await appState.enableClaudeRateLimit() }
             } label: {
                 Text("启用")

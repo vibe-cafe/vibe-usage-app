@@ -50,11 +50,14 @@ final class RateLimitCoordinator {
     /// Must be invoked from a user-initiated context. If the user has not enabled
     /// Claude monitoring yet, this is a no-op that surfaces the disabled placeholder.
     func refreshClaude() async {
-        guard appState?.claudeRateLimitEnabled == true else {
+        let enabled = appState?.claudeRateLimitEnabled == true
+        print("[rate-limit] refreshClaude() entered, enabled=\(enabled)")
+        guard enabled else {
             upsert(ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil))
             return
         }
         let snapshot = await ClaudeRateLimitReader.read()
+        print("[rate-limit] refreshClaude() got snapshot status=\(snapshot.status)")
         upsert(snapshot)
     }
 

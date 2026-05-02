@@ -17,9 +17,12 @@ enum ClaudeRateLimitReader {
     private static let oauthBetaHeader = "oauth-2025-04-20"
 
     static func read() async -> ProviderRateLimit {
+        print("[rate-limit] ClaudeRateLimitReader.read() entered")
         guard let token = await accessToken() else {
+            print("[rate-limit] no access token (file + keychain both failed)")
             return .init(provider: .claudeCode, status: .unauthorized, fetchedAt: Date())
         }
+        print("[rate-limit] got access token (length=\(token.count)), calling /api/oauth/usage")
 
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
@@ -31,8 +34,10 @@ enum ClaudeRateLimitReader {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
+                print("[rate-limit] invalid response (not HTTPURLResponse)")
                 return .init(provider: .claudeCode, status: .error("invalid response"), fetchedAt: Date())
             }
+            print("[rate-limit] HTTP \(http.statusCode), bodyBytes=\(data.count)")
             if http.statusCode == 401 || http.statusCode == 403 {
                 return .init(provider: .claudeCode, status: .unauthorized, fetchedAt: Date())
             }
@@ -42,6 +47,7 @@ enum ClaudeRateLimitReader {
 
             return decode(data: data)
         } catch {
+            print("[rate-limit] URLSession threw: \(error)")
             return .init(provider: .claudeCode, status: .error(error.localizedDescription), fetchedAt: Date())
         }
     }
@@ -49,7 +55,11 @@ enum ClaudeRateLimitReader {
     // MARK: - Token discovery
 
     private static func accessToken() async -> String? {
-        if let fromFile = readCredentialsFile() { return fromFile }
+        if let fromFile = readCredentialsFile() {
+            print("[rate-limit] token resolved from ~/.claude/.credentials.json")
+            return fromFile
+        }
+        print("[rate-limit] credentials file missing or unreadable, falling back to keychain")
         return await readKeychainAsync()
     }
 
@@ -71,6 +81,7 @@ enum ClaudeRateLimitReader {
     }
 
     private static func readKeychainSync() -> String? {
+        print("[rate-limit] SecItemCopyMatching: about to call (will trigger keychain prompt if no ACL)")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -79,8 +90,29 @@ enum ClaudeRateLimitReader {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let statusName = describeStatus(status)
+        print("[rate-limit] SecItemCopyMatching returned status=\(status) (\(statusName))")
         guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return parseToken(from: data)
+        if let token = parseToken(from: data) {
+            print("[rate-limit] keychain token parsed ok (length=\(token.count))")
+            return token
+        }
+        print("[rate-limit] keychain item retrieved but parseToken failed")
+        return nil
+    }
+
+    /// Translate common Security framework status codes into readable names so
+    /// log lines tell us at a glance whether it's "user denied", "no item", or "wrong ACL".
+    private static func describeStatus(_ status: OSStatus) -> String {
+        switch status {
+        case errSecSuccess:               return "success"
+        case errSecItemNotFound:          return "errSecItemNotFound — no keychain item with that service name"
+        case errSecAuthFailed:            return "errSecAuthFailed — authorization failed"
+        case errSecUserCanceled:          return "errSecUserCanceled — user dismissed the prompt"
+        case errSecInteractionNotAllowed: return "errSecInteractionNotAllowed — not allowed to prompt the user"
+        case errSecMissingEntitlement:    return "errSecMissingEntitlement — app needs keychain entitlement"
+        default:                          return "unknown"
+        }
     }
 
     private static func parseToken(from data: Data) -> String? {
