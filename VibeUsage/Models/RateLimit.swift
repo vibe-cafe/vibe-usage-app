@@ -24,7 +24,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
     enum Status: Equatable {
         case ok
         case noData                    // provider isn't installed or has no recent activity
-        case unauthorized              // Claude: token missing/expired/keychain denied
+        case disabled                  // user hasn't opted into this provider's monitoring yet
+        case unauthorized              // tried to fetch but token missing/expired/keychain denied
         case error(String)
     }
 

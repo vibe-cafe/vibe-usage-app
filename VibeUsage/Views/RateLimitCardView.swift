@@ -1,24 +1,32 @@
 import SwiftUI
 
-/// Subscription quota card for AI coding tools (Codex + Claude Code).
-///
-/// Hidden when both providers report `.noData` — only renders if at least one
-/// provider has data, an auth issue, or a transient error to surface.
+/// Subscription quota card. Renders one row per rate-limit window.
+/// Provider icon + label are shown on the first row of each group only;
+/// subsequent rows under the same provider keep that area blank for alignment.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
     private var visible: [ProviderRateLimit] {
-        appState.rateLimits.filter { $0.status != .noData }
+        // Hide a provider entirely if it has nothing to show. `.disabled` for Claude
+        // still renders (it's how we surface the enable button); `.noData` for Codex
+        // (no recent sessions) is hidden so users without Codex installed don't see it.
+        appState.rateLimits.filter { snapshot in
+            switch snapshot.status {
+            case .noData: return false
+            default: return true
+            }
+        }
     }
 
     var body: some View {
         if !visible.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(visible) { snapshot in
-                    ProviderSection(snapshot: snapshot)
+                    ProviderRows(snapshot: snapshot)
                 }
             }
-            .padding(14)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .background(Color(white: 0.09))
             .cornerRadius(4)
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
@@ -26,155 +34,179 @@ struct RateLimitCardView: View {
     }
 }
 
-// MARK: - Provider section
+// MARK: - Per-provider rows
 
-private struct ProviderSection: View {
+private struct ProviderRows: View {
+    @Environment(AppState.self) private var appState
     let snapshot: ProviderRateLimit
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color(white: 0.5))
-                Text(snapshot.provider.rawValue)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(white: 0.78))
-                Spacer()
-                if let fetched = snapshot.fetchedAt {
-                    Text(Formatters.formatRelativeTime(fetched))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(white: 0.38))
-                }
-            }
-
+        VStack(alignment: .leading, spacing: 6) {
             switch snapshot.status {
             case .ok:
-                progressRows
+                renderWindows()
+            case .disabled:
+                disabledRow
             case .unauthorized:
-                statusBanner(text: "未登录或未授权 keychain — 在 Claude Code 重新登录后可用")
+                statusRow(message: "未授权或登录已过期", action: "重试授权")
             case .error(let msg):
-                statusBanner(text: "暂时无法获取：\(msg)")
+                statusRow(message: "暂时无法获取：\(msg)", action: "重试")
             case .noData:
                 EmptyView()
             }
         }
     }
 
-    private var icon: String {
-        switch snapshot.provider {
-        case .codex:      return "terminal"
-        case .claudeCode: return "sparkles"
-        }
-    }
-
     @ViewBuilder
-    private var progressRows: some View {
-        if let win = snapshot.fiveHour {
-            QuotaRow(label: "5 小时", window: win)
-        }
-        if let win = snapshot.sevenDay {
-            QuotaRow(label: "7 天", window: win)
-        }
-        if let win = snapshot.sevenDayOpus {
-            QuotaRow(label: "Opus 7 天", window: win)
-        }
-        if let win = snapshot.sevenDaySonnet {
-            QuotaRow(label: "Sonnet 7 天", window: win)
-        }
-        if let extra = snapshot.extraUsage, extra.isEnabled, extra.limit > 0 {
-            ExtraUsageRow(extra: extra)
+    private func renderWindows() -> some View {
+        let rows = collectRows()
+        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+            QuotaRow(
+                providerLabel: index == 0 ? snapshot.provider.displayName : nil,
+                providerIcon: index == 0 ? snapshot.provider.iconName : nil,
+                window: row.window,
+                value: row.value
+            )
         }
     }
 
-    private func statusBanner(text: String) -> some View {
-        Text(text)
-            .font(.system(size: 11))
-            .foregroundStyle(Color(white: 0.55))
-            .padding(.vertical, 4)
+    private struct WindowRow {
+        var window: String  // "5 小时" / "7 天"
+        var value: RateLimitWindow
+    }
+
+    private func collectRows() -> [WindowRow] {
+        var rows: [WindowRow] = []
+        if let win = snapshot.fiveHour { rows.append(.init(window: "5 小时", value: win)) }
+        if let win = snapshot.sevenDay { rows.append(.init(window: "7 天", value: win)) }
+        return rows
+    }
+
+    private var disabledRow: some View {
+        HStack(spacing: 8) {
+            ProviderBadge(name: snapshot.provider.displayName, icon: snapshot.provider.iconName)
+            Text("点击启用监控")
+                .font(.system(size: 12))
+                .foregroundStyle(Color(white: 0.5))
+            Spacer()
+            Button {
+                Task { await appState.enableClaudeRateLimit() }
+            } label: {
+                Text("启用")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.white)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func statusRow(message: String, action: String) -> some View {
+        HStack(spacing: 8) {
+            ProviderBadge(name: snapshot.provider.displayName, icon: snapshot.provider.iconName)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(Color(white: 0.5))
+                .lineLimit(1)
+            Spacer()
+            Button {
+                Task { await appState.refreshRateLimits() }
+            } label: {
+                Text(action)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color(white: 0.7))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color(white: 0.16))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 
-// MARK: - Quota row
+// MARK: - Single quota row
 
 private struct QuotaRow: View {
-    let label: String
-    let window: RateLimitWindow
+    let providerLabel: String?
+    let providerIcon: String?
+    let window: String
+    let value: RateLimitWindow
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text(label)
-                .font(.system(size: 12))
-                .foregroundStyle(Color(white: 0.5))
-                .frame(width: 64, alignment: .leading)
+        HStack(spacing: 8) {
+            // Provider area — icon + name shown on first row only, blank
+            // afterwards to keep alignment without repeating the badge.
+            if let label = providerLabel, let icon = providerIcon {
+                ProviderBadge(name: label, icon: icon)
+            } else {
+                Color.clear.frame(width: providerColumnWidth, height: 1)
+            }
 
-            ProgressBar(value: window.utilization)
+            Text(window)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Color(white: 0.5))
+                .frame(width: 36, alignment: .leading)
+
+            ProgressBar(value: value.utilization)
                 .frame(height: 6)
 
             Text(percentText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(barColor)
-                .frame(width: 44, alignment: .trailing)
+                .frame(width: 38, alignment: .trailing)
 
             Text(resetText)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(Color(white: 0.45))
-                .frame(width: 86, alignment: .trailing)
+                .frame(width: 70, alignment: .trailing)
         }
     }
 
+    private var providerColumnWidth: CGFloat { 70 }
+
     private var percentText: String {
-        if window.utilization < 0.05 { return "0%" }
-        if window.utilization < 1 { return String(format: "%.1f%%", window.utilization) }
-        return "\(Int(window.utilization.rounded()))%"
+        if value.utilization < 0.05 { return "0%" }
+        if value.utilization < 1 { return String(format: "%.1f%%", value.utilization) }
+        return "\(Int(value.utilization.rounded()))%"
     }
 
     private var resetText: String {
-        guard let resetsAt = window.resetsAt else { return "—" }
-        return Formatters.formatTimeUntil(resetsAt) + " 后重置"
+        guard let resetsAt = value.resetsAt else { return "—" }
+        return Formatters.formatTimeUntil(resetsAt)
     }
 
-    private var barColor: Color {
-        ProgressBar.color(for: window.utilization)
-    }
+    private var barColor: Color { ProgressBar.color(for: value.utilization) }
 }
 
-// MARK: - Extra usage (Claude pay-as-you-go)
+// MARK: - Provider badge (icon + name)
 
-private struct ExtraUsageRow: View {
-    let extra: ExtraUsage
+private struct ProviderBadge: View {
+    let name: String
+    let icon: String
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text("额外配额")
-                .font(.system(size: 12))
-                .foregroundStyle(Color(white: 0.5))
-                .frame(width: 64, alignment: .leading)
-
-            ProgressBar(value: percent)
-                .frame(height: 6)
-
-            Text(amountText)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color(white: 0.55))
-                .frame(width: 134, alignment: .trailing)
+        HStack(spacing: 5) {
+            Image(icon, bundle: .module)
+                .resizable()
+                .renderingMode(.original)
+                .scaledToFit()
+                .frame(width: 14, height: 14)
+            Text(name)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color(white: 0.78))
         }
-    }
-
-    private var percent: Double {
-        guard extra.limit > 0 else { return 0 }
-        return min(100, extra.spend / extra.limit * 100)
-    }
-
-    private var amountText: String {
-        String(format: "$%.2f / $%.2f", extra.spend, extra.limit)
+        .frame(width: 70, alignment: .leading)
     }
 }
 
-// MARK: - Progress bar primitive
+// MARK: - Progress bar
 
 private struct ProgressBar: View {
-    let value: Double  // 0-100
+    let value: Double
 
     var body: some View {
         GeometryReader { geo in
@@ -190,9 +222,26 @@ private struct ProgressBar: View {
 
     static func color(for utilization: Double) -> Color {
         switch utilization {
-        case ..<70:  return Color(white: 0.85)                              // neutral white
-        case 70..<90: return Color(red: 0.96, green: 0.62, blue: 0.04)      // amber
-        default:      return Color(red: 0.94, green: 0.27, blue: 0.27)      // red
+        case ..<70:    return Color(white: 0.85)                            // neutral white
+        case 70..<90:  return Color(red: 0.96, green: 0.62, blue: 0.04)     // amber
+        default:       return Color(red: 0.94, green: 0.27, blue: 0.27)     // red
+        }
+    }
+}
+
+// MARK: - Provider helpers
+
+private extension ProviderRateLimit.Provider {
+    var displayName: String {
+        switch self {
+        case .codex:      return "Codex"
+        case .claudeCode: return "Claude"
+        }
+    }
+    var iconName: String {
+        switch self {
+        case .codex:      return "CodexIcon"
+        case .claudeCode: return "ClaudeIcon"
         }
     }
 }

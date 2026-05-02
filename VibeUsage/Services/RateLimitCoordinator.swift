@@ -39,7 +39,17 @@ final class RateLimitCoordinator {
         async let codex = Task.detached(priority: .userInitiated) {
             CodexRateLimitReader.read()
         }.value
-        async let claude = ClaudeRateLimitReader.read()
+
+        let claudeEnabled = appState?.claudeRateLimitEnabled ?? false
+        async let claude: ProviderRateLimit = {
+            if claudeEnabled {
+                return await ClaudeRateLimitReader.read()
+            } else {
+                // Surface a placeholder so the UI can render the "enable" CTA.
+                // We never touch the keychain until the user explicitly opts in.
+                return ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil)
+            }
+        }()
 
         let results = await [codex, claude]
         appState?.rateLimits = results

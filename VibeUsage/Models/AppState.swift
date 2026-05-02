@@ -82,8 +82,14 @@ final class AppState {
     var isConfigured: Bool = false
     var runtimeAvailable: Bool = true
 
-    // MARK: - Rate Limits (subscription quota for Claude Code + Codex)
+    // MARK: - Rate Limits (subscription quota for Claude + Codex)
     var rateLimits: [ProviderRateLimit] = []
+
+    /// Claude rate limit reads cross the keychain boundary, so we gate the first
+    /// fetch on an explicit user click. Persisted across launches.
+    var claudeRateLimitEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(claudeRateLimitEnabled, forKey: "claudeRateLimitEnabled") }
+    }
 
     // MARK: - Menu Bar Display Prefs
     var showCostInMenuBar: Bool = true {
@@ -112,6 +118,7 @@ final class AppState {
         // Load menu bar prefs
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
+        self.claudeRateLimitEnabled = UserDefaults.standard.bool(forKey: "claudeRateLimitEnabled")
 
         let loadedConfig = ConfigManager.load()
         self.config = loadedConfig
@@ -204,6 +211,13 @@ final class AppState {
     /// Refresh rate-limit snapshots. Called on popover open and from the
     /// footer refresh button so the user can manually re-poll.
     func refreshRateLimits() async {
+        await rateLimitCoordinator?.refresh()
+    }
+
+    /// Enable Claude rate-limit monitoring and trigger the first fetch.
+    /// The fetch is what surfaces the macOS keychain access prompt — never auto-fired.
+    func enableClaudeRateLimit() async {
+        claudeRateLimitEnabled = true
         await rateLimitCoordinator?.refresh()
     }
 
