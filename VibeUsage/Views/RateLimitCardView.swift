@@ -52,9 +52,18 @@ private struct ProviderCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
-        .background(Color(white: 0.09))
-        .cornerRadius(4)
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
+        // Background-shape pattern (instead of `.cornerRadius`) keeps the
+        // card's rounded chrome without clipping descendant overlays —
+        // crucial so the per-row hover tooltips can extend below the card
+        // edge and remain fully visible.
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color(white: 0.09))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color(white: 0.16), lineWidth: 1)
+        )
     }
 
     private var header: some View {

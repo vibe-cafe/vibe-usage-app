@@ -143,7 +143,7 @@ struct BarChartView: View {
             // Chart
             HStack(alignment: .bottom, spacing: 6) {
                 // Y-axis
-                VStack {
+                VStack(alignment: .trailing) {
                     Group {
                         switch state.chartMode {
                         case .token:
@@ -156,12 +156,15 @@ struct BarChartView: View {
                     }
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Color(white: 0.38))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     Spacer()
                     Text("0")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Color(white: 0.38))
+                        .lineLimit(1)
                 }
-                .frame(width: 40)
+                .frame(width: 44)
                 .frame(height: 150)
 
                 // Bars
@@ -254,7 +257,7 @@ struct BarChartView: View {
             HStack(spacing: 2) {
                 Rectangle()
                     .fill(.clear)
-                    .frame(width: 40)
+                    .frame(width: 44)
                 Rectangle()
                     .fill(.clear)
                     .frame(width: 6)
