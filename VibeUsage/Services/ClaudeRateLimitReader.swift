@@ -16,6 +16,19 @@ enum ClaudeRateLimitReader {
     private static let keychainService = "Claude Code-credentials"
     private static let oauthBetaHeader = "oauth-2025-04-20"
 
+    /// A dedicated session prevents URLSession.shared's HTTP/2 connection pool
+    /// from getting wedged across long-lived menu-bar app sessions — we observed
+    /// indefinite hangs (until the per-request timeout) on URLSession.shared
+    /// even though `curl` against the same endpoint returned in <1s.
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 30
+        config.waitsForConnectivity = false
+        config.httpMaximumConnectionsPerHost = 4
+        return URLSession(configuration: config)
+    }()
+
     static func read() async -> ProviderRateLimit {
         print("[rate-limit] ClaudeRateLimitReader.read() entered")
         guard let token = await accessToken() else {
@@ -29,10 +42,12 @@ enum ClaudeRateLimitReader {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(oauthBetaHeader, forHTTPHeaderField: "anthropic-beta")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 10
+        request.timeoutInterval = 20
 
+        let started = Date()
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
+            print("[rate-limit] request finished in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
             guard let http = response as? HTTPURLResponse else {
                 print("[rate-limit] invalid response (not HTTPURLResponse)")
                 return .init(provider: .claudeCode, status: .error("invalid response"), fetchedAt: Date())
@@ -208,10 +223,15 @@ enum ClaudeRateLimitReader {
 
     private static func parseExtraUsage(_ raw: Any?) -> ExtraUsage? {
         guard let dict = raw as? [String: Any] else { return nil }
+        // Real API uses `monthly_limit` / `used_credits`; older docs/clients
+        // referenced `limit` / `spend`. Accept both names in case the schema
+        // shifts again so we don't silently lose the data.
+        let limit = (dict["monthly_limit"] as? Double) ?? (dict["limit"] as? Double) ?? 0
+        let spend = (dict["used_credits"] as? Double) ?? (dict["spend"] as? Double) ?? 0
         return ExtraUsage(
             isEnabled: (dict["is_enabled"] as? Bool) ?? false,
-            spend: (dict["spend"] as? Double) ?? 0,
-            limit: (dict["limit"] as? Double) ?? 0
+            spend: spend,
+            limit: limit
         )
     }
 }
