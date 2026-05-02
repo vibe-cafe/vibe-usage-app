@@ -131,13 +131,21 @@ enum ClaudeRateLimitReader {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .init(provider: .claudeCode, status: .error("malformed JSON"), fetchedAt: Date())
         }
+        let opus = parseTier(obj["seven_day_opus"])
+        let sonnet = parseTier(obj["seven_day_sonnet"])
+        // Claude's OAuth usage endpoint doesn't expose plan_type directly,
+        // but Max-tier subscriptions are the only ones with the per-model
+        // sub-quotas. Use that as a soft signal.
+        let planLabel: String? = (opus != nil || sonnet != nil) ? "Max" : nil
+
         return ProviderRateLimit(
             provider: .claudeCode,
             fiveHour: parseTier(obj["five_hour"]),
             sevenDay: parseTier(obj["seven_day"]),
-            sevenDayOpus: parseTier(obj["seven_day_opus"]),
-            sevenDaySonnet: parseTier(obj["seven_day_sonnet"]),
+            sevenDayOpus: opus,
+            sevenDaySonnet: sonnet,
             extraUsage: parseExtraUsage(obj["extra_usage"]),
+            planLabel: planLabel,
             status: .ok,
             fetchedAt: Date()
         )

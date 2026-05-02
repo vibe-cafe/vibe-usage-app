@@ -36,6 +36,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
     var sevenDayOpus: RateLimitWindow?     // Claude Max plan only
     var sevenDaySonnet: RateLimitWindow?   // Claude Max plan only
     var extraUsage: ExtraUsage?
+    var planLabel: String?                 // e.g. "free", "Plus", "Pro", "Max"
     var status: Status
     var fetchedAt: Date?
 }

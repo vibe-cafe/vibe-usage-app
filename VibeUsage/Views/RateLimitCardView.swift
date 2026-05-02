@@ -61,6 +61,15 @@ private struct ProviderCard: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
             Spacer()
+            if let label = snapshot.planLabel {
+                Text(label)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(white: 0.55))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color(white: 0.16))
+                    .clipShape(Capsule())
+            }
         }
     }
 

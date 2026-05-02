@@ -22,6 +22,7 @@ enum CodexRateLimitReader {
                 provider: .codex,
                 fiveHour: snapshot.fiveHour,
                 sevenDay: snapshot.sevenDay,
+                planLabel: snapshot.planLabel,
                 status: .ok,
                 fetchedAt: Date()
             )
@@ -34,6 +35,7 @@ enum CodexRateLimitReader {
     private struct Snapshot {
         var fiveHour: RateLimitWindow?
         var sevenDay: RateLimitWindow?
+        var planLabel: String?
     }
 
     /// Walk year/month/day directories newest-first, scan each session file
@@ -88,8 +90,9 @@ enum CodexRateLimitReader {
 
             // The "primary" / "secondary" slots don't have fixed semantics — `window_minutes`
             // identifies which subscription window each one represents. Plan tiers vary:
-            // free plans only carry the 7d window in primary; Pro/Max return both.
+            // free plans only carry the 7d window in primary; Plus/Pro return both.
             var snapshot = Snapshot()
+            snapshot.planLabel = formatPlanLabel(rateLimits["plan_type"] as? String)
             for slot in ["primary", "secondary"] {
                 guard let win = parseWindow(rateLimits[slot]) else { continue }
                 switch win.windowMinutes {
@@ -101,6 +104,13 @@ enum CodexRateLimitReader {
             return snapshot
         }
         return nil
+    }
+
+    /// Codex emits plan_type lowercase ("free", "plus", "pro", "business").
+    /// Render the customer-facing capitalized form.
+    private static func formatPlanLabel(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        return raw.prefix(1).uppercased() + raw.dropFirst()
     }
 
     private struct ParsedWindow {
