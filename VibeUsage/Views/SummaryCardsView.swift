@@ -34,17 +34,12 @@ struct SummaryCardsView: View {
         filteredSessions.reduce(0) { $0 + $1.activeSeconds }
     }
 
-    private var totalDurationSeconds: Int {
-        filteredSessions.reduce(0) { $0 + $1.durationSeconds }
-    }
-
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             StatCard(label: "预估费用", value: Formatters.formatCost(totalCost), color: Color(red: 0.2, green: 0.8, blue: 0.5))
-            StatCard(label: "总 Token", value: Formatters.formatNumber(totalTokens))
+            StatCard(label: "输入+输出 Token", value: Formatters.formatNumber(totalTokens))
             StatCard(label: "缓存 Token", value: Formatters.formatNumber(totalCachedInputTokens))
             StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: Color(red: 0.38, green: 0.6, blue: 1.0))
-            StatCard(label: "总时长", value: Formatters.formatDuration(totalDurationSeconds))
         }
         .fixedSize(horizontal: false, vertical: true)
     }
