@@ -161,7 +161,11 @@ struct PopoverView: View {
                         // usage dashboard by a divider so the visual boundary
                         // between "subscription quota" and "consumption stats"
                         // is unambiguous.
+                        // zIndex bumps it above the sibling sections that follow
+                        // so the per-row hover tooltips, which overflow the
+                        // card edge downward, stay above the divider / filters.
                         RateLimitCardView()
+                            .zIndex(1)
                         Divider()
                             .background(Color(white: 0.16))
                             .padding(.vertical, 2)
