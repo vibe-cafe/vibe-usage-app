@@ -24,7 +24,41 @@ struct FilterTagsView: View {
     var body: some View {
         @Bindable var state = appState
 
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            // Date / time range row
+            HStack(alignment: .top, spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 11))
+                    Text("日期")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(Color(white: 0.5))
+                .frame(width: 48, alignment: .trailing)
+                .padding(.vertical, 3)
+
+                HStack(spacing: 6) {
+                    ForEach(TimeRange.allCases, id: \.rawValue) { range in
+                        let isActive = state.timeRange == range
+                        Button {
+                            state.timeRange = range
+                            Task {
+                                await appState.fetchUsageData()
+                            }
+                        } label: {
+                            Text(range.rawValue)
+                                .font(.system(size: 12, weight: isActive ? .medium : .regular))
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 3)
+                                .background(isActive ? Color.white : Color(white: 0.16))
+                                .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
             if !uniqueHostnames.isEmpty {
                 filterRow(
                     icon: "desktopcomputer",
@@ -59,15 +93,15 @@ struct FilterTagsView: View {
                 HStack(alignment: .top, spacing: 8) {
                     HStack(spacing: 4) {
                         Image(systemName: "cpu")
-                            .font(.system(size: 10))
-                        Text("模型")
                             .font(.system(size: 11))
+                        Text("模型")
+                            .font(.system(size: 12))
                     }
                     .foregroundStyle(Color(white: 0.5))
-                    .frame(width: 44, alignment: .trailing)
+                    .frame(width: 48, alignment: .trailing)
                     .padding(.vertical, 3)
 
-                    FlowLayout(spacing: 4) {
+                    FlowLayout(spacing: 6) {
                         let groups = groupModelsByFamily(uniqueModels)
                         ForEach(Array(groups.enumerated()), id: \.offset) { index, group in
                             let familyKey = group.family?.key ?? "other"
@@ -86,16 +120,12 @@ struct FilterTagsView: View {
                                 }
                             } label: {
                                 Text(familyLabel)
-                                    .font(.system(size: 11))
-                                    .padding(.horizontal, 8)
+                                    .font(.system(size: 12))
+                                    .padding(.horizontal, 9)
                                     .padding(.vertical, 3)
-                                    .background(allSelected ? Color.white : (someSelected ? Color(white: 0.25) : Color(white: 0.09)))
+                                    .background(allSelected ? Color.white : (someSelected ? Color(white: 0.28) : Color(white: 0.16)))
                                     .foregroundStyle(allSelected ? Color.black : (someSelected ? Color.white : Color(white: 0.63)))
-                                    .cornerRadius(4)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .stroke(allSelected ? Color(white: 0.0) : (someSelected ? Color.white.opacity(0.3) : Color(white: 0.16)), lineWidth: 1)
-                                    )
+                                    .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
 
@@ -118,16 +148,12 @@ struct FilterTagsView: View {
                                         }
                                     } label: {
                                         Text(value.isEmpty ? "\u{672A}\u{77E5}" : value)
-                                            .font(.system(size: 11))
-                                            .padding(.horizontal, 8)
+                                            .font(.system(size: 12))
+                                            .padding(.horizontal, 9)
                                             .padding(.vertical, 3)
-                                            .background(isActive ? Color.white : Color(white: 0.09))
+                                            .background(isActive ? Color.white : Color(white: 0.16))
                                             .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
-                                            .cornerRadius(4)
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 4)
-                                                    .stroke(Color(white: isActive ? 0.0 : 0.16), lineWidth: 1)
-                                            )
+                                            .clipShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
                                 }
@@ -141,30 +167,26 @@ struct FilterTagsView: View {
                 HStack(alignment: .top, spacing: 8) {
                     HStack(spacing: 4) {
                         Image(systemName: "folder")
-                            .font(.system(size: 10))
-                        Text("项目")
                             .font(.system(size: 11))
+                        Text("项目")
+                            .font(.system(size: 12))
                     }
                     .foregroundStyle(Color(white: 0.5))
-                    .frame(width: 44, alignment: .trailing)
+                    .frame(width: 48, alignment: .trailing)
                     .padding(.vertical, 3)
 
-                    HStack(spacing: 2) {
+                    HStack(spacing: 4) {
                         Button {
                             showProjects.toggle()
                             UserDefaults.standard.set(showProjects, forKey: "showProjects")
                         } label: {
                             Image(systemName: showProjects ? "eye" : "eye.slash")
-                                .font(.system(size: 9))
+                                .font(.system(size: 12))
                                 .foregroundStyle(Color(white: showProjects ? 0.6 : 0.35))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 4)
-                                .background(Color(white: 0.09))
-                                .cornerRadius(4)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .stroke(Color(white: 0.16), lineWidth: 1)
-                                )
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(Color(white: 0.16))
+                                .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
                         .help(showProjects ? "隐藏项目名称" : "显示项目名称")
@@ -176,7 +198,7 @@ struct FilterTagsView: View {
                     }
 
                     if showProjects {
-                        FlowLayout(spacing: 4) {
+                        FlowLayout(spacing: 6) {
                             ForEach(uniqueProjects, id: \.self) { value in
                                 let isActive = state.filters.projects.contains(value)
                                 Button {
@@ -187,16 +209,12 @@ struct FilterTagsView: View {
                                     }
                                 } label: {
                                     Text(value.isEmpty ? "未知" : value)
-                                        .font(.system(size: 11))
-                                        .padding(.horizontal, 8)
+                                        .font(.system(size: 12))
+                                        .padding(.horizontal, 9)
                                         .padding(.vertical, 3)
-                                        .background(isActive ? Color.white : Color(white: 0.09))
+                                        .background(isActive ? Color.white : Color(white: 0.16))
                                         .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
-                                        .cornerRadius(4)
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 4)
-                                                .stroke(Color(white: isActive ? 0.0 : 0.16), lineWidth: 1)
-                                        )
+                                        .clipShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -210,9 +228,9 @@ struct FilterTagsView: View {
                     state.filters.clear()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(.red.opacity(0.8))
-                .padding(.leading, 52)
+                .padding(.leading, 56)
             }
         }
     }
@@ -229,12 +247,12 @@ struct FilterTagsView: View {
         HStack(alignment: .top, spacing: 8) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 10))
-                Text(label)
                     .font(.system(size: 11))
+                Text(label)
+                    .font(.system(size: 12))
             }
             .foregroundStyle(Color(white: 0.5))
-            .frame(width: 44, alignment: .trailing)
+            .frame(width: 48, alignment: .trailing)
             .padding(.vertical, 3) // match tag vertical padding for baseline alignment
 
             if let eyeToggle {
@@ -242,31 +260,27 @@ struct FilterTagsView: View {
                     eyeToggle()
                 } label: {
                     Image(systemName: masked ? "eye.slash" : "eye")
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundStyle(Color(white: masked ? 0.35 : 0.6))
-                        .frame(height: 11 + 6) // match tag height (font 11 + padding 3*2)
+                        .frame(height: 12 + 6) // match tag height (font 12 + padding 3*2)
                 }
                 .buttonStyle(.plain)
                 .help(masked ? "\u{663E}\u{793A}\u{9879}\u{76EE}\u{540D}\u{79F0}" : "\u{9690}\u{85CF}\u{9879}\u{76EE}\u{540D}\u{79F0}")
             }
 
-            FlowLayout(spacing: 4) {
+            FlowLayout(spacing: 6) {
                 ForEach(values, id: \.self) { value in
                     let isActive = selected.contains(value)
                     Button {
                         toggle(value)
                     } label: {
                         Text(masked ? "\u{2022}\u{2022}\u{2022}" : (value.isEmpty ? "\u{672A}\u{77E5}" : value))
-                            .font(.system(size: 11))
-                            .padding(.horizontal, 8)
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 9)
                             .padding(.vertical, 3)
-                            .background(isActive ? Color.white : Color(white: 0.09))
+                            .background(isActive ? Color.white : Color(white: 0.16))
                             .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
-                            .cornerRadius(4)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(Color(white: isActive ? 0.0 : 0.16), lineWidth: 1)
-                            )
+                            .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -327,9 +341,9 @@ struct HoverChevronButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: isExpanded ? "chevron.left" : "chevron.right")
-                .font(.system(size: 8))
+                .font(.system(size: 9))
                 .foregroundStyle(isHovered ? Color.white : Color(white: 0.38))
-                .frame(height: 17)
+                .frame(height: 18)
                 .padding(.horizontal, 4)
                 .contentShape(Rectangle())
         }

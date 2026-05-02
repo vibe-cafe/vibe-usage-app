@@ -39,13 +39,14 @@ struct SummaryCardsView: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             StatCard(label: "预估费用", value: Formatters.formatCost(totalCost), color: Color(red: 0.2, green: 0.8, blue: 0.5))
             StatCard(label: "总 Token", value: Formatters.formatNumber(totalTokens))
             StatCard(label: "缓存 Token", value: Formatters.formatNumber(totalCachedInputTokens))
             StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: Color(red: 0.38, green: 0.6, blue: 1.0))
             StatCard(label: "总时长", value: Formatters.formatDuration(totalDurationSeconds))
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -54,20 +55,29 @@ private struct StatCard: View {
     let value: String
     var color: Color = .white
 
+    // Reserve fixed line-box heights so all cards render at exactly the same height,
+    // even when minimumScaleFactor shrinks the value glyphs in narrower columns.
+    private let labelHeight: CGFloat = 14   // 12pt font
+    private let valueHeight: CGFloat = 24   // 20pt font
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(Color(white: 0.63))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(height: labelHeight, alignment: .leading)
             Text(value)
-                .font(.system(size: 18, weight: .bold, design: .monospaced))
+                .font(.system(size: 20, weight: .bold, design: .monospaced))
                 .foregroundStyle(color)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.6)
+                .frame(height: valueHeight, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 13)
         .background(Color(white: 0.09))
         .cornerRadius(4)
         .overlay(

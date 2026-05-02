@@ -117,31 +117,31 @@ struct BarChartView: View {
             // Header
             HStack {
                 Text(isHourly ? "每小时趋势" : "每日趋势")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Color(white: 0.63))
                 Spacer()
                 HStack(spacing: 2) {
                     ForEach(ChartMode.allCases, id: \.self) { mode in
                         Button(action: { state.chartMode = mode }) {
                             Text(mode.rawValue)
-                                .font(.system(size: 10))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(state.chartMode == mode ? Color(white: 0.2) : Color.clear)
-                                .foregroundStyle(state.chartMode == mode ? Color.white : Color(white: 0.45))
-                                .cornerRadius(4)
+                                .font(.system(size: 11, weight: state.chartMode == mode ? .medium : .regular))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(state.chartMode == mode ? Color(white: 0.28) : Color.clear)
+                                .foregroundStyle(state.chartMode == mode ? Color.white : Color(white: 0.5))
+                                .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .background(Color(white: 0.09))
-                .cornerRadius(4)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
+                .padding(2)
+                .background(Color(white: 0.16))
+                .clipShape(Capsule())
             }
-            .padding(.bottom, 12)
+            .padding(.bottom, 14)
 
             // Chart
-            HStack(alignment: .bottom, spacing: 0) {
+            HStack(alignment: .bottom, spacing: 6) {
                 // Y-axis
                 VStack {
                     Group {
@@ -154,18 +154,18 @@ struct BarChartView: View {
                             Text(Formatters.formatDuration(Int(maxActiveMinutes * 60)))
                         }
                     }
-                    .font(.system(size: 9, design: .monospaced))
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Color(white: 0.38))
                     Spacer()
                     Text("0")
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Color(white: 0.38))
                 }
                 .frame(width: 40)
                 .frame(height: 150)
 
                 // Bars
-                HStack(alignment: .bottom, spacing: 1) {
+                HStack(alignment: .bottom, spacing: 2) {
                     ForEach(chartData) { bar in
                         VStack(spacing: 0) {
                             switch state.chartMode {
@@ -236,7 +236,7 @@ struct BarChartView: View {
                                         .foregroundStyle(Color(red: 0.38, green: 0.6, blue: 1.0))
                                 }
                             }
-                            .font(.system(size: 10))
+                            .font(.system(size: 11))
                             .padding(8)
                             .background(Color.black)
                             .cornerRadius(4)
@@ -251,15 +251,18 @@ struct BarChartView: View {
             }
 
             // X-axis
-            HStack(spacing: 1) {
+            HStack(spacing: 2) {
                 Rectangle()
                     .fill(.clear)
                     .frame(width: 40)
+                Rectangle()
+                    .fill(.clear)
+                    .frame(width: 6)
                 ForEach(Array(chartData.enumerated()), id: \.element.id) { index, bar in
                     Group {
                         if index % labelInterval == 0 {
                             Text(isHourly ? Formatters.formatHourShort(bar.id) : Formatters.formatDateShort(bar.id))
-                                .font(.system(size: 9))
+                                .font(.system(size: 11))
                                 .foregroundStyle(Color(white: 0.5))
                                 .lineLimit(1)
                                 .fixedSize()
@@ -270,9 +273,9 @@ struct BarChartView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, 8)
         }
-        .padding(16)
+        .padding(14)
         .background(Color(white: 0.09))
         .cornerRadius(4)
         .overlay(

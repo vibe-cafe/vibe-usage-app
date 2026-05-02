@@ -16,7 +16,7 @@ struct DistributionChartsView: View {
 
     var body: some View {
         let data = filtered
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], alignment: .leading, spacing: 8) {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], alignment: .leading, spacing: 10) {
             DonutCardView(
                 title: "终端分布",
                 icon: "desktopcomputer",
@@ -125,14 +125,14 @@ private struct DonutCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 0) {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Image(systemName: icon)
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(Color(white: 0.5))
                     Text(title)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Color(white: 0.63))
                 }
                 Spacer()
@@ -141,41 +141,41 @@ private struct DonutCardView: View {
 
             if slices.isEmpty || total == 0 {
                 Text("暂无数据")
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                     .foregroundStyle(Color(white: 0.38))
                     .frame(maxWidth: .infinity)
                     .frame(height: 80)
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     DonutShape(slices: slices, mode: mode, total: total)
-                        .frame(width: 80, height: 80)
+                        .frame(width: 90, height: 90)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         ForEach(slices) { slice in
-                            HStack(spacing: 4) {
+                            HStack(spacing: 6) {
                                 Circle()
                                     .fill(slice.color)
-                                    .frame(width: 6, height: 6)
+                                    .frame(width: 7, height: 7)
                                 Text(slice.label)
-                                    .font(.system(size: 9))
+                                    .font(.system(size: 11))
                                     .foregroundStyle(Color(white: 0.7))
                                     .lineLimit(1)
                                     .truncationMode(.tail)
-                                Spacer(minLength: 2)
+                                Spacer(minLength: 4)
                                 Text(valueText(slice))
-                                    .font(.system(size: 9, design: .monospaced))
+                                    .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(Color(white: 0.55))
                                 Text(percentage(slice))
-                                    .font(.system(size: 9, design: .monospaced))
+                                    .font(.system(size: 11, design: .monospaced))
                                     .foregroundStyle(Color(white: 0.38))
-                                    .frame(width: 32, alignment: .trailing)
+                                    .frame(width: 42, alignment: .trailing)
                             }
                         }
                     }
                 }
             }
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(white: 0.09))
         .cornerRadius(4)
@@ -204,13 +204,13 @@ private struct MetricToggleView: View {
     @Binding var mode: MetricMode
 
     var body: some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 2) {
             toggleButton(.tokens)
             toggleButton(.cost)
         }
-        .padding(1)
-        .background(Color(white: 0.12))
-        .cornerRadius(3)
+        .padding(2)
+        .background(Color(white: 0.16))
+        .clipShape(Capsule())
     }
 
     private func toggleButton(_ m: MetricMode) -> some View {
@@ -218,12 +218,12 @@ private struct MetricToggleView: View {
             mode = m
         } label: {
             Text(m.label)
-                .font(.system(size: 9, weight: mode == m ? .medium : .regular))
-                .foregroundStyle(mode == m ? .white : Color(white: 0.45))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(mode == m ? Color(white: 0.22) : Color.clear)
-                .cornerRadius(2)
+                .font(.system(size: 11, weight: mode == m ? .medium : .regular))
+                .foregroundStyle(mode == m ? .white : Color(white: 0.5))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 3)
+                .background(mode == m ? Color(white: 0.28) : Color.clear)
+                .clipShape(Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -236,7 +236,7 @@ private struct DonutShape: View {
     let mode: MetricMode
     let total: Double
 
-    private let lineWidth: CGFloat = 10
+    private let lineWidth: CGFloat = 11
 
     var body: some View {
         ZStack {
@@ -263,12 +263,12 @@ private struct DonutShape: View {
                 }
             }
 
-            VStack(spacing: 0) {
+            VStack(spacing: 1) {
                 Text(mode == .tokens ? "Tokens" : "预估")
-                    .font(.system(size: 7))
+                    .font(.system(size: 9))
                     .foregroundStyle(Color(white: 0.45))
                 Text(centerLabel)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
