@@ -178,6 +178,7 @@ final class MenuBarController: NSObject {
         positionPanel(panel)
 
         Task { await appState.fetchUsageDataIfNeeded() }
+        Task { await appState.refreshRateLimits() }
 
         // Bump activation policy so TextFields (unconfigured screen) receive keys.
         // ActivationCoordinator reconciles .regular/.accessory/.prohibited based

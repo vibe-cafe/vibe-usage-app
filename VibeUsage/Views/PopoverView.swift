@@ -154,8 +154,10 @@ struct PopoverView: View {
                     if appState.isLoadingData && appState.buckets.isEmpty {
                         loadingView
                     } else if !appState.hasAnyData {
+                        RateLimitCardView()
                         emptyStateView
                     } else {
+                        RateLimitCardView()
                         FilterTagsView()
                         SummaryCardsView()
                         BarChartView()
@@ -308,6 +310,7 @@ struct PopoverView: View {
             Button {
                 Task {
                     await appState.triggerSync()
+                    await appState.refreshRateLimits()
                 }
             } label: {
                 HStack(spacing: 4) {

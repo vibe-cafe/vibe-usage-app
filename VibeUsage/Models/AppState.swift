@@ -82,6 +82,9 @@ final class AppState {
     var isConfigured: Bool = false
     var runtimeAvailable: Bool = true
 
+    // MARK: - Rate Limits (subscription quota for Claude Code + Codex)
+    var rateLimits: [ProviderRateLimit] = []
+
     // MARK: - Menu Bar Display Prefs
     var showCostInMenuBar: Bool = true {
         didSet { UserDefaults.standard.set(showCostInMenuBar, forKey: "showCostInMenuBar") }
@@ -100,6 +103,7 @@ final class AppState {
     }
     // MARK: - Services (initialized after launch)
     private var syncScheduler: SyncScheduler?
+    private var rateLimitCoordinator: RateLimitCoordinator?
     private var config: VibeUsageConfig?
 
     // MARK: - Lifecycle
@@ -119,6 +123,10 @@ final class AppState {
         if isConfigured {
             startScheduler()
         }
+
+        // Rate limits are independent of configuration — Codex reads local files,
+        // Claude reads its own OAuth token. Start regardless.
+        startRateLimitCoordinator()
     }
 
     /// Save config to disk and start scheduler.
@@ -193,7 +201,19 @@ final class AppState {
         await fetchUsageData()
     }
 
+    /// Refresh rate-limit snapshots. Called on popover open and from the
+    /// footer refresh button so the user can manually re-poll.
+    func refreshRateLimits() async {
+        await rateLimitCoordinator?.refresh()
+    }
+
     // MARK: - Private
+
+    private func startRateLimitCoordinator() {
+        let coord = RateLimitCoordinator(appState: self)
+        coord.start()
+        self.rateLimitCoordinator = coord
+    }
 
     private func startScheduler() {
         syncScheduler = SyncScheduler(interval: 1800) { [weak self] in

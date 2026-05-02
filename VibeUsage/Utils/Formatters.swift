@@ -87,4 +87,11 @@ enum Formatters {
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.date(from: key)
     }
+
+    /// Format the gap between now and a future date: "12m", "2h 14m", "4d 18h", "已重置"
+    static func formatTimeUntil(_ date: Date) -> String {
+        let interval = Int(date.timeIntervalSinceNow)
+        if interval <= 0 { return "已重置" }
+        return formatDuration(interval)
+    }
 }
