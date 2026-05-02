@@ -44,10 +44,9 @@ private struct ProviderCard: View {
             header
             content
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
-        .frame(minHeight: 96)
         .background(Color(white: 0.09))
         .cornerRadius(4)
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
@@ -109,10 +108,16 @@ private struct ProviderCard: View {
 
     private var disabledContent: some View {
         HStack(spacing: 8) {
+            Text("授权 keychain 后查看配额")
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
             Button {
                 Task { await appState.enableClaudeRateLimit() }
             } label: {
-                Text("启用监控")
+                Text("启用")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.black)
                     .padding(.horizontal, 12)
@@ -121,11 +126,6 @@ private struct ProviderCard: View {
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            Text("首次需 keychain 授权")
-                .font(.system(size: 10))
-                .foregroundStyle(Color(white: 0.4))
-                .lineLimit(1)
-            Spacer(minLength: 0)
         }
     }
 
