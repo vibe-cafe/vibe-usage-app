@@ -223,10 +223,10 @@ final class AppState {
     /// Enable Claude rate-limit monitoring and trigger the first fetch.
     /// The fetch is what surfaces the macOS keychain access prompt — never auto-fired.
     func enableClaudeRateLimit() async {
-        print("[rate-limit] enableClaudeRateLimit() called, coordinator=\(rateLimitCoordinator != nil ? "present" : "nil")")
+        debugLog("[rate-limit] enableClaudeRateLimit() called, coordinator=\(rateLimitCoordinator != nil ? "present" : "nil")")
         claudeRateLimitEnabled = true
         await rateLimitCoordinator?.refreshClaude()
-        print("[rate-limit] enableClaudeRateLimit() completed")
+        debugLog("[rate-limit] enableClaudeRateLimit() completed")
     }
 
     // MARK: - Private

@@ -30,12 +30,12 @@ enum ClaudeRateLimitReader {
     }()
 
     static func read() async -> ProviderRateLimit {
-        print("[rate-limit] ClaudeRateLimitReader.read() entered")
+        debugLog("[rate-limit] ClaudeRateLimitReader.read() entered")
         guard let token = await accessToken() else {
-            print("[rate-limit] no access token (file + keychain both failed)")
+            debugLog("[rate-limit] no access token (file + keychain both failed)")
             return .init(provider: .claudeCode, status: .unauthorized, fetchedAt: Date())
         }
-        print("[rate-limit] got access token (length=\(token.count)), calling /api/oauth/usage")
+        debugLog("[rate-limit] got access token (length=\(token.count)), calling /api/oauth/usage")
 
         var request = URLRequest(url: usageURL)
         request.httpMethod = "GET"
@@ -47,12 +47,12 @@ enum ClaudeRateLimitReader {
         let started = Date()
         do {
             let (data, response) = try await session.data(for: request)
-            print("[rate-limit] request finished in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
+            debugLog("[rate-limit] request finished in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
             guard let http = response as? HTTPURLResponse else {
-                print("[rate-limit] invalid response (not HTTPURLResponse)")
+                debugLog("[rate-limit] invalid response (not HTTPURLResponse)")
                 return .init(provider: .claudeCode, status: .error("invalid response"), fetchedAt: Date())
             }
-            print("[rate-limit] HTTP \(http.statusCode), bodyBytes=\(data.count)")
+            debugLog("[rate-limit] HTTP \(http.statusCode), bodyBytes=\(data.count)")
             if http.statusCode == 401 || http.statusCode == 403 {
                 return .init(provider: .claudeCode, status: .unauthorized, fetchedAt: Date())
             }
@@ -62,7 +62,7 @@ enum ClaudeRateLimitReader {
 
             return decode(data: data)
         } catch {
-            print("[rate-limit] URLSession threw: \(error)")
+            debugLog("[rate-limit] URLSession threw: \(error)")
             return .init(provider: .claudeCode, status: .error(error.localizedDescription), fetchedAt: Date())
         }
     }
@@ -71,10 +71,10 @@ enum ClaudeRateLimitReader {
 
     private static func accessToken() async -> String? {
         if let fromFile = readCredentialsFile() {
-            print("[rate-limit] token resolved from ~/.claude/.credentials.json")
+            debugLog("[rate-limit] token resolved from ~/.claude/.credentials.json")
             return fromFile
         }
-        print("[rate-limit] credentials file missing or unreadable, falling back to keychain")
+        debugLog("[rate-limit] credentials file missing or unreadable, falling back to keychain")
         return await readKeychainAsync()
     }
 
@@ -96,7 +96,7 @@ enum ClaudeRateLimitReader {
     }
 
     private static func readKeychainSync() -> String? {
-        print("[rate-limit] SecItemCopyMatching: about to call (will trigger keychain prompt if no ACL)")
+        debugLog("[rate-limit] SecItemCopyMatching: about to call (will trigger keychain prompt if no ACL)")
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
@@ -106,13 +106,13 @@ enum ClaudeRateLimitReader {
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         let statusName = describeStatus(status)
-        print("[rate-limit] SecItemCopyMatching returned status=\(status) (\(statusName))")
+        debugLog("[rate-limit] SecItemCopyMatching returned status=\(status) (\(statusName))")
         guard status == errSecSuccess, let data = item as? Data else { return nil }
         if let token = parseToken(from: data) {
-            print("[rate-limit] keychain token parsed ok (length=\(token.count))")
+            debugLog("[rate-limit] keychain token parsed ok (length=\(token.count))")
             return token
         }
-        print("[rate-limit] keychain item retrieved but parseToken failed")
+        debugLog("[rate-limit] keychain item retrieved but parseToken failed")
         return nil
     }
 
