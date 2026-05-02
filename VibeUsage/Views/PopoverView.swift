@@ -317,7 +317,7 @@ struct PopoverView: View {
             Button {
                 Task {
                     await appState.triggerSync()
-                    await appState.refreshRateLimits()
+                    await appState.refreshAllRateLimits()
                 }
             } label: {
                 HStack(spacing: 4) {

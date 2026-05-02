@@ -208,23 +208,30 @@ final class AppState {
         await fetchUsageData()
     }
 
-    /// Refresh rate-limit snapshots. Called on popover open and from the
-    /// footer refresh button so the user can manually re-poll.
-    func refreshRateLimits() async {
-        await rateLimitCoordinator?.refresh()
+    /// Refresh only Codex rate limits. Safe — no keychain prompts.
+    /// Used by popover-open and the periodic background timer.
+    func refreshCodexRateLimit() async {
+        await rateLimitCoordinator?.refreshCodex()
+    }
+
+    /// Refresh both Codex and Claude. Touches keychain — only call from
+    /// user-initiated paths (footer 更新数据 button, retry buttons).
+    func refreshAllRateLimits() async {
+        await rateLimitCoordinator?.refreshAll()
     }
 
     /// Enable Claude rate-limit monitoring and trigger the first fetch.
     /// The fetch is what surfaces the macOS keychain access prompt — never auto-fired.
     func enableClaudeRateLimit() async {
         claudeRateLimitEnabled = true
-        await rateLimitCoordinator?.refresh()
+        await rateLimitCoordinator?.refreshClaude()
     }
 
     // MARK: - Private
 
     private func startRateLimitCoordinator() {
         let coord = RateLimitCoordinator(appState: self)
+        coord.seedPlaceholders()
         coord.start()
         self.rateLimitCoordinator = coord
     }

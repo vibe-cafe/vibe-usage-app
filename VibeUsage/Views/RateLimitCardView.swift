@@ -99,51 +99,48 @@ private struct ProviderCard: View {
     }
 
     private var disabledContent: some View {
-        VStack(spacing: 8) {
-            Spacer(minLength: 0)
+        HStack(spacing: 8) {
             Button {
                 Task { await appState.enableClaudeRateLimit() }
             } label: {
                 Text("启用监控")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.black)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
                     .background(Color.white)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            Text("授权 keychain 后显示 5 小时 / 7 天 配额")
+            Text("首次需 keychain 授权")
                 .font(.system(size: 10))
                 .foregroundStyle(Color(white: 0.4))
+                .lineLimit(1)
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
     }
 
     private func messageContent(text: String, action: String) -> some View {
-        VStack(spacing: 8) {
-            Spacer(minLength: 0)
+        HStack(spacing: 8) {
             Text(text)
                 .font(.system(size: 11))
                 .foregroundStyle(Color(white: 0.5))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
             Button {
-                Task { await appState.refreshRateLimits() }
+                Task { await appState.refreshAllRateLimits() }
             } label: {
                 Text(action)
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.78))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
                     .background(Color(white: 0.16))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -243,8 +240,10 @@ private struct ProviderIcon: View {
         case .codex:      resource = "codex-icon"
         case .claudeCode: resource = "claude-icon"
         }
-        guard let url = Bundle.appResources.url(forResource: resource, withExtension: "svg"),
-              let img = NSImage(contentsOf: url) else { return nil }
+        // Try PNG first (Claude ships its product mark as PNG), fall back to SVG.
+        let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
+            ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
+        guard let url, let img = NSImage(contentsOf: url) else { return nil }
         cache[provider] = img
         return img
     }
