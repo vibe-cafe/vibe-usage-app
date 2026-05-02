@@ -157,7 +157,14 @@ struct PopoverView: View {
                         RateLimitCardView()
                         emptyStateView
                     } else {
+                        // Rate-limit row gets its own block separated from the
+                        // usage dashboard by a divider so the visual boundary
+                        // between "subscription quota" and "consumption stats"
+                        // is unambiguous.
                         RateLimitCardView()
+                        Divider()
+                            .background(Color(white: 0.16))
+                            .padding(.vertical, 2)
                         FilterTagsView()
                         SummaryCardsView()
                         BarChartView()
