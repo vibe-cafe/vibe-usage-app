@@ -184,10 +184,12 @@ private struct QuotaRow: View {
             .onHover { hovering in
                 isHovered = hovering
             }
-            // Float the rich tooltip above the bar stack on hover. Match the
-            // BarChart's aesthetic: black panel, subtle stroke, shadow,
-            // multi-color rows. Sized via .fixedSize so the tooltip extends
-            // beyond the row bounds without clipping the layout.
+            // Float the rich tooltip below the bar stack on hover (the
+            // rate-limit section sits at the top of the dashboard, so an
+            // upward tooltip gets clipped by the popover boundary). Sized
+            // via .fixedSize so the panel extends beyond the row bounds
+            // without affecting layout. zIndex keeps it above neighboring
+            // rows when overlap occurs in the dense card.
             .overlay(alignment: .topLeading) {
                 if isHovered {
                     TooltipView(
@@ -198,7 +200,7 @@ private struct QuotaRow: View {
                         remainingText: remainingText
                     )
                     .fixedSize()
-                    .offset(y: -tooltipOffset)
+                    .offset(y: barStackHeight + 6)  // small gap below bars
                     .allowsHitTesting(false)
                     .transition(.opacity)
                     .zIndex(100)
@@ -252,12 +254,10 @@ private struct QuotaRow: View {
         }
     }
 
-    private var tooltipOffset: CGFloat {
-        // Approx tooltip height (3 rows × 14 line-height + 16 vertical pad +
-        // a few pts of breathing room). Pre-computed so the floating panel
-        // hovers just above the bar stack without overlap.
-        elapsedPercentText != nil ? 76 : 56
-    }
+    /// Height of the bar VStack (token 6pt + spacing 2pt + time 3pt).
+    /// The tooltip is offset by this amount + 6pt of breathing room so it
+    /// sits cleanly below the bars regardless of its own height.
+    private var barStackHeight: CGFloat { 11 }
 
     private var barColor: Color { ProgressBar.color(for: window.utilization) }
 }
