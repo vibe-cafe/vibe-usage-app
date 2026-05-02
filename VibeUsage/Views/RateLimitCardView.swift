@@ -164,6 +164,7 @@ private struct ProviderCard: View {
 private struct QuotaRow: View {
     let label: String
     let window: RateLimitWindow
+    @State private var isHovered = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
@@ -179,13 +180,37 @@ private struct QuotaRow: View {
                     .frame(height: 3)
                     .opacity(elapsedPercent != nil ? 1 : 0)
             }
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            // Float the rich tooltip above the bar stack on hover. Match the
+            // BarChart's aesthetic: black panel, subtle stroke, shadow,
+            // multi-color rows. Sized via .fixedSize so the tooltip extends
+            // beyond the row bounds without clipping the layout.
+            .overlay(alignment: .topLeading) {
+                if isHovered {
+                    TooltipView(
+                        title: tooltipTitle,
+                        tokenPercentText: percentText,
+                        tokenColor: barColor,
+                        elapsedPercentText: elapsedPercentText,
+                        remainingText: remainingText
+                    )
+                    .fixedSize()
+                    .offset(y: -tooltipOffset)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                    .zIndex(100)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: isHovered)
 
             Text(percentText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(barColor)
                 .frame(width: 36, alignment: .trailing)
         }
-        .help(tooltipText)
     }
 
     private var percentText: String {
@@ -207,21 +232,98 @@ private struct QuotaRow: View {
         return min(100, elapsed / duration * 100)
     }
 
-    private var tooltipText: String {
-        var lines = ["Token：已使用 \(percentText)"]
-        if let elapsed = elapsedPercent, let resetsAt = window.resetsAt {
-            let elapsedStr = elapsed < 1
-                ? String(format: "%.1f%%", elapsed)
-                : "\(Int(elapsed.rounded()))%"
-            let remaining = Formatters.formatTimeUntil(resetsAt)
-            lines.append("时间：已过去 \(elapsedStr)，剩余 \(remaining)")
-        } else {
-            lines.append("时间：未知")
+    private var elapsedPercentText: String? {
+        guard let p = elapsedPercent else { return nil }
+        if p < 0.05 { return "0%" }
+        if p < 1 { return String(format: "%.1f%%", p) }
+        return "\(Int(p.rounded()))%"
+    }
+
+    private var remainingText: String? {
+        guard let resetsAt = window.resetsAt else { return nil }
+        return Formatters.formatTimeUntil(resetsAt)
+    }
+
+    private var tooltipTitle: String {
+        switch label {
+        case "5h": return "5 小时窗口"
+        case "7d": return "7 天窗口"
+        default:   return label
         }
-        return lines.joined(separator: "\n")
+    }
+
+    private var tooltipOffset: CGFloat {
+        // Approx tooltip height (3 rows × 14 line-height + 16 vertical pad +
+        // a few pts of breathing room). Pre-computed so the floating panel
+        // hovers just above the bar stack without overlap.
+        elapsedPercentText != nil ? 76 : 56
     }
 
     private var barColor: Color { ProgressBar.color(for: window.utilization) }
+}
+
+// MARK: - Tooltip panel
+
+private struct TooltipView: View {
+    let title: String
+    let tokenPercentText: String
+    let tokenColor: Color
+    let elapsedPercentText: String?
+    let remainingText: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white)
+
+            row(
+                dotColor: tokenColor,
+                label: "Token 用量",
+                value: "已使用 \(tokenPercentText)",
+                valueColor: tokenColor,
+                valueWeight: .medium
+            )
+
+            if let elapsed = elapsedPercentText, let remaining = remainingText {
+                row(
+                    dotColor: Color(white: 0.55),
+                    label: "时间",
+                    value: "已过去 \(elapsed) · 剩余 \(remaining)",
+                    valueColor: Color(white: 0.82),
+                    valueWeight: .regular
+                )
+            } else {
+                row(
+                    dotColor: Color(white: 0.55),
+                    label: "时间",
+                    value: "未知",
+                    valueColor: Color(white: 0.5),
+                    valueWeight: .regular
+                )
+            }
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.black)
+        .cornerRadius(5)
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(white: 0.22), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
+    }
+
+    private func row(dotColor: Color, label: String, value: String, valueColor: Color, valueWeight: Font.Weight) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 6, height: 6)
+            Text(label)
+                .foregroundStyle(Color(white: 0.55))
+            Text(value)
+                .foregroundStyle(valueColor)
+                .fontWeight(valueWeight)
+        }
+    }
 }
 
 // MARK: - Progress bar
