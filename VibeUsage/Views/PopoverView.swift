@@ -319,9 +319,13 @@ struct PopoverView: View {
 
             // Refresh button
             Button {
+                // CLI sync upload + rate-limit fetch are independent (different
+                // data sources, different IO) — fire both at once instead of
+                // making the rate-limit request wait on the CLI subprocess.
                 Task {
-                    await appState.triggerSync()
-                    await appState.refreshAllRateLimits()
+                    async let sync: Void = appState.triggerSync()
+                    async let limits: Void = appState.refreshAllRateLimits()
+                    _ = await (sync, limits)
                 }
             } label: {
                 HStack(spacing: 4) {

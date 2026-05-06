@@ -8,8 +8,10 @@ struct RateLimitCardView: View {
     var body: some View {
         let codex = snapshot(for: .codex)
         let claude = snapshot(for: .claudeCode)
+        let showCodex = shouldShowCard(codex)
+        let showClaude = shouldShowCard(claude)
 
-        if shouldShowCard(codex) || shouldShowCard(claude) {
+        if showCodex && showClaude {
             // Grid keeps both row cells the same height by default — needed
             // for visual symmetry when one provider has more rows than the
             // other (e.g. free Codex with only 7d, vs Claude Pro with 5h+7d).
@@ -19,6 +21,12 @@ struct RateLimitCardView: View {
                     ProviderCard(snapshot: claude)
                 }
             }
+        } else if showCodex {
+            ProviderCard(snapshot: codex)
+        } else if showClaude {
+            ProviderCard(snapshot: claude)
+        } else {
+            noticeBar
         }
     }
 
@@ -27,11 +35,26 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    /// Always show Claude (so the enable affordance stays discoverable).
-    /// Hide Codex if there is no recent session data at all.
+    /// Hide a card only when the provider has produced no signal at all
+    /// (`.noData`). `.disabled` / `.unauthorized` / `.error` all carry an
+    /// actionable affordance and stay visible. When BOTH sides are `.noData`,
+    /// `body` swaps the row for `noticeBar` so the empty state is whisper-quiet.
     private func shouldShowCard(_ snap: ProviderRateLimit) -> Bool {
-        if snap.provider == .claudeCode { return true }
-        return snap.status != .noData
+        snap.status != .noData
+    }
+
+    /// Single-line whisper shown when neither Codex nor Claude has any data.
+    /// Mirrors the generic "feature exists; use a tool to populate" hint without
+    /// reserving the full card row's vertical space.
+    private var noticeBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 10))
+            Text("支持 Codex / Claude 订阅配额监控")
+                .font(.system(size: 11))
+        }
+        .foregroundStyle(Color(white: 0.4))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -133,7 +156,7 @@ private struct ProviderCard: View {
                 .frame(height: rowHeight)
             }
             if rows.isEmpty {
-                Text("暂无配额数据")
+                Text("暂无订阅配额数据")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.45))
             }
