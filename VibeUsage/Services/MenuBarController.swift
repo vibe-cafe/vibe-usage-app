@@ -86,6 +86,13 @@ final class MenuBarController: NSObject {
         ActivationCoordinator.shared.onSettingsVisibilityChange = { [weak self] visible in
             self?.panel?.level = visible ? .normal : .popUpMenu
         }
+
+        // Sparkle's update window is a normal-level window; while it's up,
+        // lower our `.popUpMenu` panel to `.normal` so the update dialog isn't
+        // buried under the still-open popover. Restore on dismissal.
+        ActivationCoordinator.shared.onUpdateModalVisibilityChange = { [weak self] showing in
+            self?.panel?.level = showing ? .normal : .popUpMenu
+        }
     }
 
     // MARK: - Status item

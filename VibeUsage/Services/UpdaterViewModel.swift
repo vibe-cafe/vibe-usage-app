@@ -29,7 +29,7 @@ final class UpdaterViewModel: ObservableObject {
         let controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: delegateProxy,
-            userDriverDelegate: nil
+            userDriverDelegate: delegateProxy
         )
         self.updaterController = controller
 
@@ -68,10 +68,23 @@ final class UpdaterViewModel: ObservableObject {
 /// Non-isolated NSObject proxy so `SPUStandardUpdaterController` can call back
 /// from Sparkle's internal queues. Forwards to closures that hop to the main
 /// actor before touching UpdaterViewModel state.
-private final class UpdaterDelegateProxy: NSObject, SPUUpdaterDelegate {
+private final class UpdaterDelegateProxy: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     var onFoundValidUpdate: ((SUAppcastItem) -> Void)?
     var onDidNotFindUpdate: (() -> Void)?
     var onUserChoice: ((SPUUserUpdateChoice) -> Void)?
+
+    // Sparkle calls these around its modal update window so we can move attached
+    // windows out of the way. We don't hide the popup — just signal the
+    // coordinator to lower its level so the dialog shows above it. `nonisolated`
+    // because the protocol isn't @MainActor-annotated; we hop to the main actor
+    // before touching coordinator state (same pattern as the other callbacks).
+    nonisolated func standardUserDriverWillShowModalAlert() {
+        Task { @MainActor in ActivationCoordinator.shared.onUpdateModalVisibilityChange?(true) }
+    }
+
+    nonisolated func standardUserDriverDidShowModalAlert() {
+        Task { @MainActor in ActivationCoordinator.shared.onUpdateModalVisibilityChange?(false) }
+    }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         onFoundValidUpdate?(item)
