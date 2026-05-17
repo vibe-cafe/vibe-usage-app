@@ -178,10 +178,11 @@ final class MenuBarController: NSObject {
         positionPanel(panel)
 
         Task { await appState.fetchUsageDataIfNeeded() }
-        // Popover open only refreshes Codex (silent, no prompt) and respects a
-        // 60s cooldown so rapid open/close doesn't re-walk the session tree.
-        // Claude refreshes on explicit user actions only.
+        // Popover open refreshes both Codex and Claude — both are silent local
+        // file reads now (no prompts). 60s cooldown so rapid open/close doesn't
+        // re-walk the Codex session tree or re-parse the capture file.
         Task { await appState.refreshCodexRateLimitIfNeeded() }
+        Task { await appState.refreshClaudeRateLimitIfNeeded() }
 
         // Bump activation policy so TextFields (unconfigured screen) receive keys.
         // ActivationCoordinator reconciles .regular/.accessory/.prohibited based

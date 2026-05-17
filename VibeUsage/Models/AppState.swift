@@ -85,19 +85,13 @@ final class AppState {
     // MARK: - Rate Limits (subscription quota for Claude + Codex)
     var rateLimits: [ProviderRateLimit] = []
 
-    /// Claude rate limit reads cross the keychain boundary, so we gate the first
-    /// fetch on an explicit user click. Persisted across launches.
+    /// Enabling Claude rate-limit monitoring installs a wrapper into Claude
+    /// Code's `statusLine.command` (see `StatuslineHook`). Because that edits
+    /// the user's Claude settings, we gate it behind an explicit opt-in click.
+    /// Persisted across launches. Once enabled, reads are auth-free local-file
+    /// reads — no keychain, no network.
     var claudeRateLimitEnabled: Bool = false {
         didSet { UserDefaults.standard.set(claudeRateLimitEnabled, forKey: "claudeRateLimitEnabled") }
-    }
-
-    /// Set on the first successful Claude fetch and persisted forever after.
-    /// The UI uses it to swap the unauthorized copy: a fresh user sees a generic
-    /// "未授权" message, but a returning user (whose ACL was invalidated by an
-    /// app update or Claude Code login refresh) sees an explanation of why the
-    /// keychain is asking again.
-    var claudeRateLimitHasSucceeded: Bool = false {
-        didSet { UserDefaults.standard.set(claudeRateLimitHasSucceeded, forKey: "claudeRateLimitHasSucceeded") }
     }
 
     // MARK: - Menu Bar Display Prefs
@@ -128,7 +122,10 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.claudeRateLimitEnabled = UserDefaults.standard.bool(forKey: "claudeRateLimitEnabled")
-        self.claudeRateLimitHasSucceeded = UserDefaults.standard.bool(forKey: "claudeRateLimitHasSucceeded")
+
+        // Self-heal: if capture was enabled but a claude-hud upgrade or
+        // `/statusline` clobbered our wrapper, silently re-assert it.
+        StatuslineHook.verifyAndRepair(enabled: claudeRateLimitEnabled)
 
         let loadedConfig = ConfigManager.load()
         self.config = loadedConfig
@@ -141,8 +138,8 @@ final class AppState {
             startScheduler()
         }
 
-        // Rate limits are independent of configuration — Codex reads local files,
-        // Claude reads its own OAuth token. Start regardless.
+        // Rate limits are independent of configuration — both Codex and Claude
+        // read local files (no auth). Start regardless.
         startRateLimitCoordinator()
     }
 
@@ -231,20 +228,59 @@ final class AppState {
         await rateLimitCoordinator?.refreshCodexIfNeeded()
     }
 
-    /// Refresh both Codex and Claude. Touches keychain — only call from
-    /// user-initiated paths (footer 更新数据 button, retry buttons).
+    /// Refresh Claude rate limits on popover-open (debounced). Cheap local-file
+    /// read now — safe to fire automatically, no prompts.
+    func refreshClaudeRateLimitIfNeeded() async {
+        await rateLimitCoordinator?.refreshClaudeIfNeeded()
+    }
+
+    /// Refresh both Codex and Claude. Both are auth-free local-file reads now,
+    /// so this is cheap and safe to call from any user-initiated path.
     func refreshAllRateLimits() async {
         await rateLimitCoordinator?.refreshAll()
     }
 
-    /// Enable Claude rate-limit monitoring and trigger the first fetch.
-    /// The fetch is what surfaces the macOS keychain access prompt — never auto-fired.
+    /// Enable Claude rate-limit monitoring: install the statusline wrapper into
+    /// Claude Code's settings, then read whatever it has captured so far.
+    /// Surfaces an install failure via the Claude card's error state.
+    ///
+    /// On a *fresh* enable the capture file doesn't exist yet — Claude Code only
+    /// writes it on its next statusline render (typically within ~1s of any
+    /// activity). So after a successful install we poll briefly and re-read, so
+    /// a single 启用 click populates the card on its own instead of leaving it
+    /// stuck on "disabled" until the user pokes it again.
     func enableClaudeRateLimit() async {
-        debugLog("[rate-limit] enableClaudeRateLimit() called, coordinator=\(rateLimitCoordinator != nil ? "present" : "nil")")
-        claudeRateLimitEnabled = true
-        await rateLimitCoordinator?.refreshClaude()
-        debugLog("[rate-limit] enableClaudeRateLimit() completed")
+        debugLog("[rate-limit] enableClaudeRateLimit() called")
+        switch StatuslineHook.install() {
+        case .success:
+            claudeRateLimitInstallError = nil
+            claudeRateLimitEnabled = true
+            await rateLimitCoordinator?.refreshClaude()
+            debugLog("[rate-limit] statusline hook installed; Claude capture enabled")
+
+            // Card is .disabled/.noData until Claude Code renders a statusline
+            // and the wrapper writes the file. Poll up to ~6s; stop early once
+            // a real snapshot lands. No-op if it was already captured.
+            for attempt in 1...6 {
+                if claudeRateLimitSnapshot?.status == .ok { break }
+                try? await Task.sleep(for: .seconds(1))
+                debugLog("[rate-limit] post-install poll attempt \(attempt)")
+                await rateLimitCoordinator?.refreshClaude()
+            }
+        case .failure(let error):
+            debugLog("[rate-limit] statusline install failed: \(error)")
+            claudeRateLimitInstallError = error.localizedDescription
+        }
     }
+
+    /// Current Claude snapshot in `rateLimits` (nil before the first read).
+    private var claudeRateLimitSnapshot: ProviderRateLimit? {
+        rateLimits.first { $0.provider == .claudeCode }
+    }
+
+    /// Last statusline-install failure message, surfaced in the Claude card.
+    /// Cleared on the next successful enable.
+    var claudeRateLimitInstallError: String?
 
     // MARK: - Private
 

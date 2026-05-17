@@ -124,12 +124,7 @@ private struct ProviderCard: View {
         switch snapshot.status {
         case .ok:           quotaRows
         case .disabled:     disabledContent
-        case .unauthorized:
-            if snapshot.provider == .claudeCode && appState.claudeRateLimitHasSucceeded {
-                reauthContent
-            } else {
-                messageContent(text: "未授权或登录已过期", action: "重试")
-            }
+        case .unauthorized: messageContent(text: "未授权或登录已过期", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:       EmptyView()
         }
@@ -207,11 +202,19 @@ private struct ProviderCard: View {
 
     // MARK: Disabled / error states
 
+    /// Claude `.disabled` means the statusline capture hook isn't installed yet.
+    /// The button installs it (a one-time edit to Claude Code's settings.json);
+    /// thereafter reads are auth-free. Copy is kept to one plain-language line
+    /// (matching the other states); an install failure replaces it inline.
     private var disabledContent: some View {
         HStack(spacing: 8) {
-            Text("授权并点击「始终允许」查看")
+            Text(appState.claudeRateLimitInstallError ?? "读取 Claude 用量数据")
                 .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.5))
+                .foregroundStyle(
+                    appState.claudeRateLimitInstallError != nil
+                        ? Color(red: 0.94, green: 0.27, blue: 0.27)
+                        : Color(white: 0.5)
+                )
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
@@ -227,42 +230,6 @@ private struct ProviderCard: View {
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-        }
-    }
-
-    /// Shown when Claude was previously authorized but the keychain ACL has been
-    /// invalidated. The two known causes are (1) Vibe Usage being re-signed
-    /// (rebuild / Sparkle update — changes our cdhash) and (2) Claude Code
-    /// rotating its credentials or re-logging in (rewrites the keychain item
-    /// and drops third-party ACL entries). The smaller subline names both so
-    /// the user understands why "始终允许" didn't actually stick.
-    private var reauthContent: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
-                Text("Keychain 授权失效")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.5))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 4)
-                Button {
-                    Task { await appState.refreshAllRateLimits() }
-                } label: {
-                    Text("重新授权")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color(white: 0.78))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 3)
-                        .background(Color(white: 0.16))
-                        .clipShape(Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-            Text("可能因 App 更新或 Claude 重登")
-                .font(.system(size: 10))
-                .foregroundStyle(Color(white: 0.38))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -300,6 +267,12 @@ private struct QuotaRow: View {
     let window: RateLimitWindow
     let onHover: (Bool) -> Void
 
+    /// Codex reports a true rolling window → we can show the secondary
+    /// "% time elapsed" bar. Claude's payload only has an absolute reset
+    /// instant (no window length), so `elapsedPercent` is nil; for it we
+    /// drop the bar entirely and spell out the reset time as plain text.
+    private var hasElapsed: Bool { window.elapsedPercent != nil }
+
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
             Text(label)
@@ -307,24 +280,45 @@ private struct QuotaRow: View {
                 .foregroundStyle(Color(white: 0.6))
                 .frame(width: 20, alignment: .leading)
 
-            VStack(alignment: .leading, spacing: 2) {
+            if hasElapsed {
+                // Codex: token bar + elapsed-time bar.
+                VStack(alignment: .leading, spacing: 2) {
+                    ProgressBar(value: window.utilization)
+                        .frame(height: 6)
+                    ProgressBar(
+                        value: window.elapsedPercent ?? 0,
+                        fill: Color(white: 0.42),
+                        background: Color(white: 0.14)
+                    )
+                    .frame(height: 3)
+                }
+                .contentShape(Rectangle())
+                .onHover { hovering in onHover(hovering) }
+
+                Text(window.percentText)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ProgressBar.color(for: window.utilization))
+                    .frame(width: 36, alignment: .trailing)
+            } else {
+                // Claude: no window length to derive a time bar — show the
+                // full info in text: used-% and when it resets.
                 ProgressBar(value: window.utilization)
                     .frame(height: 6)
-                ProgressBar(
-                    value: window.elapsedPercent ?? 0,
-                    fill: Color(white: 0.42),
-                    background: Color(white: 0.14)
-                )
-                .frame(height: 3)
-                .opacity(window.elapsedPercent != nil ? 1 : 0)
-            }
-            .contentShape(Rectangle())
-            .onHover { hovering in onHover(hovering) }
+                    .contentShape(Rectangle())
+                    .onHover { hovering in onHover(hovering) }
 
-            Text(window.percentText)
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(ProgressBar.color(for: window.utilization))
-                .frame(width: 36, alignment: .trailing)
+                if let reset = window.remainingText {
+                    Text("剩 \(reset)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.45))
+                        .fixedSize()
+                }
+
+                Text(window.percentText)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(ProgressBar.color(for: window.utilization))
+                    .frame(width: 36, alignment: .trailing)
+            }
         }
     }
 }
@@ -352,11 +346,22 @@ private struct TooltipView: View {
                 valueWeight: .medium
             )
 
+            // Codex has both elapsed-% and remaining; Claude only has the
+            // reset countdown (no window length). Show whatever we actually
+            // have rather than collapsing the latter to "未知".
             if let elapsed = elapsedPercentText, let remaining = remainingText {
                 row(
                     dotColor: Color(white: 0.55),
                     label: "时间",
                     value: "已过去 \(elapsed) · 剩余 \(remaining)",
+                    valueColor: Color(white: 0.82),
+                    valueWeight: .regular
+                )
+            } else if let remaining = remainingText {
+                row(
+                    dotColor: Color(white: 0.55),
+                    label: "重置",
+                    value: "剩余 \(remaining)",
                     valueColor: Color(white: 0.82),
                     valueWeight: .regular
                 )

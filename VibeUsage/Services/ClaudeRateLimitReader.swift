@@ -1,239 +1,131 @@
 import Foundation
-import Security
 
-/// Fetches Claude Code rate limits from Anthropic's OAuth usage API.
+/// Reads Claude Code's rate limits from the local capture file written by our
+/// statusline wrapper (see `StatuslineHook`).
 ///
-/// Token discovery falls back through:
-///   1. `~/.claude/.credentials.json` (preferred — silent)
-///   2. macOS Keychain item `Claude Code-credentials` (triggers one-time
-///      "Always Allow" prompt the first time we read another app's item)
+/// Claude Code pipes a status payload to its configured `statusLine.command` on
+/// every render; that payload carries a `rate_limits` object with `five_hour`
+/// and `seven_day` windows. The wrapper tees that slice to
+/// `~/.vibe-usage/claude-rate-limits.json`. We just read & parse it here — no
+/// network, no OAuth token, no keychain. This is the same auth-free, local-file
+/// shape as `CodexRateLimitReader`.
 ///
-/// Both stores hold either the new shape `{claudeAiOauth: {accessToken, expiresAt}}`
-/// or the legacy `{accessToken, expiresAt}` shape — we accept both.
+/// Captured file shape:
+/// ```json
+/// {
+///   "five_hour":  { "used_percentage": 37.0, "resets_at": 1778950000 },
+///   "seven_day":  { "used_percentage": 64.0, "resets_at": 1779400000 },
+///   "model_id":   "claude-opus-4-7",
+///   "captured_at": 1778938491
+/// }
+/// ```
+/// (`resets_at` may also arrive as an ISO-8601 string on some Claude versions;
+/// we accept both. Field names mirror claude-hud's reverse-engineered schema.)
 enum ClaudeRateLimitReader {
 
-    private static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    private static let keychainService = "Claude Code-credentials"
-    private static let oauthBetaHeader = "oauth-2025-04-20"
+    private static let fiveHourDuration: TimeInterval = 5 * 3600
+    private static let sevenDayDuration: TimeInterval = 7 * 86_400
 
-    /// A dedicated session prevents URLSession.shared's HTTP/2 connection pool
-    /// from getting wedged across long-lived menu-bar app sessions — we observed
-    /// indefinite hangs (until the per-request timeout) on URLSession.shared
-    /// even though `curl` against the same endpoint returned in <1s.
-    private static let session: URLSession = {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 30
-        config.waitsForConnectivity = false
-        config.httpMaximumConnectionsPerHost = 4
-        return URLSession(configuration: config)
-    }()
+    /// Snapshots older than this are still shown (a slightly stale 5h figure is
+    /// more useful than none) but we log it so first-run debugging is easy.
+    private static let stalenessThreshold: TimeInterval = 30 * 60
 
-    static func read() async -> ProviderRateLimit {
-        debugLog("[rate-limit] ClaudeRateLimitReader.read() entered")
-        guard let token = await accessToken() else {
-            debugLog("[rate-limit] no access token (file + keychain both failed)")
-            return .init(provider: .claudeCode, status: .unauthorized, fetchedAt: Date())
-        }
-        debugLog("[rate-limit] got access token (length=\(token.count)), calling /api/oauth/usage")
+    static func read() -> ProviderRateLimit {
+        let url = StatuslineHook.rateLimitFileURL
+        debugLog("[rate-limit] ClaudeRateLimitReader.read() -> \(url.path)")
 
-        var request = URLRequest(url: usageURL)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(oauthBetaHeader, forHTTPHeaderField: "anthropic-beta")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 20
-
-        let started = Date()
-        do {
-            let (data, response) = try await session.data(for: request)
-            debugLog("[rate-limit] request finished in \(String(format: "%.2f", Date().timeIntervalSince(started)))s")
-            guard let http = response as? HTTPURLResponse else {
-                debugLog("[rate-limit] invalid response (not HTTPURLResponse)")
-                return .init(provider: .claudeCode, status: .error("invalid response"), fetchedAt: Date())
-            }
-            debugLog("[rate-limit] HTTP \(http.statusCode), bodyBytes=\(data.count)")
-            if http.statusCode == 401 || http.statusCode == 403 {
-                return .init(provider: .claudeCode, status: .unauthorized, fetchedAt: Date())
-            }
-            guard (200..<300).contains(http.statusCode) else {
-                return .init(provider: .claudeCode, status: .error("HTTP \(http.statusCode)"), fetchedAt: Date())
-            }
-
-            return decode(data: data)
-        } catch {
-            debugLog("[rate-limit] URLSession threw: \(error)")
-            return .init(provider: .claudeCode, status: .error(error.localizedDescription), fetchedAt: Date())
-        }
-    }
-
-    // MARK: - Token discovery
-
-    private static func accessToken() async -> String? {
-        if let fromFile = readCredentialsFile() {
-            debugLog("[rate-limit] token resolved from ~/.claude/.credentials.json")
-            return fromFile
-        }
-        debugLog("[rate-limit] credentials file missing or unreadable, falling back to keychain")
-        return await readKeychainAsync()
-    }
-
-    private static func readCredentialsFile() -> String? {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude")
-            .appendingPathComponent(".credentials.json")
-        guard let data = try? Data(contentsOf: url),
-              let token = parseToken(from: data) else { return nil }
-        return token
-    }
-
-    private static func readKeychainAsync() async -> String? {
-        // SecItemCopyMatching can block while macOS shows the user prompt;
-        // run it off the main actor so the popover stays responsive.
-        await Task.detached(priority: .userInitiated) {
-            readKeychainSync()
-        }.value
-    }
-
-    private static func readKeychainSync() -> String? {
-        debugLog("[rate-limit] SecItemCopyMatching: about to call (will trigger keychain prompt if no ACL)")
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        let statusName = describeStatus(status)
-        debugLog("[rate-limit] SecItemCopyMatching returned status=\(status) (\(statusName))")
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        if let token = parseToken(from: data) {
-            debugLog("[rate-limit] keychain token parsed ok (length=\(token.count))")
-            return token
-        }
-        debugLog("[rate-limit] keychain item retrieved but parseToken failed")
-        return nil
-    }
-
-    /// Translate common Security framework status codes into readable names so
-    /// log lines tell us at a glance whether it's "user denied", "no item", or "wrong ACL".
-    private static func describeStatus(_ status: OSStatus) -> String {
-        switch status {
-        case errSecSuccess:               return "success"
-        case errSecItemNotFound:          return "errSecItemNotFound — no keychain item with that service name"
-        case errSecAuthFailed:            return "errSecAuthFailed — authorization failed"
-        case errSecUserCanceled:          return "errSecUserCanceled — user dismissed the prompt"
-        case errSecInteractionNotAllowed: return "errSecInteractionNotAllowed — not allowed to prompt the user"
-        case errSecMissingEntitlement:    return "errSecMissingEntitlement — app needs keychain entitlement"
-        default:                          return "unknown"
-        }
-    }
-
-    private static func parseToken(from data: Data) -> String? {
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-
-        // New shape: { claudeAiOauth: { accessToken, expiresAt } }
-        if let oauth = obj["claudeAiOauth"] as? [String: Any],
-           let token = oauth["accessToken"] as? String,
-           !token.isEmpty {
-            if let expiresAt = oauth["expiresAt"], !isExpired(expiresAt) {
-                return token
-            }
-            // Field absent → trust the token; caller will surface a 401 if it's stale.
-            if oauth["expiresAt"] == nil { return token }
-            return nil
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            // No capture yet: either the user hasn't enabled the statusline
+            // hook, or Claude Code hasn't rendered a statusline since install.
+            // `.disabled` keeps the card visible with an "enable" affordance.
+            debugLog("[rate-limit] capture file absent — reporting .disabled")
+            return .init(provider: .claudeCode, status: .disabled, fetchedAt: nil)
         }
 
-        // Legacy shape: { accessToken, expiresAt }
-        if let token = obj["accessToken"] as? String, !token.isEmpty {
-            if let expiresAt = obj["expiresAt"], !isExpired(expiresAt) {
-                return token
-            }
-            if obj["expiresAt"] == nil { return token }
-            return nil
+        guard let data = try? Data(contentsOf: url) else {
+            return .init(provider: .claudeCode, status: .error("无法读取限额缓存"), fetchedAt: Date())
         }
-        return nil
-    }
-
-    /// `expiresAt` is sometimes ms-since-epoch (Number), sometimes ISO8601 (String).
-    private static func isExpired(_ raw: Any) -> Bool {
-        let expiry: Date?
-        if let ms = raw as? Double {
-            expiry = Date(timeIntervalSince1970: ms > 1_000_000_000_000 ? ms / 1000 : ms)
-        } else if let str = raw as? String {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            expiry = formatter.date(from: str) ?? ISO8601DateFormatter().date(from: str)
-        } else {
-            expiry = nil
-        }
-        guard let expiry else { return false }
-        return expiry < Date()
-    }
-
-    // MARK: - Response decoding
-
-    private static func decode(data: Data) -> ProviderRateLimit {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return .init(provider: .claudeCode, status: .error("malformed JSON"), fetchedAt: Date())
+            return .init(provider: .claudeCode, status: .error("限额缓存格式错误"), fetchedAt: Date())
         }
-        let fiveHourDur: TimeInterval = 5 * 3600
-        let sevenDayDur: TimeInterval = 7 * 86_400
-        let opus = parseTier(obj["seven_day_opus"], duration: sevenDayDur)
-        let sonnet = parseTier(obj["seven_day_sonnet"], duration: sevenDayDur)
-        // Claude's OAuth usage endpoint doesn't expose plan_type directly,
-        // but Max-tier subscriptions are the only ones with the per-model
-        // sub-quotas. Use that as a soft signal.
-        let planLabel: String? = (opus != nil || sonnet != nil) ? "Max" : nil
+
+        let fiveHour = parseWindow(obj["five_hour"], duration: fiveHourDuration)
+        let sevenDay = parseWindow(obj["seven_day"], duration: sevenDayDuration)
+
+        guard fiveHour != nil || sevenDay != nil else {
+            // File exists but no usable windows — e.g. an API/Bedrock session
+            // (no subscription limits). Treat as "nothing to show" rather than
+            // an error; the card collapses just like Codex `.noData`.
+            debugLog("[rate-limit] capture file had no usable windows")
+            return .init(provider: .claudeCode, status: .noData, fetchedAt: Date())
+        }
+
+        if let capturedAt = (obj["captured_at"] as? Double).map({ Date(timeIntervalSince1970: $0) }) {
+            let age = Date().timeIntervalSince(capturedAt)
+            if age > stalenessThreshold {
+                debugLog("[rate-limit] capture is stale by \(Int(age))s (Claude Code may be idle)")
+            }
+        }
 
         return ProviderRateLimit(
             provider: .claudeCode,
-            fiveHour: parseTier(obj["five_hour"], duration: fiveHourDur),
-            sevenDay: parseTier(obj["seven_day"], duration: sevenDayDur),
-            sevenDayOpus: opus,
-            sevenDaySonnet: sonnet,
-            extraUsage: parseExtraUsage(obj["extra_usage"]),
-            planLabel: planLabel,
+            fiveHour: fiveHour,
+            sevenDay: sevenDay,
+            // Subscription-only signal: API/Bedrock sessions never reach here
+            // (no windows), so a present window implies a paid plan. We can't
+            // distinguish Pro vs Max from this payload, so leave the label nil.
+            planLabel: nil,
             status: .ok,
             fetchedAt: Date()
         )
     }
 
-    private static func parseTier(_ raw: Any?, duration: TimeInterval) -> RateLimitWindow? {
+    // MARK: - Parsing
+
+    /// Parse one `{ used_percentage, resets_at }` window. Tolerant of both the
+    /// `used_percentage` and legacy `utilization` keys, and of `resets_at` being
+    /// epoch seconds (Number) or ISO-8601 (String) — Claude Code's exact shape
+    /// is version-dependent and reverse-engineered, so we defend against drift.
+    ///
+    /// `duration` is the nominal window length (5h / 7d). Claude Code's payload
+    /// only gives `resets_at` (no window start), so the "% time elapsed" bar is
+    /// an approximation: `elapsed = duration - timeUntil(resets_at)`, which is
+    /// accurate while the snapshot is fresh and the period really is that long.
+    ///
+    /// The one hard failure we guard against: a *stale* capture whose
+    /// `resets_at` has already passed. Then `timeUntilReset` clamps to 0 and the
+    /// naive formula pins elapsed to 100% (the bug that showed every bar full).
+    /// We detect that here and drop `windowDuration` (→ `elapsedPercent` nil →
+    /// no time bar) rather than render a confidently-wrong 100%.
+    private static func parseWindow(_ raw: Any?, duration: TimeInterval) -> RateLimitWindow? {
         guard let dict = raw as? [String: Any] else { return nil }
+
         let utilization: Double
-        if let v = dict["utilization"] as? Double {
+        if let v = dict["used_percentage"] as? Double {
             utilization = v
-        } else if let v = dict["used_percentage"] as? Double {
+        } else if let v = dict["utilization"] as? Double {
             utilization = v
         } else {
             return nil
         }
 
         var resetsAt: Date?
-        if let str = dict["resets_at"] as? String {
-            let isoFractional = ISO8601DateFormatter()
-            isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            resetsAt = isoFractional.date(from: str) ?? ISO8601DateFormatter().date(from: str)
-        } else if let secs = dict["resets_at"] as? Double {
+        if let secs = dict["resets_at"] as? Double, secs > 0 {
             resetsAt = Date(timeIntervalSince1970: secs)
+        } else if let str = dict["resets_at"] as? String, !str.isEmpty {
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            resetsAt = iso.date(from: str) ?? ISO8601DateFormatter().date(from: str)
         }
 
-        return RateLimitWindow(utilization: utilization, resetsAt: resetsAt, windowDuration: duration)
-    }
-
-    private static func parseExtraUsage(_ raw: Any?) -> ExtraUsage? {
-        guard let dict = raw as? [String: Any] else { return nil }
-        // Real API uses `monthly_limit` / `used_credits`; older docs/clients
-        // referenced `limit` / `spend`. Accept both names in case the schema
-        // shifts again so we don't silently lose the data.
-        let limit = (dict["monthly_limit"] as? Double) ?? (dict["limit"] as? Double) ?? 0
-        let spend = (dict["used_credits"] as? Double) ?? (dict["spend"] as? Double) ?? 0
-        return ExtraUsage(
-            isEnabled: (dict["is_enabled"] as? Bool) ?? false,
-            spend: spend,
-            limit: limit
+        // Only expose the window length (→ enables the elapsed-time bar) when
+        // `resets_at` is still in the future. A stale snapshot whose reset has
+        // already passed would otherwise pin the time bar to a wrong 100%.
+        let resetInFuture = (resetsAt?.timeIntervalSinceNow ?? -1) > 0
+        return RateLimitWindow(
+            utilization: utilization,
+            resetsAt: resetsAt,
+            windowDuration: resetInFuture ? duration : nil
         )
     }
 }

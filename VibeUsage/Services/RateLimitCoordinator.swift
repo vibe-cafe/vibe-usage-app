@@ -2,15 +2,15 @@ import Foundation
 
 /// Refreshes rate-limit snapshots on demand and pushes results into AppState.
 ///
-/// All work is local: Codex reads files, Claude calls the OAuth usage API directly.
-/// Nothing is uploaded to the Vibe Usage backend. There is no background timer —
-/// Codex refreshes are driven by popover-open (with a short debounce), Claude
-/// refreshes happen only on user-initiated actions because they cross the
-/// keychain boundary and can re-prompt after re-signing.
+/// All work is local file reads: Codex parses its session JSONL, Claude reads
+/// the statusline-capture file written by `StatuslineHook`. Nothing is uploaded
+/// to the Vibe Usage backend. There is no background timer — refreshes are
+/// driven by popover-open (debounced) and user-initiated actions.
 @MainActor
 final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
+    private var lastClaudeFetchAt: Date?
 
     init(appState: AppState) {
         self.appState = appState
@@ -37,11 +37,9 @@ final class RateLimitCoordinator {
         await refreshCodex()
     }
 
-    /// Refresh only Claude. Triggers keychain read on first call after re-signing.
-    /// Must be invoked from a user-initiated context. If the user has not enabled
-    /// Claude monitoring yet, this is a no-op that surfaces the disabled placeholder.
-    /// Records `claudeRateLimitHasSucceeded` on the first successful fetch so the
-    /// UI can distinguish "first-time auth" from "auth invalidated, re-auth needed".
+    /// Refresh Claude from the local statusline-capture file. Auth-free and
+    /// cheap. If the user hasn't enabled capture yet, surface the disabled
+    /// placeholder (the card's "启用" button installs the hook).
     func refreshClaude() async {
         let enabled = appState?.claudeRateLimitEnabled == true
         debugLog("[rate-limit] refreshClaude() entered, enabled=\(enabled)")
@@ -49,16 +47,24 @@ final class RateLimitCoordinator {
             upsert(ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil))
             return
         }
-        let snapshot = await ClaudeRateLimitReader.read()
+        let snapshot = await Task.detached(priority: .userInitiated) {
+            ClaudeRateLimitReader.read()
+        }.value
         debugLog("[rate-limit] refreshClaude() got snapshot status=\(snapshot.status)")
         upsert(snapshot)
-        if case .ok = snapshot.status {
-            appState?.claudeRateLimitHasSucceeded = true
-        }
+        lastClaudeFetchAt = Date()
     }
 
-    /// Refresh everything currently visible. Use sparingly — only from user-initiated
-    /// actions that explicitly want Claude data (footer refresh, retry buttons).
+    /// Refresh Claude only if the last read was over `maxAge` seconds ago.
+    /// Mirrors `refreshCodexIfNeeded` for the debounced popover-open path.
+    func refreshClaudeIfNeeded(maxAge: TimeInterval = 60) async {
+        if let last = lastClaudeFetchAt, Date().timeIntervalSince(last) < maxAge {
+            return
+        }
+        await refreshClaude()
+    }
+
+    /// Refresh everything currently visible. Cheap (two local-file reads).
     func refreshAll() async {
         await refreshCodex()
         await refreshClaude()
