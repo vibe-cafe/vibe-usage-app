@@ -24,4 +24,10 @@ struct UsageSession: Codable, Identifiable, Equatable {
     var hourKey: String {
         String(firstMessageAt.prefix(13))
     }
+
+    /// Absolute Date parsed from `firstMessageAt`. Used by client-side
+    /// time-window filters (see `TimeRange.startCutoff` for `.today`).
+    var date: Date? {
+        ISO8601DateFormatter().date(from: firstMessageAt)
+    }
 }

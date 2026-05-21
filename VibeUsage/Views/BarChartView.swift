@@ -57,11 +57,13 @@ struct BarChartView: View {
     @Environment(AppState.self) private var appState
 
     private var isHourly: Bool {
-        appState.timeRange == .oneDay
+        appState.timeRange.isHourly
     }
 
     private var filtered: [UsageBucket] {
-        appState.buckets.filter { bucket in
+        let cutoff = appState.timeRange.startCutoff
+        return appState.buckets.filter { bucket in
+            if let cutoff, let date = bucket.date, date < cutoff { return false }
             let f = appState.filters
             if !f.sources.isEmpty && !f.sources.contains(bucket.source) { return false }
             if !f.models.isEmpty && !f.models.contains(bucket.model) { return false }
@@ -93,21 +95,29 @@ struct BarChartView: View {
         }
 
         if isHourly {
-            // Generate 24 hourly slots ending at current hour
+            // Generate hourly slots. For `.today` we start at local midnight
+            // (slot count grows through the day, 1→24); for `.oneDay` we keep
+            // the 24-slot rolling window ending at the current hour.
             let calendar = Calendar.current
             let now = Date()
             let currentHour = calendar.dateInterval(of: .hour, for: now)?.start ?? now
+            let start: Date = {
+                if appState.timeRange == .today {
+                    return calendar.startOfDay(for: now)
+                }
+                return calendar.date(byAdding: .hour, value: -23, to: currentHour) ?? currentHour
+            }()
             var result: [BarData] = []
             let isoFormatter = ISO8601DateFormatter()
             isoFormatter.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
 
-            for i in stride(from: 23, through: 0, by: -1) {
-                if let hour = calendar.date(byAdding: .hour, value: -i, to: currentHour) {
-                    // Format to yyyy-MM-ddTHH
-                    let iso = isoFormatter.string(from: hour)
-                    let key = String(iso.prefix(13))
-                    result.append(buckets[key] ?? BarData(id: key))
-                }
+            var hour = start
+            while hour <= currentHour {
+                let iso = isoFormatter.string(from: hour)
+                let key = String(iso.prefix(13))
+                result.append(buckets[key] ?? BarData(id: key))
+                guard let next = calendar.date(byAdding: .hour, value: 1, to: hour) else { break }
+                hour = next
             }
             return result
         } else {

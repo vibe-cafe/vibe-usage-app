@@ -46,7 +46,12 @@ struct FilterTagsView: View {
                                 await appState.fetchUsageData()
                             }
                         } label: {
-                            Text(range.rawValue)
+                            // Display labels diverge from raw values for the
+                            // first two pills (per vibe-cafe@f5f022b): `.today
+                            // → 今天`, `.oneDay → 24H`. Raw values stay stable
+                            // ("today"/"1D") so internal keys and any future
+                            // persistence keep working across upgrades.
+                            Text(displayLabel(for: range))
                                 .font(.system(size: 12, weight: isActive ? .medium : .regular))
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 3)
@@ -232,6 +237,14 @@ struct FilterTagsView: View {
                 .foregroundStyle(.red.opacity(0.8))
                 .padding(.leading, 56)
             }
+        }
+    }
+
+    private func displayLabel(for range: TimeRange) -> String {
+        switch range {
+        case .today:  return "今天"
+        case .oneDay: return "24H"
+        default:      return range.rawValue
         }
     }
 

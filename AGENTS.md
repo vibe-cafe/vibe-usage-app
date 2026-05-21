@@ -76,7 +76,7 @@ VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
 └── PopoverView (520px wide, hosted in NSHostingView pinned to panel.contentView)
     ├── unconfiguredView          # First-run API key setup
     └── dashboardView
-        ├── headerBar             # Title, "查看详情" link, time range (1D/7D/30D), settings gear
+        ├── headerBar             # Title, "查看详情" link, time range (今天/24H/7D/30D), settings gear
         ├── ScrollView
         │   ├── FilterTagsView    # Source/model/project/hostname filter pills
         │   ├── SummaryCardsView  # 5 stat cards
@@ -90,6 +90,14 @@ VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
 2. Response decoded into `[UsageBucket]`, stored in `AppState.buckets`
 3. Views compute filtered data locally: `appState.buckets.filter { ... appState.filters ... }`
 4. Charts aggregate filtered buckets by time key or dimension
+
+### Time Range (today / 24H / 7D / 30D)
+`TimeRange` (`AppState.swift`) has two hourly-granularity cases that look similar but mean different things — the split mirrors `vibe-cafe@f5f022b`, where the single rolling "1D" pill confused users who read it as "today" but watched the number shrink as the earliest hour rolled off.
+
+- `.today` (UI: 「今天」) — local-midnight → now, fixed start. Only grows through the day.
+- `.oneDay` (UI: 「24H」, raw value still `"1D"` for state stability) — rolling last 24 hours.
+
+Both request `days=1` from the backend; the today-cutoff is then applied **client-side** via `TimeRange.startCutoff` (returns `Calendar.current.startOfDay(for: Date())` for `.today`, nil otherwise). Each consumer that reads `appState.buckets` (and `filteredSessions`) adds one line: `if let cutoff, let date = bucket.date, date < cutoff { return false }`. Keeps the API contract unchanged and the cutoff in a single source of truth. `BarChartView`'s hourly fill loop also keys off `appState.timeRange == .today` to start at midnight (slot count grows from 1 → 24) instead of "23 hours ago" for the rolling-24h case.
 
 ### Chart Hover & Scroll
 `BarChartView` is split into a parent that computes the O(n) `chartData`

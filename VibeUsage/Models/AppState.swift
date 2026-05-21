@@ -16,15 +16,40 @@ enum ChartMode: String, CaseIterable {
 }
 
 enum TimeRange: String, CaseIterable {
+    /// Local midnight → now. Fixed start, only grows as the day progresses.
+    /// Split out from `.oneDay` per vibe-cafe@f5f022b — the rolling-24h
+    /// window confused users who read it as "today's spend" but watched the
+    /// number shrink as the earliest hour rolled off. UI label: "今天".
+    case today = "today"
+    /// Rolling last 24 hours. UI label is "24H" (former "1D"); raw value
+    /// stays "1D" for state stability across upgrades.
     case oneDay = "1D"
     case sevenDays = "7D"
     case thirtyDays = "30D"
 
+    /// How many days to request from the backend. `.today` re-uses the same
+    /// `days=1` fetch as `.oneDay`; the today-cutoff is then applied
+    /// client-side (see `startCutoff`) so callers don't need a separate API.
     var days: Int {
         switch self {
-        case .oneDay: 1
+        case .today, .oneDay: 1
         case .sevenDays: 7
         case .thirtyDays: 30
+        }
+    }
+
+    /// Trend chart bucket granularity. Hour-granularity for both today and the
+    /// rolling 24h; day-granularity for the longer ranges.
+    var isHourly: Bool { self == .today || self == .oneDay }
+
+    /// Inclusive lower bound on bucket / session timestamps when this range is
+    /// active. nil means "show all fetched data" (which already matches the
+    /// requested window for the day-granularity ranges). Currently only
+    /// `.today` tightens the client-side window below what the API returned.
+    var startCutoff: Date? {
+        switch self {
+        case .today: return Calendar.current.startOfDay(for: Date())
+        default: return nil
         }
     }
 }
@@ -69,7 +94,9 @@ final class AppState {
     var filters: FilterState = .init()
 
     var filteredSessions: [UsageSession] {
-        sessions.filter { session in
+        let cutoff = timeRange.startCutoff
+        return sessions.filter { session in
+            if let cutoff, let date = session.date, date < cutoff { return false }
             let f = filters
             if !f.sources.isEmpty && !f.sources.contains(session.source) { return false }
             if !f.projects.isEmpty && !f.projects.contains(session.project) { return false }

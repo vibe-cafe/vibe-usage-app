@@ -4,7 +4,9 @@ struct DistributionChartsView: View {
     @Environment(AppState.self) private var appState
 
     private var filtered: [UsageBucket] {
-        appState.buckets.filter { bucket in
+        let cutoff = appState.timeRange.startCutoff
+        return appState.buckets.filter { bucket in
+            if let cutoff, let date = bucket.date, date < cutoff { return false }
             let f = appState.filters
             if !f.sources.isEmpty && !f.sources.contains(bucket.source) { return false }
             if !f.models.isEmpty && !f.models.contains(bucket.model) { return false }
