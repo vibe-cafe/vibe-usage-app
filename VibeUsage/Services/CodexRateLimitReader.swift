@@ -18,6 +18,18 @@ enum CodexRateLimitReader {
         }
 
         if let snapshot = scanForLatest(in: sessionsDir) {
+            // `parseWindow` already discarded any slot whose `resets_at` is in
+            // the past — that window has provably rolled, and the snapshot's
+            // `used_percent` is from the *previous* window, not the current
+            // one. If BOTH slots were dropped (snapshot is fully expired)
+            // there's no live data to report; collapse the card via .noData
+            // rather than render confidently-wrong percentages. (When only one
+            // slot is stale we still show the fresh one — 5h and 7d windows
+            // expire independently.)
+            if snapshot.fiveHour == nil && snapshot.sevenDay == nil {
+                debugLog("[rate-limit] codex snapshot fully expired (no live windows) — reporting .noData")
+                return .init(provider: .codex, status: .noData, fetchedAt: Date())
+            }
             return ProviderRateLimit(
                 provider: .codex,
                 fiveHour: snapshot.fiveHour,
@@ -128,6 +140,21 @@ enum CodexRateLimitReader {
             resetsAt = Date(timeIntervalSince1970: epoch)
         } else if let secs = dict["resets_in_seconds"] as? Double, secs >= 0 {
             resetsAt = Date().addingTimeInterval(secs)
+        }
+
+        // Reject a window whose `resets_at` is already in the past: Codex's
+        // rolling-window semantics guarantee that the window has rolled over
+        // and `used_percent` is from the *previous* window — showing it as
+        // current was the source of "数据不对" feedback (e.g. an 8% reading
+        // hanging around 12 days after that window expired). The card layer
+        // collapses gracefully when no live slots remain (see `read()`).
+        //
+        // Without a `resets_at` at all we keep the window (utilization is
+        // probably still meaningful; we just can't render the time bar) —
+        // that matches the Claude reader's tolerance for missing timestamps.
+        if let resetsAt, resetsAt.timeIntervalSinceNow <= 0 {
+            debugLog("[rate-limit] codex \(windowMinutes)m window expired \(Int(-resetsAt.timeIntervalSinceNow))s ago — dropping stale slot")
+            return nil
         }
 
         return ParsedWindow(
