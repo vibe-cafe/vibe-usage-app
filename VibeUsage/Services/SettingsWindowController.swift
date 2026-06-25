@@ -29,7 +29,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Vibe Usage Settings"
         window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 460, height: 480))
+        window.setContentSize(NSSize(width: 460, height: 540))
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self

@@ -37,20 +37,23 @@ struct SummaryCardsView: View {
     }
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         HStack(alignment: .top, spacing: 8) {
-            StatCard(label: "预估费用", value: Formatters.formatCost(totalCost), color: Color(red: 0.2, green: 0.8, blue: 0.5))
+            StatCard(label: "预估费用", value: Formatters.formatCost(totalCost), color: palette.accent)
             StatCard(label: "输入+输出 Token", value: Formatters.formatNumber(totalTokens))
             StatCard(label: "缓存 Token", value: Formatters.formatNumber(totalCachedInputTokens))
-            StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: Color(red: 0.38, green: 0.6, blue: 1.0))
+            StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: palette.secondaryAccent)
         }
         .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 private struct StatCard: View {
+    @Environment(AppState.self) private var appState
     let label: String
     let value: String
-    var color: Color = .white
+    var color: Color?
 
     // Reserve fixed line-box heights so all cards render at exactly the same height,
     // even when minimumScaleFactor shrinks the value glyphs in narrower columns.
@@ -58,16 +61,18 @@ private struct StatCard: View {
     private let valueHeight: CGFloat = 24   // 20pt font
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.system(size: 12))
-                .foregroundStyle(Color(white: 0.63))
+                .foregroundStyle(palette.secondaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
                 .frame(height: labelHeight, alignment: .leading)
             Text(value)
                 .font(.system(size: 20, weight: .bold, design: .monospaced))
-                .foregroundStyle(color)
+                .foregroundStyle(color ?? palette.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .frame(height: valueHeight, alignment: .leading)
@@ -75,11 +80,11 @@ private struct StatCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 11)
         .padding(.vertical, 13)
-        .background(Color(white: 0.09))
+        .background(palette.card)
         .cornerRadius(4)
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(Color(white: 0.16), lineWidth: 1)
+                .stroke(palette.border, lineWidth: 1)
         )
     }
 }

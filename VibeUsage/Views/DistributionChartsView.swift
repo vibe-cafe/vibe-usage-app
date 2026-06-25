@@ -62,7 +62,7 @@ struct DistributionChartsView: View {
             Color(red: 0.55, green: 0.36, blue: 0.96),
             Color(red: 0.93, green: 0.30, blue: 0.60),
         ]
-        let otherColor = Color(white: 0.32)
+        let otherColor = appState.appTheme.palette.chartOther
 
         var slices: [SliceData] = []
         var otherTokens = 0
@@ -114,6 +114,7 @@ enum MetricMode {
 // MARK: - Donut Card
 
 private struct DonutCardView: View {
+    @Environment(AppState.self) private var appState
     let title: String
     let icon: String
     let slices: [SliceData]
@@ -127,15 +128,17 @@ private struct DonutCardView: View {
     }
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 0) {
                 HStack(spacing: 5) {
                     Image(systemName: icon)
                         .font(.system(size: 11))
-                        .foregroundStyle(Color(white: 0.5))
+                        .foregroundStyle(palette.tertiaryText)
                     Text(title)
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color(white: 0.63))
+                        .foregroundStyle(palette.secondaryText)
                 }
                 Spacer()
                 MetricToggleView(mode: $mode)
@@ -144,7 +147,7 @@ private struct DonutCardView: View {
             if slices.isEmpty || total == 0 {
                 Text("暂无数据")
                     .font(.system(size: 12))
-                    .foregroundStyle(Color(white: 0.38))
+                    .foregroundStyle(palette.mutedText)
                     .frame(maxWidth: .infinity)
                     .frame(height: 80)
             } else {
@@ -160,16 +163,16 @@ private struct DonutCardView: View {
                                     .frame(width: 7, height: 7)
                                 Text(slice.label)
                                     .font(.system(size: 11))
-                                    .foregroundStyle(Color(white: 0.7))
+                                    .foregroundStyle(palette.secondaryText)
                                     .lineLimit(1)
                                     .truncationMode(.tail)
                                 Spacer(minLength: 4)
                                 Text(valueText(slice))
                                     .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Color(white: 0.55))
+                                    .foregroundStyle(palette.tertiaryText)
                                 Text(percentage(slice))
                                     .font(.system(size: 11, design: .monospaced))
-                                    .foregroundStyle(Color(white: 0.38))
+                                    .foregroundStyle(palette.mutedText)
                                     .frame(width: 42, alignment: .trailing)
                             }
                         }
@@ -179,9 +182,9 @@ private struct DonutCardView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(Color(white: 0.09))
+        .background(palette.card)
         .cornerRadius(4)
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(palette.border, lineWidth: 1))
     }
 
     private func valueText(_ slice: SliceData) -> String {
@@ -203,28 +206,34 @@ private struct DonutCardView: View {
 // MARK: - Metric Toggle
 
 private struct MetricToggleView: View {
+    @Environment(AppState.self) private var appState
     @Binding var mode: MetricMode
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         HStack(spacing: 2) {
             toggleButton(.tokens)
             toggleButton(.cost)
         }
         .padding(2)
-        .background(Color(white: 0.16))
+        .background(palette.control)
         .clipShape(Capsule())
     }
 
+    @ViewBuilder
     private func toggleButton(_ m: MetricMode) -> some View {
+        let palette = appState.appTheme.palette
+
         Button {
             mode = m
         } label: {
             Text(m.label)
                 .font(.system(size: 11, weight: mode == m ? .medium : .regular))
-                .foregroundStyle(mode == m ? .white : Color(white: 0.5))
+                .foregroundStyle(mode == m ? palette.primaryText : palette.tertiaryText)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 3)
-                .background(mode == m ? Color(white: 0.28) : Color.clear)
+                .background(mode == m ? palette.controlHover : Color.clear)
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -234,6 +243,7 @@ private struct MetricToggleView: View {
 // MARK: - Donut Shape
 
 private struct DonutShape: View {
+    @Environment(AppState.self) private var appState
     let slices: [SliceData]
     let mode: MetricMode
     let total: Double
@@ -241,9 +251,11 @@ private struct DonutShape: View {
     private let lineWidth: CGFloat = 11
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         ZStack {
             Circle()
-                .stroke(Color(white: 0.16), lineWidth: lineWidth)
+                .stroke(palette.border, lineWidth: lineWidth)
 
             Canvas { context, size in
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
@@ -268,10 +280,10 @@ private struct DonutShape: View {
             VStack(spacing: 1) {
                 Text(mode == .tokens ? "Tokens" : "预估")
                     .font(.system(size: 9))
-                    .foregroundStyle(Color(white: 0.45))
+                    .foregroundStyle(palette.mutedText)
                 Text(centerLabel)
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.primaryText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }

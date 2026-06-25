@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import VibeUsageCore
 
 /// Sync status for menu bar icon display
 enum SyncStatus: Equatable {
@@ -121,6 +122,11 @@ final class AppState {
         didSet { UserDefaults.standard.set(claudeRateLimitEnabled, forKey: "claudeRateLimitEnabled") }
     }
 
+    // MARK: - Appearance
+    var appTheme: AppTheme = .dark {
+        didSet { appTheme.save() }
+    }
+
     // MARK: - Menu Bar Display Prefs
     var showCostInMenuBar: Bool = true {
         didSet { UserDefaults.standard.set(showCostInMenuBar, forKey: "showCostInMenuBar") }
@@ -163,6 +169,7 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.claudeRateLimitEnabled = UserDefaults.standard.bool(forKey: "claudeRateLimitEnabled")
+        self.appTheme = AppTheme.load()
 
         // Self-heal: if capture was enabled but a claude-hud upgrade or
         // `/statusline` clobbered our wrapper, silently re-assert it.
