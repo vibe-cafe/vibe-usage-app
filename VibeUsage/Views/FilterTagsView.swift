@@ -23,6 +23,7 @@ struct FilterTagsView: View {
 
     var body: some View {
         @Bindable var state = appState
+        let palette = appState.appTheme.palette
 
         VStack(alignment: .leading, spacing: 8) {
             // Date / time range row
@@ -33,7 +34,7 @@ struct FilterTagsView: View {
                     Text("日期")
                         .font(.system(size: 12))
                 }
-                .foregroundStyle(Color(white: 0.5))
+                .foregroundStyle(palette.tertiaryText)
                 .frame(width: 48, alignment: .trailing)
                 .padding(.vertical, 3)
 
@@ -55,8 +56,8 @@ struct FilterTagsView: View {
                                 .font(.system(size: 12, weight: isActive ? .medium : .regular))
                                 .padding(.horizontal, 9)
                                 .padding(.vertical, 3)
-                                .background(isActive ? Color.white : Color(white: 0.16))
-                                .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
+                                .background(isActive ? palette.selectedBackground : palette.control)
+                                .foregroundStyle(isActive ? palette.selectedText : palette.secondaryText)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -102,7 +103,7 @@ struct FilterTagsView: View {
                         Text("模型")
                             .font(.system(size: 12))
                     }
-                    .foregroundStyle(Color(white: 0.5))
+                    .foregroundStyle(palette.tertiaryText)
                     .frame(width: 48, alignment: .trailing)
                     .padding(.vertical, 3)
 
@@ -128,8 +129,8 @@ struct FilterTagsView: View {
                                     .font(.system(size: 12))
                                     .padding(.horizontal, 9)
                                     .padding(.vertical, 3)
-                                    .background(allSelected ? Color.white : (someSelected ? Color(white: 0.28) : Color(white: 0.16)))
-                                    .foregroundStyle(allSelected ? Color.black : (someSelected ? Color.white : Color(white: 0.63)))
+                                    .background(allSelected ? palette.selectedBackground : (someSelected ? palette.controlHover : palette.control))
+                                    .foregroundStyle(allSelected ? palette.selectedText : (someSelected ? palette.primaryText : palette.secondaryText))
                                     .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
@@ -156,8 +157,8 @@ struct FilterTagsView: View {
                                             .font(.system(size: 12))
                                             .padding(.horizontal, 9)
                                             .padding(.vertical, 3)
-                                            .background(isActive ? Color.white : Color(white: 0.16))
-                                            .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
+                                            .background(isActive ? palette.selectedBackground : palette.control)
+                                            .foregroundStyle(isActive ? palette.selectedText : palette.secondaryText)
                                             .clipShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
@@ -176,7 +177,7 @@ struct FilterTagsView: View {
                         Text("项目")
                             .font(.system(size: 12))
                     }
-                    .foregroundStyle(Color(white: 0.5))
+                    .foregroundStyle(palette.tertiaryText)
                     .frame(width: 48, alignment: .trailing)
                     .padding(.vertical, 3)
 
@@ -187,10 +188,10 @@ struct FilterTagsView: View {
                         } label: {
                             Image(systemName: showProjects ? "eye" : "eye.slash")
                                 .font(.system(size: 12))
-                                .foregroundStyle(Color(white: showProjects ? 0.6 : 0.35))
+                                .foregroundStyle(showProjects ? palette.secondaryText : palette.mutedText)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)
-                                .background(Color(white: 0.16))
+                                .background(palette.control)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
@@ -217,8 +218,8 @@ struct FilterTagsView: View {
                                         .font(.system(size: 12))
                                         .padding(.horizontal, 9)
                                         .padding(.vertical, 3)
-                                        .background(isActive ? Color.white : Color(white: 0.16))
-                                        .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
+                                        .background(isActive ? palette.selectedBackground : palette.control)
+                                        .foregroundStyle(isActive ? palette.selectedText : palette.secondaryText)
                                         .clipShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
@@ -234,7 +235,7 @@ struct FilterTagsView: View {
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12))
-                .foregroundStyle(.red.opacity(0.8))
+                .foregroundStyle(palette.danger.opacity(0.8))
                 .padding(.leading, 56)
             }
         }
@@ -248,6 +249,7 @@ struct FilterTagsView: View {
         }
     }
 
+    @ViewBuilder
     private func filterRow(
         icon: String,
         label: String,
@@ -257,6 +259,8 @@ struct FilterTagsView: View {
         eyeToggle: (() -> Void)? = nil,
         toggle: @escaping (String) -> Void
     ) -> some View {
+        let palette = appState.appTheme.palette
+
         HStack(alignment: .top, spacing: 8) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
@@ -264,7 +268,7 @@ struct FilterTagsView: View {
                 Text(label)
                     .font(.system(size: 12))
             }
-            .foregroundStyle(Color(white: 0.5))
+            .foregroundStyle(palette.tertiaryText)
             .frame(width: 48, alignment: .trailing)
             .padding(.vertical, 3) // match tag vertical padding for baseline alignment
 
@@ -274,7 +278,7 @@ struct FilterTagsView: View {
                 } label: {
                     Image(systemName: masked ? "eye.slash" : "eye")
                         .font(.system(size: 11))
-                        .foregroundStyle(Color(white: masked ? 0.35 : 0.6))
+                        .foregroundStyle(masked ? palette.mutedText : palette.secondaryText)
                         .frame(height: 12 + 6) // match tag height (font 12 + padding 3*2)
                 }
                 .buttonStyle(.plain)
@@ -291,8 +295,8 @@ struct FilterTagsView: View {
                             .font(.system(size: 12))
                             .padding(.horizontal, 9)
                             .padding(.vertical, 3)
-                            .background(isActive ? Color.white : Color(white: 0.16))
-                            .foregroundStyle(isActive ? Color.black : Color(white: 0.63))
+                            .background(isActive ? palette.selectedBackground : palette.control)
+                            .foregroundStyle(isActive ? palette.selectedText : palette.secondaryText)
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -347,15 +351,18 @@ struct FlowLayout: Layout {
 }
 
 struct HoverChevronButton: View {
+    @Environment(AppState.self) private var appState
     let isExpanded: Bool
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         Button(action: action) {
             Image(systemName: isExpanded ? "chevron.left" : "chevron.right")
                 .font(.system(size: 9))
-                .foregroundStyle(isHovered ? Color.white : Color(white: 0.38))
+                .foregroundStyle(isHovered ? palette.primaryText : palette.mutedText)
                 .frame(height: 18)
                 .padding(.horizontal, 4)
                 .contentShape(Rectangle())

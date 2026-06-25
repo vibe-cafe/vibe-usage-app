@@ -46,14 +46,17 @@ struct RateLimitCardView: View {
     /// Single-line whisper shown when neither Codex nor Claude has any data.
     /// Mirrors the generic "feature exists; use a tool to populate" hint without
     /// reserving the full card row's vertical space.
+    @ViewBuilder
     private var noticeBar: some View {
+        let palette = appState.appTheme.palette
+
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
                 .font(.system(size: 10))
             Text("支持 Codex / Claude 订阅配额监控")
                 .font(.system(size: 11))
         }
-        .foregroundStyle(Color(white: 0.4))
+        .foregroundStyle(palette.mutedText)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -72,6 +75,8 @@ private struct ProviderCard: View {
     @State private var hoveredLabel: String? = nil
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         VStack(alignment: .leading, spacing: 10) {
             header
             content
@@ -87,31 +92,34 @@ private struct ProviderCard: View {
         // `.background` keeps them entirely behind the content.
         .background(
             RoundedRectangle(cornerRadius: 4)
-                .fill(Color(white: 0.09))
+                .fill(palette.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(Color(white: 0.16), lineWidth: 1)
+                        .strokeBorder(palette.border, lineWidth: 1)
                 )
         )
     }
 
     // MARK: Header
 
+    @ViewBuilder
     private var header: some View {
+        let palette = appState.appTheme.palette
+
         HStack(spacing: 6) {
             ProviderIcon(provider: snapshot.provider)
                 .frame(width: 14, height: 14)
             Text(snapshot.provider.displayName)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(palette.primaryText)
             Spacer()
             if let label = snapshot.planLabel {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color(white: 0.55))
+                    .foregroundStyle(palette.tertiaryText)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(Color(white: 0.16))
+                    .background(palette.control)
                     .clipShape(Capsule())
             }
         }
@@ -179,6 +187,7 @@ private struct ProviderCard: View {
     @ViewBuilder
     private var quotaRows: some View {
         let rows = visibleRows
+        let palette = appState.appTheme.palette
         VStack(alignment: .leading, spacing: rowSpacing) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 rowView(row)
@@ -187,7 +196,7 @@ private struct ProviderCard: View {
             if rows.isEmpty {
                 Text("暂无订阅配额数据")
                     .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.45))
+                    .foregroundStyle(palette.mutedText)
             }
         }
         // The tooltip overlay attached HERE — at the rows VStack — paints
@@ -201,7 +210,7 @@ private struct ProviderCard: View {
                 TooltipView(
                     title: tooltipTitle(for: hovered),
                     tokenPercentText: win.percentText,
-                    tokenColor: ProgressBar.color(for: win.utilization),
+                    tokenColor: ProgressBar.color(for: win.utilization, palette: palette),
                     elapsedPercentText: win.elapsedPercentText,
                     remainingText: win.remainingText
                 )
@@ -252,14 +261,17 @@ private struct ProviderCard: View {
     /// The button installs it (a one-time edit to Claude Code's settings.json);
     /// thereafter reads are auth-free. Copy is kept to one plain-language line
     /// (matching the other states); an install failure replaces it inline.
+    @ViewBuilder
     private var disabledContent: some View {
+        let palette = appState.appTheme.palette
+
         HStack(spacing: 8) {
             Text(appState.claudeRateLimitInstallError ?? "读取 Claude 用量数据")
                 .font(.system(size: 11))
                 .foregroundStyle(
                     appState.claudeRateLimitInstallError != nil
-                        ? Color(red: 0.94, green: 0.27, blue: 0.27)
-                        : Color(white: 0.5)
+                        ? palette.danger
+                        : palette.tertiaryText
                 )
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -269,21 +281,24 @@ private struct ProviderCard: View {
             } label: {
                 Text("启用")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(palette.selectedText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
-                    .background(Color.white)
+                    .background(palette.selectedBackground)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
         }
     }
 
+    @ViewBuilder
     private func messageContent(text: String, action: String) -> some View {
+        let palette = appState.appTheme.palette
+
         HStack(spacing: 8) {
             Text(text)
                 .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.5))
+                .foregroundStyle(palette.tertiaryText)
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
@@ -292,10 +307,10 @@ private struct ProviderCard: View {
             } label: {
                 Text(action)
                     .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.78))
+                    .foregroundStyle(palette.secondaryText)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 3)
-                    .background(Color(white: 0.16))
+                    .background(palette.control)
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -309,6 +324,7 @@ private struct ProviderCard: View {
 /// owned here — the parent ProviderCard observes hover through `onHover`
 /// and renders the tooltip at its own layer.
 private struct QuotaRow: View {
+    @Environment(AppState.self) private var appState
     let label: String
     let window: RateLimitWindow
     let onHover: (Bool) -> Void
@@ -320,10 +336,12 @@ private struct QuotaRow: View {
     private var hasElapsed: Bool { window.elapsedPercent != nil }
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         HStack(alignment: .center, spacing: 6) {
             Text(label)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color(white: 0.6))
+                .foregroundStyle(palette.secondaryText)
                 .frame(width: 20, alignment: .leading)
 
             if hasElapsed {
@@ -333,8 +351,8 @@ private struct QuotaRow: View {
                         .frame(height: 6)
                     ProgressBar(
                         value: window.elapsedPercent ?? 0,
-                        fill: Color(white: 0.42),
-                        background: Color(white: 0.14)
+                        fill: palette.chartNeutral,
+                        background: palette.progressTrack
                     )
                     .frame(height: 3)
                 }
@@ -343,7 +361,7 @@ private struct QuotaRow: View {
 
                 Text(window.percentText)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(ProgressBar.color(for: window.utilization))
+                    .foregroundStyle(ProgressBar.color(for: window.utilization, palette: palette))
                     .frame(width: 36, alignment: .trailing)
             } else {
                 // Claude: no window length to derive a time bar. The reset
@@ -357,7 +375,7 @@ private struct QuotaRow: View {
 
                 Text(window.percentText)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundStyle(ProgressBar.color(for: window.utilization))
+                    .foregroundStyle(ProgressBar.color(for: window.utilization, palette: palette))
                     .frame(width: 36, alignment: .trailing)
             }
         }
@@ -371,19 +389,22 @@ private struct QuotaRow: View {
 /// column aligned with `QuotaRow` so the 7d row doesn't visually shift into
 /// the 5h slot. No progress bar, no hover state.
 private struct EmptyQuotaRow: View {
+    @Environment(AppState.self) private var appState
     let label: String
     let message: String
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         HStack(alignment: .center, spacing: 6) {
             Text(label)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(Color(white: 0.4))
+                .foregroundStyle(palette.mutedText)
                 .frame(width: 20, alignment: .leading)
 
             Text(message)
                 .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.45))
+                .foregroundStyle(palette.mutedText)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -394,6 +415,7 @@ private struct EmptyQuotaRow: View {
 // MARK: - Tooltip panel
 
 private struct TooltipView: View {
+    @Environment(AppState.self) private var appState
     let title: String
     let tokenPercentText: String
     let tokenColor: Color
@@ -401,10 +423,12 @@ private struct TooltipView: View {
     let remainingText: String?
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(palette.primaryText)
 
             row(
                 dotColor: tokenColor,
@@ -419,26 +443,26 @@ private struct TooltipView: View {
             // have rather than collapsing the latter to "未知".
             if let elapsed = elapsedPercentText, let remaining = remainingText {
                 row(
-                    dotColor: Color(white: 0.55),
+                    dotColor: palette.tertiaryText,
                     label: "时间",
                     value: "已过去 \(elapsed) · 剩余 \(remaining)",
-                    valueColor: Color(white: 0.82),
+                    valueColor: palette.secondaryText,
                     valueWeight: .regular
                 )
             } else if let remaining = remainingText {
                 row(
-                    dotColor: Color(white: 0.55),
+                    dotColor: palette.tertiaryText,
                     label: "重置",
                     value: "剩余 \(remaining)",
-                    valueColor: Color(white: 0.82),
+                    valueColor: palette.secondaryText,
                     valueWeight: .regular
                 )
             } else {
                 row(
-                    dotColor: Color(white: 0.55),
+                    dotColor: palette.tertiaryText,
                     label: "时间",
                     value: "未知",
-                    valueColor: Color(white: 0.5),
+                    valueColor: palette.tertiaryText,
                     valueWeight: .regular
                 )
             }
@@ -446,12 +470,12 @@ private struct TooltipView: View {
         .font(.system(size: 11))
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color.black)
+        .background(palette.tooltipBackground)
         // Same background-shape trick: rounded chrome without clipping.
         // (The tooltip itself doesn't host descendants that need to escape,
         // but staying consistent keeps the rendering simple.)
         .clipShape(RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(white: 0.22), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(palette.strongBorder, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
     }
 
@@ -461,7 +485,7 @@ private struct TooltipView: View {
                 .fill(dotColor)
                 .frame(width: 6, height: 6)
             Text(label)
-                .foregroundStyle(Color(white: 0.55))
+                .foregroundStyle(appState.appTheme.palette.tertiaryText)
             Text(value)
                 .foregroundStyle(valueColor)
                 .fontWeight(valueWeight)
@@ -472,26 +496,29 @@ private struct TooltipView: View {
 // MARK: - Progress bar
 
 private struct ProgressBar: View {
+    @Environment(AppState.self) private var appState
     let value: Double
     var fill: Color? = nil
-    var background: Color = Color(white: 0.18)
+    var background: Color? = nil
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(background)
+                Capsule().fill(background ?? palette.progressTrack)
                 Capsule()
-                    .fill(fill ?? Self.color(for: value))
+                    .fill(fill ?? Self.color(for: value, palette: palette))
                     .frame(width: geo.size.width * CGFloat(min(max(value, 0), 100) / 100))
             }
         }
     }
 
-    static func color(for utilization: Double) -> Color {
+    static func color(for utilization: Double, palette: ThemePalette) -> Color {
         switch utilization {
-        case ..<70:    return Color(white: 0.85)
-        case 70..<90:  return Color(red: 0.96, green: 0.62, blue: 0.04)
-        default:       return Color(red: 0.94, green: 0.27, blue: 0.27)
+        case ..<70:    return palette.success
+        case 70..<90:  return palette.warning
+        default:       return palette.danger
         }
     }
 }
@@ -499,6 +526,7 @@ private struct ProgressBar: View {
 // MARK: - Provider icon
 
 private struct ProviderIcon: View {
+    @Environment(AppState.self) private var appState
     let provider: ProviderRateLimit.Provider
 
     var body: some View {
@@ -510,7 +538,7 @@ private struct ProviderIcon: View {
         } else {
             Image(systemName: provider == .codex ? "terminal" : "sparkles")
                 .font(.system(size: 12))
-                .foregroundStyle(Color(white: 0.6))
+                .foregroundStyle(appState.appTheme.palette.secondaryText)
         }
     }
 

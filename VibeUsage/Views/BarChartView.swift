@@ -165,13 +165,14 @@ struct BarChartView: View {
 
     var body: some View {
         @Bindable var state = appState
+        let palette = appState.appTheme.palette
 
         VStack(spacing: 0) {
             // Header
             HStack {
                 Text(isHourly ? "每小时趋势" : "每日趋势")
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(white: 0.63))
+                    .foregroundStyle(palette.secondaryText)
                 Spacer()
                 HStack(spacing: 2) {
                     ForEach(ChartMode.allCases, id: \.self) { mode in
@@ -180,15 +181,15 @@ struct BarChartView: View {
                                 .font(.system(size: 11, weight: state.chartMode == mode ? .medium : .regular))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
-                                .background(state.chartMode == mode ? Color(white: 0.28) : Color.clear)
-                                .foregroundStyle(state.chartMode == mode ? Color.white : Color(white: 0.5))
+                                .background(state.chartMode == mode ? palette.controlHover : Color.clear)
+                                .foregroundStyle(state.chartMode == mode ? palette.primaryText : palette.tertiaryText)
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
                     }
                 }
                 .padding(2)
-                .background(Color(white: 0.16))
+                .background(palette.control)
                 .clipShape(Capsule())
             }
             .padding(.bottom, 14)
@@ -210,17 +211,18 @@ struct BarChartView: View {
             )
         }
         .padding(14)
-        .background(Color(white: 0.09))
+        .background(palette.card)
         .cornerRadius(4)
         .overlay(
             RoundedRectangle(cornerRadius: 4)
-                .stroke(Color(white: 0.16), lineWidth: 1)
+                .stroke(palette.border, lineWidth: 1)
         )
     }
 
 }
 
 private struct ChartContent: View {
+    @Environment(AppState.self) private var appState
     let data: [BarData]
     let chartMode: ChartMode
     let isHourly: Bool
@@ -233,6 +235,8 @@ private struct ChartContent: View {
     @State private var scroll = ScrollWatcher()
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         VStack(spacing: 0) {
             // Chart
             HStack(alignment: .bottom, spacing: 6) {
@@ -249,13 +253,13 @@ private struct ChartContent: View {
                         }
                     }
                     .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color(white: 0.38))
+                    .foregroundStyle(palette.mutedText)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                     Spacer()
                     Text("0")
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Color(white: 0.38))
+                        .foregroundStyle(palette.mutedText)
                         .lineLimit(1)
                 }
                 .frame(width: 44)
@@ -271,23 +275,23 @@ private struct ChartContent: View {
                                 let outputH = CGFloat(bar.output) / CGFloat(maxTotal) * 150
                                 // Output (top, white)
                                 Rectangle()
-                                    .fill(Color.white.opacity(0.9))
+                                    .fill(palette.chartOutput)
                                     .frame(height: outputH)
                                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2))
                                 // Input (bottom, zinc)
                                 Rectangle()
-                                    .fill(Color(white: 0.5))
+                                    .fill(palette.chartInput)
                                     .frame(height: inputH)
                             case .cost:
                                 let costH = CGFloat(bar.cost) / CGFloat(maxCost) * 150
                                 Rectangle()
-                                    .fill(Color(red: 0.2, green: 0.8, blue: 0.5))
+                                    .fill(palette.accent)
                                     .frame(height: costH)
                                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2))
                             case .activeTime:
                                 let activeH = CGFloat(bar.activeMinutes) / CGFloat(maxActiveMinutes) * 150
                                 Rectangle()
-                                    .fill(Color(red: 0.38, green: 0.6, blue: 1.0))
+                                    .fill(palette.secondaryAccent)
                                     .frame(height: activeH)
                                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2))
                             }
@@ -349,7 +353,7 @@ private struct ChartContent: View {
                         if index % labelInterval == 0 {
                             Text(isHourly ? Formatters.formatHourShort(bar.id) : Formatters.formatDateShort(bar.id))
                                 .font(.system(size: 11))
-                                .foregroundStyle(Color(white: 0.5))
+                                .foregroundStyle(palette.tertiaryText)
                                 .lineLimit(1)
                                 .fixedSize()
                         } else {
@@ -372,36 +376,38 @@ private struct ChartContent: View {
 
     @ViewBuilder
     private func tooltip(for bar: BarData) -> some View {
+        let palette = appState.appTheme.palette
+
         VStack(alignment: .leading, spacing: 3) {
             Text(isHourly ? Formatters.formatHourShort(bar.id) : Formatters.formatDateShort(bar.id))
-                .foregroundStyle(.white)
+                .foregroundStyle(palette.primaryText)
                 .fontWeight(.medium)
 
             switch chartMode {
             case .token:
                 Text("总 Token: \(Formatters.formatNumber(bar.total))")
-                    .foregroundStyle(Color(white: 0.8))
+                    .foregroundStyle(palette.secondaryText)
                 HStack(spacing: 8) {
                     Text("输入: \(Formatters.formatNumber(bar.input))")
-                        .foregroundStyle(Color(white: 0.5))
+                        .foregroundStyle(palette.tertiaryText)
                     Text("输出: \(Formatters.formatNumber(bar.output))")
-                        .foregroundStyle(Color(white: 0.5))
+                        .foregroundStyle(palette.tertiaryText)
                 }
                 Text("费用: \(Formatters.formatCost(bar.cost))")
-                    .foregroundStyle(Color(red: 0.2, green: 0.8, blue: 0.5))
+                    .foregroundStyle(palette.accent)
             case .cost:
                 Text("费用: \(Formatters.formatCost(bar.cost))")
-                    .foregroundStyle(Color(red: 0.2, green: 0.8, blue: 0.5))
+                    .foregroundStyle(palette.accent)
             case .activeTime:
                 Text("活跃时长: \(Formatters.formatDuration(Int(bar.activeMinutes * 60)))")
-                    .foregroundStyle(Color(red: 0.38, green: 0.6, blue: 1.0))
+                    .foregroundStyle(palette.secondaryAccent)
             }
         }
         .font(.system(size: 11))
         .padding(8)
-        .background(Color.black)
+        .background(palette.tooltipBackground)
         .cornerRadius(4)
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.2), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(palette.strongBorder, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
         .fixedSize()
     }

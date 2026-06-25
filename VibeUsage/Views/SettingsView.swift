@@ -1,5 +1,6 @@
 import SwiftUI
 import ServiceManagement
+import VibeUsageCore
 
 struct SettingsView: View {
     @Environment(AppState.self) private var appState
@@ -14,6 +15,8 @@ struct SettingsView: View {
     @State private var relinkTask: Task<Void, Never>?
 
     var body: some View {
+        let palette = appState.appTheme.palette
+
         Form {
             // Sync section
             Section {
@@ -22,7 +25,7 @@ struct SettingsView: View {
                         HStack(spacing: 8) {
                             Text(apiKeyDisplay)
                                 .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(Color(white: 0.5))
+                                .foregroundStyle(palette.tertiaryText)
 
                             Button(isRelinking ? "等待确认…" : "重新链接") {
                                 relinkTask = Task { await relink() }
@@ -35,18 +38,18 @@ struct SettingsView: View {
                                     cancelRelink()
                                 }
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(palette.secondaryText)
                             }
                         }
                         if let relinkUserCode {
                             Text("验证码: \(relinkUserCode)")
                                 .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(palette.secondaryText)
                         }
                         if let relinkError {
                             Text(relinkError)
                                 .font(.caption)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(palette.danger)
                                 .lineLimit(2)
                         }
                     }
@@ -57,7 +60,7 @@ struct SettingsView: View {
                         switch appState.syncStatus {
                         case .idle:
                             Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(palette.success)
                             Text("正常")
                         case .syncing:
                             ProgressView()
@@ -65,11 +68,11 @@ struct SettingsView: View {
                             Text("同步中...")
                         case .success:
                             Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(palette.success)
                             Text("同步成功")
                         case .error(let msg):
                             Image(systemName: "exclamationmark.circle.fill")
-                                .foregroundStyle(.red)
+                                .foregroundStyle(palette.danger)
                             Text(msg)
                                 .lineLimit(1)
                         }
@@ -81,11 +84,28 @@ struct SettingsView: View {
                     LabeledContent("上次同步") {
                         Text(Formatters.formatRelativeTime(lastSync))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(palette.secondaryText)
                     }
                 }
             } header: {
                 Text("同步")
+            }
+
+            Section {
+                Picker("主题", selection: Binding(
+                    get: { appState.appTheme },
+                    set: { appState.appTheme = $0 }
+                )) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.displayName).tag(theme)
+                    }
+                }
+                .pickerStyle(.menu)
+            } header: {
+                Text("外观")
+            } footer: {
+                Text("主题会立即应用到弹窗和设置窗口")
+                    .font(.caption)
             }
 
             // Menu bar display
@@ -94,12 +114,12 @@ struct SettingsView: View {
                     get: { appState.showCostInMenuBar },
                     set: { appState.showCostInMenuBar = $0 }
                 ))
-                .tint(.green)
+                .tint(palette.accent)
                 Toggle("菜单栏显示 Token", isOn: Binding(
                     get: { appState.showTokensInMenuBar },
                     set: { appState.showTokensInMenuBar = $0 }
                 ))
-                .tint(.green)
+                .tint(palette.accent)
             } header: {
                 Text("菜单栏")
             } footer: {
@@ -110,7 +130,7 @@ struct SettingsView: View {
             // Auto-start + general
             Section {
                 Toggle("开机自启动", isOn: $autoStartEnabled)
-                    .tint(.green)
+                    .tint(palette.accent)
                     .onChange(of: autoStartEnabled) { _, newValue in
                         setAutoStart(newValue)
                     }
@@ -123,7 +143,7 @@ struct SettingsView: View {
                 LabeledContent("版本") {
                     Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(palette.secondaryText)
                 }
 
                 Button("检查更新") {
@@ -152,7 +172,12 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 420)
+        .scrollContentBackground(.hidden)
+        .background(palette.windowBackground)
+        .foregroundStyle(palette.primaryText)
+        .tint(palette.accent)
+        .preferredColorScheme(appState.appTheme.colorScheme)
+        .frame(width: 420, height: 480)
         .onAppear {
             loadSettings()
         }
