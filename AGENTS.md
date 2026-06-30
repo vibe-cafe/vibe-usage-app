@@ -116,8 +116,9 @@ SwiftUI keeps delivering hover updates as the content slides under the cursor.
 1. `SyncScheduler` fires every 30 minutes (background upload + fetch)
 2. `SyncEngine` runs the `@vibe-cafe/vibe-usage` CLI via `CLIBridge`
 3. `RuntimeDetector` finds Node.js or Bun on the system
-4. After sync completes, `fetchUsageData()` refreshes the dashboard
-5. Opening the popover calls `fetchUsageDataIfNeeded()` (60s debounce) — fetch only, no upload
+4. The CLI owns local tool parsing (including CraftAgent usage via `craft-agent` source); the app only displays server-returned buckets
+5. After sync completes, `fetchUsageData()` refreshes the dashboard
+6. Opening the popover calls `fetchUsageDataIfNeeded()` (60s debounce) — fetch only, no upload
 
 ### Rate-Limit Refresh
 No background timer. `RateLimitCoordinator` is driven entirely by user-visible events:
