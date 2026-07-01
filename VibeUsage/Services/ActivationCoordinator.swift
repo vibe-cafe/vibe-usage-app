@@ -1,7 +1,7 @@
 import AppKit
 
-/// Centralizes `NSApplication.activationPolicy` management across the menu-bar
-/// popup and the Settings window.
+/// Centralizes `NSApplication.activationPolicy` and Dock presentation
+/// management across the menu-bar popup and the Settings window.
 ///
 /// Vibe Usage is now a regular Dock app while still keeping its menu-bar item,
 /// so the lowest policy is `.regular`. The coordinator still owns the call site
@@ -59,10 +59,46 @@ final class ActivationCoordinator {
         if changed { onSettingsVisibilityChange?(false) }
     }
 
-    private func reconcile() {
-        let policy: NSApplication.ActivationPolicy = appState?.showInDock == false ? .accessory : .regular
+    /// Applies the user's Dock visibility preference, both at launch and
+    /// whenever the preference may change at runtime (e.g. when Settings
+    /// closes). Keeps activation policy and Dock icon in sync so toggling
+    /// "在 Dock 中显示" doesn't leave one set while the other is unset.
+    func configureDockPresentation() {
+        let showInDock = appState?.showInDock != false
+        let policy: NSApplication.ActivationPolicy = showInDock ? .regular : .accessory
         if NSApp.activationPolicy() != policy {
             NSApp.setActivationPolicy(policy)
         }
+
+        if showInDock, let image = loadDockIcon() {
+            NSApp.applicationIconImage = image
+        } else {
+            NSApp.applicationIconImage = nil
+        }
+    }
+
+    private func reconcile() {
+        configureDockPresentation()
+    }
+
+    private func loadDockIcon() -> NSImage? {
+        let appIconPath = "Assets.xcassets/AppIcon.appiconset/icon_512x512"
+        if let url = Bundle.appResources.url(forResource: appIconPath, withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            image.size = NSSize(width: 128, height: 128)
+            return image
+        }
+
+        if let image = NSImage(named: "AppIcon") {
+            return image
+        }
+
+        if let url = Bundle.appResources.url(forResource: "menubar-icon", withExtension: "png"),
+           let image = NSImage(contentsOf: url) {
+            image.size = NSSize(width: 128, height: 128)
+            return image
+        }
+
+        return nil
     }
 }

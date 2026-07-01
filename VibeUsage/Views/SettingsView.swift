@@ -122,6 +122,9 @@ struct SettingsView: View {
                 .tint(.green)
             } header: {
                 Text("通用")
+            } footer: {
+                Text("关闭设置窗口后生效")
+                    .font(.caption)
             }
 
             // About & Updates
