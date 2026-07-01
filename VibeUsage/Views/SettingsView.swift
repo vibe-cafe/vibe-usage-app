@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var relinkUserCode: String?
     @State private var relinkError: String?
     @State private var relinkTask: Task<Void, Never>?
+    @State private var claudeRateLimitToggle: Bool = false
 
     var body: some View {
         Form {
@@ -118,6 +119,30 @@ struct SettingsView: View {
                 Text("通用")
             }
 
+            // Claude rate-limit monitoring
+            Section {
+                Toggle("Claude 订阅配额监控", isOn: $claudeRateLimitToggle)
+                    .tint(.green)
+
+                if let error = appState.claudeRateLimitInstallError {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                            .font(.system(size: 11))
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(nil)
+                        Spacer(minLength: 0)
+                    }
+                }
+            } header: {
+                Text("Claude")
+            } footer: {
+                Text("需要在 Claude Code 的 settings.json 中注入状态栏包装器以读取订阅配额。")
+                    .font(.caption)
+            }
+
             // About & Updates
             Section {
                 LabeledContent("版本") {
@@ -156,6 +181,20 @@ struct SettingsView: View {
         .onAppear {
             loadSettings()
         }
+        .onChange(of: claudeRateLimitToggle) { _, newValue in
+            // Ignore changes that came from syncing the local proxy back from AppState.
+            guard newValue != appState.claudeRateLimitEnabled else { return }
+
+            Task {
+                await appState.setClaudeRateLimitEnabled(newValue)
+                // If install/uninstall failed, AppState did not flip the flag;
+                // revert the switch so it always reflects reality.
+                claudeRateLimitToggle = appState.claudeRateLimitEnabled
+            }
+        }
+        .onChange(of: appState.claudeRateLimitEnabled) { _, newValue in
+            claudeRateLimitToggle = newValue
+        }
     }
 
     // MARK: - Private
@@ -172,6 +211,7 @@ struct SettingsView: View {
         }
 
         autoStartEnabled = SMAppService.mainApp.status == .enabled
+        claudeRateLimitToggle = appState.claudeRateLimitEnabled
     }
 
     private func setAutoStart(_ enabled: Bool) {

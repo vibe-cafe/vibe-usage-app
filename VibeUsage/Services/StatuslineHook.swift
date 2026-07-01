@@ -112,6 +112,9 @@ enum StatuslineHook {
                 settings.removeValue(forKey: "statusLine")
             }
             try saveSettings(settings)
+            // Clean up the capture file so a later re-enable doesn't show stale data.
+            try? FileManager.default.removeItem(at: rateLimitFileURL)
+            try? FileManager.default.removeItem(at: sidecarURL)
             debugLog("[statusline] wrapper uninstalled, original restored")
             return .success(())
         } catch let e as HookError {

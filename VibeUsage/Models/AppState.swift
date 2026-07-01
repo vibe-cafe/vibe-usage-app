@@ -333,37 +333,58 @@ final class AppState {
         await rateLimitCoordinator?.refreshAll()
     }
 
-    /// Enable Claude rate-limit monitoring: install the statusline wrapper into
-    /// Claude Code's settings, then read whatever it has captured so far.
-    /// Surfaces an install failure via the Claude card's error state.
+    /// Enable or disable Claude rate-limit monitoring by installing or
+    /// uninstalling the statusline wrapper. Only flips `claudeRateLimitEnabled`
+    /// after the hook operation succeeds, and surfaces failures via the
+    /// Claude card / settings toggle error state.
     ///
     /// On a *fresh* enable the capture file doesn't exist yet — Claude Code only
     /// writes it on its next statusline render (typically within ~1s of any
     /// activity). So after a successful install we poll briefly and re-read, so
-    /// a single 启用 click populates the card on its own instead of leaving it
-    /// stuck on "disabled" until the user pokes it again.
-    func enableClaudeRateLimit() async {
-        debugLog("[rate-limit] enableClaudeRateLimit() called")
-        switch StatuslineHook.install() {
-        case .success:
-            claudeRateLimitInstallError = nil
-            claudeRateLimitEnabled = true
-            await rateLimitCoordinator?.refreshClaude()
-            debugLog("[rate-limit] statusline hook installed; Claude capture enabled")
+    /// a single toggle-on or 启用 click populates the card on its own instead of
+    /// leaving it stuck on "disabled" until the user pokes it again.
+    func setClaudeRateLimitEnabled(_ enabled: Bool) async {
+        debugLog("[rate-limit] setClaudeRateLimitEnabled(\(enabled)) called")
 
-            // Card is .disabled/.noData until Claude Code renders a statusline
-            // and the wrapper writes the file. Poll up to ~6s; stop early once
-            // a real snapshot lands. No-op if it was already captured.
-            for attempt in 1...6 {
-                if claudeRateLimitSnapshot?.status == .ok { break }
-                try? await Task.sleep(for: .seconds(1))
-                debugLog("[rate-limit] post-install poll attempt \(attempt)")
+        // Clear any previous error at the start of a new attempt.
+        claudeRateLimitInstallError = nil
+
+        if enabled {
+            switch StatuslineHook.install() {
+            case .success:
+                claudeRateLimitEnabled = true
                 await rateLimitCoordinator?.refreshClaude()
+                debugLog("[rate-limit] statusline hook installed; Claude capture enabled")
+
+                // Card is .disabled/.noData until Claude Code renders a statusline
+                // and the wrapper writes the file. Poll up to ~6s; stop early once
+                // a real snapshot lands. No-op if it was already captured.
+                for attempt in 1...6 {
+                    if claudeRateLimitSnapshot?.status == .ok { break }
+                    try? await Task.sleep(for: .seconds(1))
+                    debugLog("[rate-limit] post-install poll attempt \(attempt)")
+                    await rateLimitCoordinator?.refreshClaude()
+                }
+            case .failure(let error):
+                debugLog("[rate-limit] statusline install failed: \(error)")
+                claudeRateLimitInstallError = error.localizedDescription
             }
-        case .failure(let error):
-            debugLog("[rate-limit] statusline install failed: \(error)")
-            claudeRateLimitInstallError = error.localizedDescription
+        } else {
+            switch StatuslineHook.uninstall() {
+            case .success:
+                claudeRateLimitEnabled = false
+                await rateLimitCoordinator?.refreshClaude()
+                debugLog("[rate-limit] statusline hook uninstalled; original command restored")
+            case .failure(let error):
+                debugLog("[rate-limit] statusline uninstall failed: \(error)")
+                claudeRateLimitInstallError = error.localizedDescription
+            }
         }
+    }
+
+    /// Compatibility wrapper for the card's "启用" button.
+    func enableClaudeRateLimit() async {
+        await setClaudeRateLimitEnabled(true)
     }
 
     /// Current Claude snapshot in `rateLimits` (nil before the first read).

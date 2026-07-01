@@ -265,7 +265,7 @@ private struct ProviderCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             Button {
-                Task { await appState.enableClaudeRateLimit() }
+                Task { await appState.setClaudeRateLimitEnabled(true) }
             } label: {
                 Text("启用")
                     .font(.system(size: 12, weight: .medium))
