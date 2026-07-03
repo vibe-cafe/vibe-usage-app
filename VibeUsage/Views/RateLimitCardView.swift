@@ -25,8 +25,10 @@ struct RateLimitCardView: View {
             ProviderCard(snapshot: codex)
         } else if showClaude {
             ProviderCard(snapshot: claude)
-        } else {
+        } else if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
             noticeBar
+        } else {
+            EmptyView()
         }
     }
 
@@ -40,7 +42,14 @@ struct RateLimitCardView: View {
     /// actionable affordance and stay visible. When BOTH sides are `.noData`,
     /// `body` swaps the row for `noticeBar` so the empty state is whisper-quiet.
     private func shouldShowCard(_ snap: ProviderRateLimit) -> Bool {
-        snap.status != .noData
+        switch snap.provider {
+        case .codex where !appState.codexRateLimitEnabled:
+            return false
+        case .claudeCode where !appState.claudeRateLimitEnabled:
+            return false
+        default:
+            return snap.status != .noData
+        }
     }
 
     /// Single-line whisper shown when neither Codex nor Claude has any data.

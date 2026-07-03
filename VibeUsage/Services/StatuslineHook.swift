@@ -105,14 +105,18 @@ enum StatuslineHook {
     static func uninstall() -> Result<Void, HookError> {
         do {
             var settings = try loadSettings()
-            if let original = try? String(contentsOf: sidecarURL, encoding: .utf8),
-               !original.isEmpty {
-                settings["statusLine"] = ["type": "command", "command": original]
-            } else {
-                settings.removeValue(forKey: "statusLine")
+            let current = (settings["statusLine"] as? [String: Any])?["command"] as? String
+            if current == wrapperCommand {
+                if let original = try? String(contentsOf: sidecarURL, encoding: .utf8),
+                   !original.isEmpty {
+                    settings["statusLine"] = ["type": "command", "command": original]
+                } else {
+                    settings.removeValue(forKey: "statusLine")
+                }
+                try saveSettings(settings)
             }
-            try saveSettings(settings)
-            debugLog("[statusline] wrapper uninstalled, original restored")
+            removeGeneratedFiles()
+            debugLog("[statusline] wrapper uninstalled")
             return .success(())
         } catch let e as HookError {
             return .failure(e)
@@ -176,6 +180,12 @@ enum StatuslineHook {
               FileManager.default.fileExists(atPath: settingsURL.path) else { return }
         try? FileManager.default.copyItem(at: settingsURL, to: backupURL)
         debugLog("[statusline] backed up settings.json -> \(backupURL.path)")
+    }
+
+    private static func removeGeneratedFiles() {
+        for url in [wrapperURL, sidecarURL, rateLimitFileURL, backupURL] {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func writeWrapperScript() throws {

@@ -88,6 +88,27 @@ struct SettingsView: View {
                 Text("同步")
             }
 
+            // Subscription quota monitoring
+            Section {
+                Toggle("Codex 订阅配额监控", isOn: Binding(
+                    get: { appState.codexRateLimitEnabled },
+                    set: { newValue in
+                        Task { await appState.setCodexRateLimitEnabled(newValue) }
+                    }
+                ))
+                .tint(.green)
+
+                Toggle("Claude Code 订阅配额监控", isOn: Binding(
+                    get: { appState.claudeRateLimitEnabled },
+                    set: { newValue in
+                        Task { await appState.setClaudeRateLimitEnabled(newValue) }
+                    }
+                ))
+                .tint(.green)
+            } header: {
+                Text("订阅配额")
+            }
+
             // Menu bar display
             Section {
                 Toggle("菜单栏显示费用", isOn: Binding(
@@ -161,7 +182,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 460)
         .onAppear {
             loadSettings()
         }

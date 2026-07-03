@@ -216,14 +216,10 @@ struct PopoverView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     if appState.isInitialDataLoad || (!appState.hasLoadedUsageData && appState.buckets.isEmpty) {
-                        RateLimitCardView()
-                            .zIndex(1)
-                        Divider()
-                            .background(Color(white: 0.16))
-                            .padding(.vertical, 2)
+                        rateLimitSection
                         loadingDashboardView
                     } else if !appState.hasAnyData {
-                        RateLimitCardView()
+                        rateLimitSection
                         emptyStateView
                     } else {
                         dashboardContent
@@ -249,11 +245,7 @@ struct PopoverView: View {
             VStack(alignment: .leading, spacing: 14) {
                 // Rate-limit row gets its own block separated from the usage
                 // dashboard by a divider so quota and consumption stats stay distinct.
-                RateLimitCardView()
-                    .zIndex(1)
-                Divider()
-                    .background(Color(white: 0.16))
-                    .padding(.vertical, 2)
+                rateLimitSection
                 FilterTagsView()
                     .zIndex(10)
                 SummaryCardsView()
@@ -270,6 +262,17 @@ struct PopoverView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: appState.isRefreshingData)
+    }
+
+    @ViewBuilder
+    private var rateLimitSection: some View {
+        if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
+            RateLimitCardView()
+                .zIndex(1)
+            Divider()
+                .background(Color(white: 0.16))
+                .padding(.vertical, 2)
+        }
     }
 
     // MARK: - Header

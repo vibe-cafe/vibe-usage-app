@@ -157,6 +157,9 @@ final class AppState {
     var runtimeAvailable: Bool = true
 
     // MARK: - Rate Limits (subscription quota for Claude + Codex)
+    var codexRateLimitEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(codexRateLimitEnabled, forKey: "codexRateLimitEnabled") }
+    }
     var rateLimits: [ProviderRateLimit] = []
 
     /// Enabling Claude rate-limit monitoring installs a wrapper into Claude
@@ -216,11 +219,17 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
+        let legacyRateLimitEnabled = UserDefaults.standard.object(forKey: "rateLimitMonitoringEnabled") as? Bool
+        self.codexRateLimitEnabled = UserDefaults.standard.object(forKey: "codexRateLimitEnabled") as? Bool ?? legacyRateLimitEnabled ?? true
         self.claudeRateLimitEnabled = UserDefaults.standard.bool(forKey: "claudeRateLimitEnabled")
 
-        // Self-heal: if capture was enabled but a claude-hud upgrade or
-        // `/statusline` clobbered our wrapper, silently re-assert it.
-        StatuslineHook.verifyAndRepair(enabled: claudeRateLimitEnabled)
+        // Self-heal only while Claude monitoring is enabled. When disabled,
+        // restore Claude Code's statusline command and keep that provider idle.
+        if claudeRateLimitEnabled {
+            StatuslineHook.verifyAndRepair(enabled: true)
+        } else {
+            _ = StatuslineHook.uninstall()
+        }
 
         let loadedConfig = ConfigManager.load()
         self.config = loadedConfig
@@ -234,8 +243,10 @@ final class AppState {
         }
 
         // Rate limits are independent of configuration — both Codex and Claude
-        // read local files (no auth). Start regardless.
-        startRateLimitCoordinator()
+        // read local files (no auth). Start only for enabled providers.
+        if codexRateLimitEnabled || claudeRateLimitEnabled {
+            startRateLimitCoordinator()
+        }
     }
 
     /// Save config to disk and start scheduler.
@@ -315,9 +326,40 @@ final class AppState {
         await fetchUsageData()
     }
 
+    /// Toggle Codex quota monitoring. Codex is read-only, so disabling just
+    /// stops scans and hides its snapshot.
+    func setCodexRateLimitEnabled(_ enabled: Bool) async {
+        guard codexRateLimitEnabled != enabled else { return }
+        codexRateLimitEnabled = enabled
+
+        if enabled {
+            if rateLimitCoordinator == nil { startRateLimitCoordinator() }
+            await refreshCodexRateLimit()
+        } else {
+            removeRateLimit(for: .codex)
+        }
+    }
+
+    /// Toggle Claude quota monitoring. Disabling restores Claude Code's
+    /// statusline command and hides its snapshot.
+    func setClaudeRateLimitEnabled(_ enabled: Bool) async {
+        guard claudeRateLimitEnabled != enabled else { return }
+        claudeRateLimitInstallError = nil
+
+        if enabled {
+            if rateLimitCoordinator == nil { startRateLimitCoordinator() }
+            await enableClaudeRateLimit()
+        } else {
+            claudeRateLimitEnabled = false
+            removeRateLimit(for: .claudeCode)
+            _ = StatuslineHook.uninstall()
+        }
+    }
+
     /// Refresh Codex rate limits unconditionally. Safe — no keychain prompts.
     /// Used by the manual "更新数据" / retry paths.
     func refreshCodexRateLimit() async {
+        guard codexRateLimitEnabled else { return }
         await rateLimitCoordinator?.refreshCodex()
     }
 
@@ -325,12 +367,14 @@ final class AppState {
     /// Used by popover-open so toggling the menu bar doesn't re-walk the
     /// Codex session tree on every click.
     func refreshCodexRateLimitIfNeeded() async {
+        guard codexRateLimitEnabled else { return }
         await rateLimitCoordinator?.refreshCodexIfNeeded()
     }
 
     /// Refresh Claude rate limits on popover-open (debounced). Cheap local-file
     /// read now — safe to fire automatically, no prompts.
     func refreshClaudeRateLimitIfNeeded() async {
+        guard claudeRateLimitEnabled else { return }
         await rateLimitCoordinator?.refreshClaudeIfNeeded()
     }
 
@@ -383,6 +427,10 @@ final class AppState {
     var claudeRateLimitInstallError: String?
 
     // MARK: - Private
+
+    private func removeRateLimit(for provider: ProviderRateLimit.Provider) {
+        rateLimits.removeAll { $0.provider == provider }
+    }
 
     private func startRateLimitCoordinator() {
         let coord = RateLimitCoordinator(appState: self)
