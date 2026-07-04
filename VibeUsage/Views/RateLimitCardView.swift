@@ -25,8 +25,10 @@ struct RateLimitCardView: View {
             ProviderCard(snapshot: codex)
         } else if showClaude {
             ProviderCard(snapshot: claude)
-        } else {
+        } else if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
             noticeBar
+        } else {
+            EmptyView()
         }
     }
 
@@ -40,7 +42,16 @@ struct RateLimitCardView: View {
     /// actionable affordance and stay visible. When BOTH sides are `.noData`,
     /// `body` swaps the row for `noticeBar` so the empty state is whisper-quiet.
     private func shouldShowCard(_ snap: ProviderRateLimit) -> Bool {
-        snap.status != .noData
+        switch snap.provider {
+        case .codex where !appState.codexRateLimitEnabled:
+            return false
+        case .claudeCode where !appState.claudeRateLimitEnabled:
+            return false
+        case .claudeCode:
+            return true
+        default:
+            return snap.status != .noData
+        }
     }
 
     /// Single-line whisper shown when neither Codex nor Claude has any data.
@@ -70,6 +81,7 @@ private struct ProviderCard: View {
     /// gives us the correct stacking automatically without any zIndex hacks.
     /// (See `BarChartView` for the same pattern with multi-bar tooltips.)
     @State private var hoveredLabel: String? = nil
+    @State private var isEnablingClaude = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -123,10 +135,20 @@ private struct ProviderCard: View {
     private var content: some View {
         switch snapshot.status {
         case .ok:           quotaRows
-        case .disabled:     disabledContent
+        case .disabled:
+            if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
+                waitingForClaudeContent
+            } else {
+                disabledContent
+            }
         case .unauthorized: messageContent(text: "未授权或登录已过期", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
-        case .noData:       EmptyView()
+        case .noData:
+            if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
+                waitingForClaudeContent
+            } else {
+                EmptyView()
+            }
         }
     }
 
@@ -265,17 +287,58 @@ private struct ProviderCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             Button {
-                Task { await appState.enableClaudeRateLimit() }
+                guard !isEnablingClaude else { return }
+                isEnablingClaude = true
+                Task { @MainActor in
+                    await appState.setClaudeRateLimitEnabled(true)
+                    isEnablingClaude = false
+                }
             } label: {
-                Text("启用")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(Color.white)
+                HStack(spacing: 5) {
+                    if isEnablingClaude {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(.black)
+                    }
+                    Text(isEnablingClaude ? "启用中..." : "启用")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(.black)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color.white)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isEnablingClaude)
+        }
+    }
+
+    private var waitingForClaudeContent: some View {
+        HStack(spacing: 8) {
+            Text("已启用，使用 Claude Code 后会自动显示")
+                .font(.system(size: 11))
+                .foregroundStyle(Color(white: 0.5))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            Button {
+                Task { await appState.refreshAllRateLimits() }
+            } label: {
+                Text("刷新")
+                    .font(.system(size: 11))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundStyle(Color(white: 0.78))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 3)
+                    .background(Color(white: 0.16))
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
+            .fixedSize(horizontal: true, vertical: false)
         }
     }
 

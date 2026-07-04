@@ -88,6 +88,39 @@ struct SettingsView: View {
                 Text("同步")
             }
 
+            // Subscription quota monitoring
+            Section {
+                Toggle("显示 Codex 订阅配额", isOn: Binding(
+                    get: { appState.codexRateLimitEnabled },
+                    set: { newValue in
+                        Task { await appState.setCodexRateLimitEnabled(newValue) }
+                    }
+                ))
+                .tint(.green)
+
+                Toggle("显示 Claude Code 订阅配额", isOn: Binding(
+                    get: { appState.claudeRateLimitEnabled },
+                    set: { newValue in
+                        Task { await appState.setClaudeRateLimitEnabled(newValue) }
+                    }
+                ))
+                .tint(.green)
+
+                if let error = appState.claudeRateLimitInstallError {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11))
+                        Text(error)
+                            .font(.caption)
+                            .lineLimit(nil)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.red)
+                }
+            } header: {
+                Text("订阅配额")
+            }
+
             // Menu bar display
             Section {
                 Toggle("菜单栏显示费用", isOn: Binding(
@@ -161,7 +194,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 420)
+        .frame(width: 420, height: 460)
         .onAppear {
             loadSettings()
         }

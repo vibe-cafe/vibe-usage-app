@@ -106,7 +106,7 @@ actor SyncEngine {
                         continuation.resume(returning: .failure(.unauthorized))
                     } else {
                         let msg = stderr.isEmpty ? stdout : stderr
-                        continuation.resume(returning: .failure(.processFailure(msg.isEmpty ? "Exit code \(process.terminationStatus)" : msg)))
+                        continuation.resume(returning: .failure(.processFailure(friendlyFailureMessage(msg, exitCode: process.terminationStatus))))
                     }
                 }
             } catch {
@@ -114,5 +114,17 @@ actor SyncEngine {
                 continuation.resume(returning: .failure(.processFailure(error.localizedDescription)))
             }
         }
+    }
+
+    private func friendlyFailureMessage(_ message: String, exitCode: Int32) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Exit code \(exitCode)" }
+
+        if trimmed.contains("RangeError: Invalid string length")
+            || trimmed.contains("node:internal/readline") {
+            return "本地同步工具读取历史记录时崩溃（RangeError: Invalid string length）。请更新 @vibe-cafe/vibe-usage 后重试；订阅配额监控可在设置中单独开启或关闭。"
+        }
+
+        return trimmed
     }
 }

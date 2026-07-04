@@ -20,6 +20,7 @@ final class RateLimitCoordinator {
     /// Used by the manual "更新数据" path; popover-open should prefer the
     /// debounced `refreshCodexIfNeeded` to avoid repeat work on rapid open/close.
     func refreshCodex() async {
+        guard appState?.codexRateLimitEnabled == true else { return }
         let codex = await Task.detached(priority: .userInitiated) {
             CodexRateLimitReader.read()
         }.value
@@ -38,15 +39,10 @@ final class RateLimitCoordinator {
     }
 
     /// Refresh Claude from the local statusline-capture file. Auth-free and
-    /// cheap. If the user hasn't enabled capture yet, surface the disabled
-    /// placeholder (the card's "启用" button installs the hook).
+    /// cheap; only runs while Claude monitoring is enabled.
     func refreshClaude() async {
-        let enabled = appState?.claudeRateLimitEnabled == true
-        debugLog("[rate-limit] refreshClaude() entered, enabled=\(enabled)")
-        guard enabled else {
-            upsert(ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil))
-            return
-        }
+        guard appState?.claudeRateLimitEnabled == true else { return }
+        debugLog("[rate-limit] refreshClaude() entered")
         let snapshot = await Task.detached(priority: .userInitiated) {
             ClaudeRateLimitReader.read()
         }.value
@@ -73,10 +69,12 @@ final class RateLimitCoordinator {
     /// Ensure both providers have at least a placeholder entry so the UI renders
     /// the disabled / enable affordance for Claude on first launch.
     func seedPlaceholders() {
-        if appState?.rateLimits.contains(where: { $0.provider == .codex }) != true {
+        if appState?.codexRateLimitEnabled == true,
+           appState?.rateLimits.contains(where: { $0.provider == .codex }) != true {
             upsert(ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: nil))
         }
-        if appState?.rateLimits.contains(where: { $0.provider == .claudeCode }) != true {
+        if appState?.claudeRateLimitEnabled == true,
+           appState?.rateLimits.contains(where: { $0.provider == .claudeCode }) != true {
             upsert(ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil))
         }
     }
