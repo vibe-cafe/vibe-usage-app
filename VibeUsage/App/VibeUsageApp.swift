@@ -25,8 +25,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController = MenuBarController(appState: appState, updaterViewModel: updaterViewModel)
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            self?.menuBarController?.presentPanelForAppActivation()
+        }
+    }
+
+    func applicationWillResignActive(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            self?.menuBarController?.dismissPanelForAppDeactivation()
+        }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        menuBarController?.presentPanel()
+        menuBarController?.presentPanelForAppActivation()
         return true
     }
 }

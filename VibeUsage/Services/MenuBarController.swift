@@ -215,6 +215,17 @@ final class MenuBarController: NSObject {
         openPanel()
     }
 
+    func presentPanelForAppActivation() {
+        guard ActivationCoordinator.shared.canPresentDashboardForAppActivation else { return }
+        guard NSApp.activationPolicy() == .regular else { return }
+        presentPanel()
+    }
+
+    func dismissPanelForAppDeactivation() {
+        guard ActivationCoordinator.shared.canDismissDashboardForAppDeactivation else { return }
+        closePanel()
+    }
+
     private func openPanel() {
         guard !isAnimating else { return }
 

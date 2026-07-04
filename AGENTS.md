@@ -10,7 +10,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 ├── VibeUsage/
 │   ├── Info.plist                 # Bundle metadata (versions, Sparkle SUFeedURL, SUPublicEDKey)
 │   ├── App/
-│   │   ├── VibeUsageApp.swift     # @main entry, MenuBarExtra scene
+│   │   ├── VibeUsageApp.swift     # @main entry, AppDelegate lifecycle hooks
 │   │   └── AppResources.swift     # Bundle.appResources helper
 │   ├── Models/
 │   │   ├── AppState.swift         # @Observable central state (buckets, filters, timeRange, sync)
@@ -34,7 +34,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── MenuBarController.swift # NSStatusItem + custom borderless popover panel (multi-line title, animated open/close)
 │   │   ├── PopoverPanel.swift     # NSPanel subclass that becomes key for TextField input
 │   │   ├── SettingsWindowController.swift  # NSWindow wrapper for settings
-│   │   └── ActivationCoordinator.swift     # Centralizes NSApp.activationPolicy across popup + Settings
+│   │   └── ActivationCoordinator.swift     # Centralizes NSApp.activationPolicy across popup + Settings + updates
 │   ├── Utils/
 │   │   ├── Formatters.swift       # Number, cost, date, time formatting
 │   │   └── Log.swift              # Debug logging
@@ -65,7 +65,7 @@ swift build -c release                   # Release build
 ## Architecture
 
 ### App Type
-Regular Dock app with a menu-bar status item. `AppDelegate` owns a `MenuBarController` that manages an `NSStatusItem` plus a borderless `PopoverPanel` (custom NSPanel) hosting the SwiftUI dashboard. We dropped `MenuBarExtra` so the status item can render multi-line text via `NSHostingView` (cost over tokens) and the panel can use a custom open/close animation anchored to the icon. Dock re-open events call `MenuBarController.presentPanel()`, so clicking the Dock icon opens or foregrounds the same dashboard panel as the menu-bar item. `swift run` is a bare executable, so `AppDelegate` also sets `.regular` activation policy and loads the Dock icon from the bundled `AppIcon.appiconset`.
+LSUIElement menu-bar app with an optional Dock/Cmd-Tab presence. `AppDelegate` owns a `MenuBarController` that manages an `NSStatusItem` plus a borderless `PopoverPanel` (custom NSPanel) hosting the SwiftUI dashboard. We dropped `MenuBarExtra` so the status item can render multi-line text via `NSHostingView` (cost over tokens) and the panel can use a custom open/close animation anchored to the icon. When the user enables "show in Dock", `ActivationCoordinator` promotes the app to `.regular`, assigns the bundled Dock icon, and AppKit activation events (Dock click or Cmd-Tab switch to Vibe Usage) call `MenuBarController.presentPanelForAppActivation()` so the dashboard opens or foregrounds like the menu-bar item. App deactivation calls `dismissPanelForAppDeactivation()` so a Cmd-Tab away from Vibe Usage closes the dashboard again, unless Settings or a Sparkle modal is visible.
 
 ### State Management
 `AppState` is `@Observable` and injected via `@Environment`. All views read from it. No Combine, no ObservableObject (except `UpdaterViewModel` which bridges Sparkle's KVO).
@@ -144,9 +144,9 @@ No background timer. `RateLimitCoordinator` is driven entirely by user-visible e
 Settings uses a raw `NSWindow` via `SettingsWindowController`. The SwiftUI `Settings` scene stays as a placeholder to satisfy the `App` protocol; the actual settings surface is managed directly so it behaves consistently alongside the custom dashboard panel.
 
 ### ActivationCoordinator
-Vibe Usage is now a regular Dock app, so `ActivationCoordinator` keeps `NSApp.activationPolicy` at `.regular`. It remains the single place that reconciles activation policy, which prevents future popup/settings transitions from fighting each other.
+`ActivationCoordinator` follows the persisted `showInDock` preference: `.regular` with the bundled Dock icon when visible in Dock/Cmd-Tab, `.accessory` when hidden. Settings temporarily promotes the app to `.regular` so it keeps a main menu and Cmd-Tab entry while the Settings window is open. It remains the single place that reconciles activation policy, which prevents future popup/settings transitions from fighting each other.
 
-It also emits `onSettingsVisibilityChange`, which `MenuBarController` uses to lower the popover panel from `.popUpMenu` to `.normal` while Settings is visible (so standard z-ordering lets a click on Settings bring it forward).
+It also emits `onSettingsVisibilityChange`, which `MenuBarController` uses to lower the popover panel from `.popUpMenu` to `.normal` while Settings is visible (so standard z-ordering lets a click on Settings bring it forward). Sparkle modal visibility flows through `updateModalVisibilityDidChange(_:)` for the same reason, and `canPresentDashboardForAppActivation` blocks Dock/Cmd-Tab dashboard presentation while Settings or Sparkle dialogs are active.
 
 ### Menu-Bar Click Handling
 The status item renders SwiftUI via `NSHostingView` inside the `NSStatusBarButton`. A vanilla `NSHostingView` swallows the button's action — use `PassthroughHostingView` (defined inside `MenuBarController.swift`), which overrides `hitTest(_:) -> nil` (routes events to the button), `acceptsFirstMouse(for:) -> true` (first click registers when the app is inactive), and `mouseDown`/`mouseUp` forwarding to `superview` (fallback when SwiftUI's responder chain receives the event instead of the button).

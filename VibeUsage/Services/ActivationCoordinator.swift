@@ -14,6 +14,7 @@ final class ActivationCoordinator {
     static let shared = ActivationCoordinator()
 
     private var settingsVisible = false
+    private var updateModalVisible = false
 
     /// Policy last applied by `reconcile()`. Policy and Dock icon are only
     /// touched on actual transitions — reassigning `applicationIconImage`
@@ -60,6 +61,20 @@ final class ActivationCoordinator {
         settingsVisible = false
         reconcile()
         if changed { onSettingsVisibilityChange?(false) }
+    }
+
+    func updateModalVisibilityDidChange(_ visible: Bool) {
+        updateModalVisible = visible
+        onUpdateModalVisibilityChange?(visible)
+    }
+
+    var canPresentDashboardForAppActivation: Bool {
+        let showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
+        return showInDock && !settingsVisible && !updateModalVisible
+    }
+
+    var canDismissDashboardForAppDeactivation: Bool {
+        !settingsVisible && !updateModalVisible
     }
 
     /// Applies the user's Dock visibility preference: at launch (before any

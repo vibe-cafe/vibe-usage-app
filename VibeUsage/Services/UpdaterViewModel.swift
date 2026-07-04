@@ -79,11 +79,11 @@ private final class UpdaterDelegateProxy: NSObject, SPUUpdaterDelegate, SPUStand
     // because the protocol isn't @MainActor-annotated; we hop to the main actor
     // before touching coordinator state (same pattern as the other callbacks).
     nonisolated func standardUserDriverWillShowModalAlert() {
-        Task { @MainActor in ActivationCoordinator.shared.onUpdateModalVisibilityChange?(true) }
+        Task { @MainActor in ActivationCoordinator.shared.updateModalVisibilityDidChange(true) }
     }
 
     nonisolated func standardUserDriverDidShowModalAlert() {
-        Task { @MainActor in ActivationCoordinator.shared.onUpdateModalVisibilityChange?(false) }
+        Task { @MainActor in ActivationCoordinator.shared.updateModalVisibilityDidChange(false) }
     }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
