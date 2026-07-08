@@ -30,11 +30,12 @@ final class ActivationCoordinator {
     /// z-ordering lets Settings come to the front on click.
     var onSettingsVisibilityChange: ((Bool) -> Void)?
 
-    /// Invoked while Sparkle is showing its modal update window. `true` =
-    /// about to show (lower the popup so Sparkle's normal-level window isn't
-    /// buried under the `.popUpMenu` panel), `false` = dismissed (restore).
-    /// We deliberately do NOT close the popup — it stays open behind/around
-    /// the update dialog, just no longer on top of it.
+    /// Invoked around a Sparkle update session. `true` = update UI about to
+    /// show — the "checking" progress window, the update-available window, or
+    /// an alert (lower the popup so Sparkle's normal-level windows aren't
+    /// buried under the `.popUpMenu` panel); `false` = session finished
+    /// (restore). We deliberately do NOT close the popup — it stays open
+    /// behind/around the update dialog, just no longer on top of it.
     var onUpdateModalVisibilityChange: ((Bool) -> Void)?
 
     private init() {}

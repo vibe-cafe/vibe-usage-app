@@ -61,7 +61,14 @@ final class UpdaterViewModel: ObservableObject {
     }
 
     func checkForUpdates() {
-        updaterController?.checkForUpdates(nil)
+        guard let updaterController else { return }
+        // Sparkle's "Checking for updates…" progress window appears immediately —
+        // BEFORE any user-driver delegate callback fires — so lower the popup
+        // now rather than waiting for standardUserDriverWillHandleShowingUpdate.
+        // The matching restore comes from standardUserDriverWillFinishUpdateSession
+        // (every Sparkle session ends by dismissing the update installation).
+        ActivationCoordinator.shared.updateModalVisibilityDidChange(true)
+        updaterController.checkForUpdates(nil)
     }
 }
 
@@ -73,16 +80,28 @@ private final class UpdaterDelegateProxy: NSObject, SPUUpdaterDelegate, SPUStand
     var onDidNotFindUpdate: (() -> Void)?
     var onUserChoice: ((SPUUserUpdateChoice) -> Void)?
 
-    // Sparkle calls these around its modal update window so we can move attached
-    // windows out of the way. We don't hide the popup — just signal the
-    // coordinator to lower its level so the dialog shows above it. `nonisolated`
-    // because the protocol isn't @MainActor-annotated; we hop to the main actor
-    // before touching coordinator state (same pattern as the other callbacks).
-    nonisolated func standardUserDriverWillShowModalAlert() {
+    // Sparkle's update UI (the "update available" window, progress windows,
+    // and alerts) lives at normal window level, which the popup's `.popUpMenu`
+    // panel would bury. These two callbacks bracket the whole update session:
+    // WillHandleShowingUpdate fires right before the update window appears
+    // (both user-initiated and scheduled checks); WillFinishUpdateSession fires
+    // when the session ends for ANY reason (installed / skipped / dismissed /
+    // error / no update found). We don't hide the popup — just signal the
+    // coordinator to lower its level so Sparkle's windows show above it.
+    // NOTE: standardUserDriverWill/DidShowModalAlert are NOT sufficient here —
+    // they only wrap NSAlert runModal (errors, "no update"), never the main
+    // update window. `nonisolated` because the protocol isn't
+    // @MainActor-annotated; we hop to the main actor before touching
+    // coordinator state (same pattern as the other callbacks).
+    nonisolated func standardUserDriverWillHandleShowingUpdate(
+        _ handleShowingUpdate: Bool,
+        forUpdate update: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
         Task { @MainActor in ActivationCoordinator.shared.updateModalVisibilityDidChange(true) }
     }
 
-    nonisolated func standardUserDriverDidShowModalAlert() {
+    nonisolated func standardUserDriverWillFinishUpdateSession() {
         Task { @MainActor in ActivationCoordinator.shared.updateModalVisibilityDidChange(false) }
     }
 

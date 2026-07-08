@@ -60,6 +60,17 @@ final class MenuBarController: NSObject {
     private var localEventMonitor: Any?
     private var isAnimating = false
 
+    /// Both surfaces want the panel lowered to `.normal` while they're up, and
+    /// they can overlap (e.g. an update session started from Settings). Each
+    /// callback flips its own flag; the panel level is derived from both, so
+    /// one surface closing can't prematurely restore `.popUpMenu` for the other.
+    private var settingsWindowVisible = false
+    private var updateSessionVisible = false
+
+    private func reconcilePanelLevel() {
+        panel?.level = (settingsWindowVisible || updateSessionVisible) ? .normal : .popUpMenu
+    }
+
     private static let panelWidth: CGFloat = 520
     private static let panelHeight: CGFloat = 620
     private static let panelTopGap: CGFloat = 6
@@ -84,14 +95,18 @@ final class MenuBarController: NSObject {
         // .normal while Settings is visible so clicking/dragging Settings can
         // bring it to the front through standard z-ordering.
         ActivationCoordinator.shared.onSettingsVisibilityChange = { [weak self] visible in
-            self?.panel?.level = visible ? .normal : .popUpMenu
+            self?.settingsWindowVisible = visible
+            self?.reconcilePanelLevel()
         }
 
-        // Sparkle's update window is a normal-level window; while it's up,
-        // lower our `.popUpMenu` panel to `.normal` so the update dialog isn't
-        // buried under the still-open popover. Restore on dismissal.
+        // Sparkle's update UI is made of normal-level windows; while an update
+        // session is active, lower our `.popUpMenu` panel to `.normal` so the
+        // update dialog isn't buried under the still-open popover. Restore when
+        // the session ends. Kept as a separate flag from Settings visibility so
+        // closing one surface can't clobber the other's lowering request.
         ActivationCoordinator.shared.onUpdateModalVisibilityChange = { [weak self] showing in
-            self?.panel?.level = showing ? .normal : .popUpMenu
+            self?.updateSessionVisible = showing
+            self?.reconcilePanelLevel()
         }
 
         // When macOS Screenshot.app (⌘⇧3/4/5) or any screen-capture UI activates,
@@ -288,7 +303,9 @@ final class MenuBarController: NSObject {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.level = .popUpMenu
+        // Honor any lowering request already in effect (e.g. panel first
+        // created while Settings or an update session is up).
+        panel.level = (settingsWindowVisible || updateSessionVisible) ? .normal : .popUpMenu
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
