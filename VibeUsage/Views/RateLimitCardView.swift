@@ -195,7 +195,7 @@ private struct ProviderCard: View {
     private var expectsFiveHourWindow: Bool {
         guard snapshot.provider == .codex,
               let plan = snapshot.planLabel?.lowercased() else { return false }
-        return plan == "plus" || plan == "pro" || plan == "business"
+        return plan == "plus" || plan == "pro" || plan == "prolite" || plan == "business"
     }
 
     @ViewBuilder

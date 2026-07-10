@@ -4,8 +4,9 @@ import Foundation
 ///
 /// Codex writes rollouts to `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Each line
 /// is a JSON event; some have `payload.type == "token_count"` and carry a `rate_limits`
-/// object with `primary` (5h) and `secondary` (7d) windows. We walk dates backwards
-/// from today and return the first non-null `rate_limits` we find.
+/// object with `primary` (5h) and `secondary` (7d) windows. Multiple main/guardian
+/// rollouts may be active concurrently, so we compare their event timestamps and
+/// return the globally newest non-null `rate_limits` block.
 enum CodexRateLimitReader {
 
     static func read() -> ProviderRateLimit {
@@ -13,11 +14,16 @@ enum CodexRateLimitReader {
             .appendingPathComponent(".codex")
             .appendingPathComponent("sessions")
 
+        return read(sessionsDir: sessionsDir)
+    }
+
+    /// Internal entry point used by tests with an isolated sessions directory.
+    static func read(sessionsDir: URL, now: Date = Date()) -> ProviderRateLimit {
         guard FileManager.default.fileExists(atPath: sessionsDir.path) else {
-            return .init(provider: .codex, status: .noData, fetchedAt: Date())
+            return .init(provider: .codex, status: .noData, fetchedAt: now)
         }
 
-        if let snapshot = scanForLatest(in: sessionsDir) {
+        if let snapshot = scanForLatest(in: sessionsDir, now: now) {
             // `parseWindow` already discarded any slot whose `resets_at` is in
             // the past — that window has provably rolled, and the snapshot's
             // `used_percent` is from the *previous* window, not the current
@@ -28,7 +34,7 @@ enum CodexRateLimitReader {
             // expire independently.)
             if snapshot.fiveHour == nil && snapshot.sevenDay == nil {
                 debugLog("[rate-limit] codex snapshot fully expired (no live windows) — reporting .noData")
-                return .init(provider: .codex, status: .noData, fetchedAt: Date())
+                return .init(provider: .codex, status: .noData, fetchedAt: now)
             }
             return ProviderRateLimit(
                 provider: .codex,
@@ -36,10 +42,10 @@ enum CodexRateLimitReader {
                 sevenDay: snapshot.sevenDay,
                 planLabel: snapshot.planLabel,
                 status: .ok,
-                fetchedAt: Date()
+                fetchedAt: now
             )
         }
-        return .init(provider: .codex, status: .noData, fetchedAt: Date())
+        return .init(provider: .codex, status: .noData, fetchedAt: now)
     }
 
     // MARK: - File walk
@@ -48,47 +54,87 @@ enum CodexRateLimitReader {
         var fiveHour: RateLimitWindow?
         var sevenDay: RateLimitWindow?
         var planLabel: String?
+        var recordedAt: Date
     }
 
-    /// Walk year/month/day directories newest-first, scan each session file
-    /// from end-to-start (most recent events first), return on first hit.
-    private static func scanForLatest(in sessionsDir: URL) -> Snapshot? {
-        let fm = FileManager.default
-        guard let years = sortedSubdirs(of: sessionsDir, fm: fm) else { return nil }
+    private struct RolloutFile {
+        var url: URL
+        var modifiedAt: Date?
+    }
 
-        for year in years {
-            guard let months = sortedSubdirs(of: year, fm: fm) else { continue }
-            for month in months {
-                guard let days = sortedSubdirs(of: month, fm: fm) else { continue }
-                for day in days {
-                    guard let files = try? fm.contentsOfDirectory(at: day, includingPropertiesForKeys: nil) else { continue }
-                    let jsonl = files
-                        .filter { $0.pathExtension == "jsonl" && $0.lastPathComponent.hasPrefix("rollout-") }
-                        .sorted { $0.lastPathComponent > $1.lastPathComponent }
-                    for file in jsonl {
-                        if let snapshot = scan(file: file) {
-                            return snapshot
-                        }
-                    }
-                }
+    /// Find the newest rate-limit event globally, not merely the event in the
+    /// most recently-created rollout file. Codex Desktop can keep an older main
+    /// session active after creating a newer guardian/sub-agent rollout, so a
+    /// filename-first walk can pin the UI to the guardian's older snapshot.
+    ///
+    /// Files are ordered by modification time for efficiency. Once the next
+    /// file's mtime is no newer than the best event timestamp, it cannot contain
+    /// a later append and the remaining files can be skipped safely.
+    private static func scanForLatest(in sessionsDir: URL, now: Date) -> Snapshot? {
+        let fm = FileManager.default
+        let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey]
+        guard let enumerator = fm.enumerator(
+            at: sessionsDir,
+            includingPropertiesForKeys: resourceKeys,
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        var files: [RolloutFile] = []
+        for case let file as URL in enumerator {
+            guard file.pathExtension == "jsonl",
+                  file.lastPathComponent.hasPrefix("rollout-")
+            else { continue }
+
+            let values = try? file.resourceValues(forKeys: Set(resourceKeys))
+            guard values?.isRegularFile != false else { continue }
+            files.append(.init(url: file, modifiedAt: values?.contentModificationDate))
+        }
+
+        // Missing mtimes are scanned first so the optimization can never hide
+        // a valid snapshot merely because metadata lookup failed.
+        files.sort {
+            switch ($0.modifiedAt, $1.modifiedAt) {
+            case let (lhs?, rhs?):
+                if lhs == rhs { return $0.url.path > $1.url.path }
+                return lhs > rhs
+            case (nil, nil):
+                return $0.url.path > $1.url.path
+            case (nil, _):
+                return true
+            case (_, nil):
+                return false
             }
         }
-        return nil
-    }
 
-    private static func sortedSubdirs(of url: URL, fm: FileManager) -> [URL]? {
-        guard let entries = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey]) else {
-            return nil
+        var latest: Snapshot?
+        for file in files {
+            if let latest,
+               let modifiedAt = file.modifiedAt,
+               modifiedAt <= latest.recordedAt {
+                break
+            }
+
+            guard let snapshot = scan(
+                file: file.url,
+                fallbackTimestamp: file.modifiedAt ?? .distantPast,
+                now: now
+            ) else { continue }
+
+            if let current = latest {
+                if snapshot.recordedAt > current.recordedAt {
+                    latest = snapshot
+                }
+            } else {
+                latest = snapshot
+            }
         }
-        return entries
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        return latest
     }
 
     /// Parse one rollout JSONL file, return the most recent `rate_limits` block
     /// (if any). We read the whole file then iterate lines in reverse — Codex
     /// writes monotonically and the latest event has the freshest data.
-    private static func scan(file: URL) -> Snapshot? {
+    private static func scan(file: URL, fallbackTimestamp: Date, now: Date) -> Snapshot? {
         guard let raw = try? String(contentsOf: file, encoding: .utf8) else { return nil }
         let lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
 
@@ -103,10 +149,12 @@ enum CodexRateLimitReader {
             // The "primary" / "secondary" slots don't have fixed semantics — `window_minutes`
             // identifies which subscription window each one represents. Plan tiers vary:
             // free plans only carry the 7d window in primary; Plus/Pro return both.
-            var snapshot = Snapshot()
+            var snapshot = Snapshot(
+                recordedAt: parseTimestamp(obj["timestamp"]) ?? fallbackTimestamp
+            )
             snapshot.planLabel = formatPlanLabel(rateLimits["plan_type"] as? String)
             for slot in ["primary", "secondary"] {
-                guard let win = parseWindow(rateLimits[slot]) else { continue }
+                guard let win = parseWindow(rateLimits[slot], now: now) else { continue }
                 switch win.windowMinutes {
                 case 300:    snapshot.fiveHour = win.window
                 case 10080:  snapshot.sevenDay = win.window
@@ -118,7 +166,16 @@ enum CodexRateLimitReader {
         return nil
     }
 
-    /// Codex emits plan_type lowercase ("free", "plus", "pro", "business").
+    private static func parseTimestamp(_ raw: Any?) -> Date? {
+        guard let raw = raw as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
+    }
+
+    /// Codex emits plan_type lowercase ("free", "plus", "pro", "prolite", "business").
     /// Render the customer-facing capitalized form.
     private static func formatPlanLabel(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
@@ -130,7 +187,7 @@ enum CodexRateLimitReader {
         var windowMinutes: Int
     }
 
-    private static func parseWindow(_ raw: Any?) -> ParsedWindow? {
+    private static func parseWindow(_ raw: Any?, now: Date) -> ParsedWindow? {
         guard let dict = raw as? [String: Any] else { return nil }
         guard let usedPercent = dict["used_percent"] as? Double,
               let windowMinutes = dict["window_minutes"] as? Int else { return nil }
@@ -139,7 +196,7 @@ enum CodexRateLimitReader {
         if let epoch = dict["resets_at"] as? Double, epoch > 0 {
             resetsAt = Date(timeIntervalSince1970: epoch)
         } else if let secs = dict["resets_in_seconds"] as? Double, secs >= 0 {
-            resetsAt = Date().addingTimeInterval(secs)
+            resetsAt = now.addingTimeInterval(secs)
         }
 
         // Reject a window whose `resets_at` is already in the past: Codex's
@@ -152,8 +209,8 @@ enum CodexRateLimitReader {
         // Without a `resets_at` at all we keep the window (utilization is
         // probably still meaningful; we just can't render the time bar) —
         // that matches the Claude reader's tolerance for missing timestamps.
-        if let resetsAt, resetsAt.timeIntervalSinceNow <= 0 {
-            debugLog("[rate-limit] codex \(windowMinutes)m window expired \(Int(-resetsAt.timeIntervalSinceNow))s ago — dropping stale slot")
+        if let resetsAt, resetsAt.timeIntervalSince(now) <= 0 {
+            debugLog("[rate-limit] codex \(windowMinutes)m window expired \(Int(-resetsAt.timeIntervalSince(now)))s ago — dropping stale slot")
             return nil
         }
 
