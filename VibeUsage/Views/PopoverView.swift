@@ -295,6 +295,28 @@ struct PopoverView: View {
                         .background(Color.orange.opacity(0.15))
                         .cornerRadius(3)
                 }
+
+                // Keep the persistent update affordance beside the app title,
+                // where it remains visible without competing with footer actions.
+                if updaterViewModel.availableUpdate != nil {
+                    Button {
+                        updaterViewModel.checkForUpdates()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 10))
+                            Text("发现更新")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color(red: 0.4, green: 0.7, blue: 1.0).opacity(0.15))
+                        .cornerRadius(3)
+                    }
+                    .buttonStyle(.plain)
+                    .help("发现新版本，点击更新")
+                }
             }
 
             Spacer()
@@ -386,25 +408,6 @@ struct PopoverView: View {
             }
 
             Spacer()
-
-            // App update — only shown when Sparkle has found a newer version.
-            // Clicking re-runs checkForUpdates() which surfaces Sparkle's standard
-            // install dialog (one-click confirm → install → relaunch).
-            if updaterViewModel.availableUpdate != nil {
-                Button {
-                    updaterViewModel.checkForUpdates()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 12))
-                        Text("发现更新")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundStyle(Color(red: 0.4, green: 0.7, blue: 1.0))
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 12)
-            }
 
             // Refresh button
             Button {
