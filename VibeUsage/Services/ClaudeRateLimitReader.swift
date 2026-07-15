@@ -31,6 +31,21 @@ enum ClaudeRateLimitReader {
     private static let stalenessThreshold: TimeInterval = 30 * 60
 
     static func read() -> ProviderRateLimit {
+        // The subscription tier lives in ~/.claude.json (see `readSubscriptionTier`),
+        // a different local file than the rate-limit capture. It's available as
+        // soon as the user has logged into Claude Code — even before the
+        // statusline hook has captured any usage — so inject it into whatever
+        // window snapshot we produce below, across all statuses (.ok when we
+        // have data, but also .disabled / .noData so the plan badge shows on
+        // the "enable" card too). Auth-free plain-file read; no keychain.
+        var result = readWindows()
+        if result.planLabel == nil {
+            result.planLabel = readSubscriptionTier()
+        }
+        return result
+    }
+
+    private static func readWindows() -> ProviderRateLimit {
         let url = StatuslineHook.rateLimitFileURL
         debugLog("[rate-limit] ClaudeRateLimitReader.read() -> \(url.path)")
 
@@ -78,6 +93,78 @@ enum ClaudeRateLimitReader {
             status: .ok,
             fetchedAt: Date()
         )
+    }
+
+    // MARK: - Subscription tier
+
+    /// Read the user's Claude subscription tier from `~/.claude.json` — the
+    /// only auth-free local source for it. The statusline payload carries no
+    /// plan field (a present `rate_limits` block only tells us "some paid
+    /// plan"), and claude-hud's approach reads the OAuth token out of the macOS
+    /// Keychain, which would pop a system authorization prompt on first access
+    /// — exactly the friction we're required to avoid. `~/.claude.json` is a
+    /// plain 0644 config file Claude Code writes on login; its
+    /// `oauthAccount.*RateLimitTier` carries a value like
+    /// `"default_claude_max_5x"`, which uniquely distinguishes Max 5x / Max 20x
+    /// / Pro — finer-grained than the Keychain's `subscriptionType` ("max").
+    ///
+    /// Returns nil (→ no plan badge) whenever the file is absent/unparseable or
+    /// the tier is an API/unknown value; we never surface a wrong label.
+    private static func readSubscriptionTier() -> String? {
+        for url in claudeConfigCandidates() {
+            guard let data = try? Data(contentsOf: url),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let account = obj["oauthAccount"] as? [String: Any] else { continue }
+            // Prefer the user-scoped tier; fall back to the org-scoped one
+            // (personal Max plans populate `organizationRateLimitTier`).
+            let raw = (account["userRateLimitTier"] as? String)
+                ?? (account["organizationRateLimitTier"] as? String)
+            if let label = formatTier(raw) { return label }
+        }
+        return nil
+    }
+
+    /// Candidate paths for Claude Code's global config. `~/.claude.json` is the
+    /// default; when the user relocates their config via `CLAUDE_CONFIG_DIR`,
+    /// Claude Code writes `.claude.json` inside that directory instead, so try
+    /// it first.
+    private static func claudeConfigCandidates() -> [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var urls: [URL] = []
+        if let custom = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"],
+           !custom.isEmpty {
+            let base = URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
+            urls.append(base.appendingPathComponent(".claude.json"))
+        }
+        urls.append(home.appendingPathComponent(".claude.json"))
+        return urls
+    }
+
+    /// Map a raw rate-limit-tier string (e.g. `"default_claude_max_20x"`) to a
+    /// customer-facing badge. Substring matching keeps us resilient to the
+    /// `default_claude_` prefix drifting across Claude Code versions.
+    static func formatTier(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let l = raw.lowercased()
+        if l.contains("max") {
+            if l.contains("20x") { return "Max 20x" }
+            if l.contains("5x") { return "Max 5x" }
+            return "Max"
+        }
+        if l.contains("pro") { return "Pro" }
+        if l.contains("team") { return "Team" }
+        if l.contains("enterprise") { return "Enterprise" }
+        if l.contains("free") { return "Free" }
+        // API-key users carry no meaningful subscription badge.
+        if l.contains("api") { return nil }
+        // Unknown tier: strip the known prefix and title-case what remains so a
+        // new plan still shows *something* recognizable rather than nothing.
+        let cleaned = l
+            .replacingOccurrences(of: "default_claude_", with: "")
+            .replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard !cleaned.isEmpty else { return nil }
+        return cleaned.prefix(1).uppercased() + cleaned.dropFirst()
     }
 
     // MARK: - Parsing
