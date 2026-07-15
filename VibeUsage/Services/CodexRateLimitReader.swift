@@ -62,22 +62,92 @@ enum CodexRateLimitReader {
         var modifiedAt: Date?
     }
 
+    /// How many calendar days back to look for rollout files. A `rate_limits`
+    /// event older than the 7-day window is provably expired — `parseWindow`
+    /// already discards any slot whose `resets_at` has passed — so nothing
+    /// beyond that horizon can ever contribute a *live* window. The extra two
+    /// days absorb a session that straddles a day boundary (its rollout file
+    /// lives in the day it was *created*, but keeps getting appended to) and
+    /// any local clock/timezone drift between when Codex wrote the folder and
+    /// when we compute "today" here.
+    private static let lookbackDays = 9
+
     /// Find the newest rate-limit event globally, not merely the event in the
     /// most recently-created rollout file. Codex Desktop can keep an older main
     /// session active after creating a newer guardian/sub-agent rollout, so a
     /// filename-first walk can pin the UI to the guardian's older snapshot.
     ///
-    /// Files are ordered by modification time for efficiency. Once the next
-    /// file's mtime is no newer than the best event timestamp, it cannot contain
-    /// a later append and the remaining files can be skipped safely.
+    /// Codex lays sessions out as `sessions/yyyy/MM/dd/rollout-*.jsonl`, so the
+    /// fast path only touches the last `lookbackDays` day-folders instead of
+    /// walking a user's entire multi-year session history on every refresh —
+    /// that full walk was the main source of a sluggish first popover-open for
+    /// long-time users. If `sessionsDir` doesn't follow that layout (test
+    /// fixtures hand us a leaf directory directly, and a future Codex version
+    /// might restructure), fall back to the old full recursive walk so we
+    /// never silently miss data.
     private static func scanForLatest(in sessionsDir: URL, now: Date) -> Snapshot? {
+        let dayDirs = recentDayDirectories(under: sessionsDir, now: now)
+        if !dayDirs.isEmpty {
+            return scan(files: dayDirs.flatMap(rolloutFiles(in:)), now: now)
+        }
+        return scan(files: allRolloutFiles(under: sessionsDir), now: now)
+    }
+
+    /// Existing `sessionsDir/yyyy/MM/dd` directories for the last
+    /// `lookbackDays` calendar days, newest-day-first. Uses the device's local
+    /// calendar/timezone, matching how Codex (running on the same machine)
+    /// buckets its own session folders.
+    private static func recentDayDirectories(under sessionsDir: URL, now: Date) -> [URL] {
+        let calendar = Calendar.current
+        var dirs: [URL] = []
+        for offset in 0..<lookbackDays {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: now) else { continue }
+            let url = sessionsDir.appendingPathComponent(dayPathFormatter.string(from: day))
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                dirs.append(url)
+            }
+        }
+        return dirs
+    }
+
+    private static let dayPathFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy/MM/dd"
+        f.calendar = Calendar.current
+        f.timeZone = .current
+        return f
+    }()
+
+    /// Rollout files directly inside one `yyyy/MM/dd` leaf directory — Codex
+    /// never nests further than that, so a shallow listing suffices (no need
+    /// to stat every file in the tree, unlike the recursive fallback).
+    private static func rolloutFiles(in dayDir: URL) -> [RolloutFile] {
+        let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dayDir,
+            includingPropertiesForKeys: resourceKeys,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return entries.compactMap { file -> RolloutFile? in
+            guard file.pathExtension == "jsonl", file.lastPathComponent.hasPrefix("rollout-") else { return nil }
+            let values = try? file.resourceValues(forKeys: Set(resourceKeys))
+            guard values?.isRegularFile != false else { return nil }
+            return RolloutFile(url: file, modifiedAt: values?.contentModificationDate)
+        }
+    }
+
+    /// Full recursive walk of `sessionsDir` — only reached when it doesn't
+    /// follow the `yyyy/MM/dd` layout the fast path expects.
+    private static func allRolloutFiles(under sessionsDir: URL) -> [RolloutFile] {
         let fm = FileManager.default
         let resourceKeys: [URLResourceKey] = [.isRegularFileKey, .contentModificationDateKey]
         guard let enumerator = fm.enumerator(
             at: sessionsDir,
             includingPropertiesForKeys: resourceKeys,
             options: [.skipsHiddenFiles]
-        ) else { return nil }
+        ) else { return [] }
 
         var files: [RolloutFile] = []
         for case let file as URL in enumerator {
@@ -89,10 +159,17 @@ enum CodexRateLimitReader {
             guard values?.isRegularFile != false else { continue }
             files.append(.init(url: file, modifiedAt: values?.contentModificationDate))
         }
+        return files
+    }
 
+    /// Sort newest-first and scan until a confirmed latest snapshot is found.
+    /// Files are monotonic writers, so once the next candidate's mtime is no
+    /// newer than the best event timestamp seen so far, it cannot contain a
+    /// later append and the remaining files can be skipped safely.
+    private static func scan(files: [RolloutFile], now: Date) -> Snapshot? {
         // Missing mtimes are scanned first so the optimization can never hide
         // a valid snapshot merely because metadata lookup failed.
-        files.sort {
+        let sorted = files.sorted {
             switch ($0.modifiedAt, $1.modifiedAt) {
             case let (lhs?, rhs?):
                 if lhs == rhs { return $0.url.path > $1.url.path }
@@ -107,7 +184,7 @@ enum CodexRateLimitReader {
         }
 
         var latest: Snapshot?
-        for file in files {
+        for file in sorted {
             if let latest,
                let modifiedAt = file.modifiedAt,
                modifiedAt <= latest.recordedAt {

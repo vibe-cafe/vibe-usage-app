@@ -12,6 +12,13 @@ final class RateLimitCoordinator {
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
 
+    /// Both reads are local-file scans that should complete in well under a
+    /// second; these are a safety net against a pathological filesystem (e.g.
+    /// a network-mounted home directory) hanging the UI in "loading" forever
+    /// rather than a tuned budget for the happy path.
+    private static let codexTimeout: TimeInterval = 6
+    private static let claudeTimeout: TimeInterval = 3
+
     init(appState: AppState) {
         self.appState = appState
     }
@@ -21,9 +28,21 @@ final class RateLimitCoordinator {
     /// debounced `refreshCodexIfNeeded` to avoid repeat work on rapid open/close.
     func refreshCodex() async {
         guard appState?.codexRateLimitEnabled == true else { return }
-        let codex = await Task.detached(priority: .userInitiated) {
-            CodexRateLimitReader.read()
-        }.value
+        markFetching(.codex, true)
+        let codex = await Self.withTimeout(Self.codexTimeout) {
+            // Prefer the live API (fresher windows + the only source of the
+            // reset-credit count). Fall back to the local session-file walk when
+            // the token/network isn't available so the card still works offline.
+            if let api = await CodexUsageAPIReader.fetch() {
+                return api
+            }
+            debugLog("[rate-limit] codex API unavailable — falling back to local session files")
+            return await Task.detached(priority: .userInitiated) {
+                CodexRateLimitReader.read()
+            }.value
+        } onTimeout: {
+            ProviderRateLimit(provider: .codex, status: .error("读取超时，请重试"), fetchedAt: Date())
+        }
         upsert(codex)
         lastCodexFetchAt = Date()
     }
@@ -43,9 +62,14 @@ final class RateLimitCoordinator {
     func refreshClaude() async {
         guard appState?.claudeRateLimitEnabled == true else { return }
         debugLog("[rate-limit] refreshClaude() entered")
-        let snapshot = await Task.detached(priority: .userInitiated) {
-            ClaudeRateLimitReader.read()
-        }.value
+        markFetching(.claudeCode, true)
+        let snapshot = await Self.withTimeout(Self.claudeTimeout) {
+            await Task.detached(priority: .userInitiated) {
+                ClaudeRateLimitReader.read()
+            }.value
+        } onTimeout: {
+            ProviderRateLimit(provider: .claudeCode, status: .error("读取超时，请重试"), fetchedAt: Date())
+        }
         debugLog("[rate-limit] refreshClaude() got snapshot status=\(snapshot.status)")
         upsert(snapshot)
         lastClaudeFetchAt = Date()
@@ -66,16 +90,34 @@ final class RateLimitCoordinator {
         await refreshClaude()
     }
 
-    /// Ensure both providers have at least a placeholder entry so the UI renders
-    /// the disabled / enable affordance for Claude on first launch.
+    /// Ensure both providers have at least a placeholder entry so the card
+    /// renders instantly on first launch — `.loading` rather than `.noData` /
+    /// `.disabled`, since a refresh is about to run and we don't want the
+    /// card to flash "no data" and then pop into existence a moment later.
     func seedPlaceholders() {
         if appState?.codexRateLimitEnabled == true,
            appState?.rateLimits.contains(where: { $0.provider == .codex }) != true {
-            upsert(ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: nil))
+            upsert(ProviderRateLimit(provider: .codex, status: .loading, fetchedAt: nil, isFetching: true))
         }
         if appState?.claudeRateLimitEnabled == true,
            appState?.rateLimits.contains(where: { $0.provider == .claudeCode }) != true {
-            upsert(ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil))
+            upsert(ProviderRateLimit(provider: .claudeCode, status: .loading, fetchedAt: nil, isFetching: true))
+        }
+    }
+
+    /// Mark a provider as "refresh in flight" without disturbing its existing
+    /// status/data — a background refresh (popover reopened, manual retry)
+    /// should keep showing the last-known numbers, just with a subtle
+    /// in-progress indicator, rather than reverting to a loading skeleton.
+    /// Only seeds a fresh `.loading` placeholder when no entry exists yet.
+    private func markFetching(_ provider: ProviderRateLimit.Provider, _ fetching: Bool) {
+        guard let appState else { return }
+        var current = appState.rateLimits
+        if let i = current.firstIndex(where: { $0.provider == provider }) {
+            current[i].isFetching = fetching
+            appState.rateLimits = current
+        } else if fetching {
+            upsert(ProviderRateLimit(provider: provider, status: .loading, isFetching: true))
         }
     }
 
@@ -88,5 +130,25 @@ final class RateLimitCoordinator {
             current.append(snapshot)
         }
         appState.rateLimits = current
+    }
+
+    /// Race `operation` against a `seconds` timer; whichever finishes first
+    /// wins and the loser is cancelled. Keeps a stalled local-file read from
+    /// leaving the UI stuck in "loading" indefinitely.
+    private static func withTimeout<T: Sendable>(
+        _ seconds: TimeInterval,
+        operation: @escaping @Sendable () async -> T,
+        onTimeout: @escaping @Sendable () -> T
+    ) async -> T {
+        await withTaskGroup(of: T.self) { group in
+            group.addTask { await operation() }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(seconds))
+                return onTimeout()
+            }
+            let result = await group.next() ?? onTimeout()
+            group.cancelAll()
+            return result
+        }
     }
 }
