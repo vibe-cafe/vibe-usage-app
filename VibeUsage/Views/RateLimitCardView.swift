@@ -88,6 +88,7 @@ private struct ProviderCard: View {
             header
             content
         }
+        .animation(.easeInOut(duration: 0.2), value: snapshot.status)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
@@ -116,7 +117,34 @@ private struct ProviderCard: View {
             Text(snapshot.provider.displayName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
+            // A background refresh (popover reopened, manual retry) keeps the
+            // last-known numbers on screen — this is the only signal that a
+            // read is in flight. Only shown once we have real data; the
+            // first-ever load uses the full `.loading` skeleton instead.
+            if snapshot.isFetching && snapshot.status == .ok {
+                ProgressView()
+                    .controlSize(.mini)
+                    .tint(Color(white: 0.5))
+                    .transition(.opacity)
+            }
             Spacer()
+            // Banked manual-reset credits (Codex). Only shown when the account
+            // actually has one or more — a subtle accent capsule marks it as a
+            // usable benefit rather than just another stat.
+            if let credits = snapshot.resetCredits, credits > 0 {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("\(credits)")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(Color(red: 0.38, green: 0.78, blue: 0.6))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color(red: 0.38, green: 0.78, blue: 0.6).opacity(0.16))
+                .clipShape(Capsule())
+                .help("可用额度重置券：\(credits) 张（可手动重置一次用量窗口）")
+            }
             if let label = snapshot.planLabel {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
@@ -134,6 +162,7 @@ private struct ProviderCard: View {
     @ViewBuilder
     private var content: some View {
         switch snapshot.status {
+        case .loading:       loadingContent
         case .ok:           quotaRows
         case .disabled:
             if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
@@ -172,30 +201,16 @@ private struct ProviderCard: View {
         }
     }
 
-    /// Visible rows in display order. Paid Codex plans always reserve the 5h
-    /// slot — if utilization is unknown (no recent activity, so `parseWindow`
-    /// dropped the expired window) we render a placeholder rather than letting
-    /// the 7d row shift up and pose as 5h. Free Codex / Claude never get the
-    /// 5h placeholder because those plans don't carry that window at all.
+    /// Visible rows in display order. Codex retired its 5h window — only the
+    /// 7d rolling window remains — so we never render a 5h row for it. Claude
+    /// still reports both 5h and 7d.
     private var visibleRows: [RowItem] {
         var out: [RowItem] = []
-        if let w = snapshot.fiveHour {
+        if snapshot.provider != .codex, let w = snapshot.fiveHour {
             out.append(.live(label: "5h", window: w))
-        } else if expectsFiveHourWindow {
-            out.append(.placeholder(label: "5h", message: "近 5 小时无活动"))
         }
         if let w = snapshot.sevenDay { out.append(.live(label: "7d", window: w)) }
         return out
-    }
-
-    /// True only for paid Codex plans (Plus / Pro / Business), where Codex
-    /// emits both `primary` and `secondary` windows in every `token_count`
-    /// payload. Free-tier and Claude payloads don't carry a 5h window, so
-    /// reserving the slot would just confuse users on those plans.
-    private var expectsFiveHourWindow: Bool {
-        guard snapshot.provider == .codex,
-              let plan = snapshot.planLabel?.lowercased() else { return false }
-        return plan == "plus" || plan == "pro" || plan == "prolite" || plan == "business"
     }
 
     @ViewBuilder
@@ -234,6 +249,17 @@ private struct ProviderCard: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: hoveredLabel)
+    }
+
+    /// Shown while the first-ever read for this provider is in flight — we
+    /// don't yet know whether the plan has one row (free tier) or two
+    /// (5h + 7d), so two generic placeholder rows is the best guess that
+    /// keeps the card's footprint stable once real data lands.
+    private var loadingContent: some View {
+        VStack(alignment: .leading, spacing: rowSpacing) {
+            SkeletonQuotaRow().frame(height: rowHeight)
+            SkeletonQuotaRow().frame(height: rowHeight)
+        }
     }
 
     @ViewBuilder
@@ -450,6 +476,36 @@ private struct EmptyQuotaRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - Skeleton quota row
+
+/// Loading placeholder for one quota row — same label / bar / percent
+/// proportions as `QuotaRow` so the card doesn't jump in height once real
+/// data replaces it. Pulses gently rather than a full shimmer sweep, to stay
+/// in keeping with the card's otherwise static, minimal chrome.
+private struct SkeletonQuotaRow: View {
+    @State private var pulse = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(white: 0.16))
+                .frame(width: 20, height: 10)
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color(white: 0.16))
+                .frame(height: 6)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(white: 0.16))
+                .frame(width: 30, height: 10)
+        }
+        .opacity(pulse ? 0.75 : 0.35)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
         }
     }
 }

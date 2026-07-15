@@ -25,6 +25,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
     }
 
     enum Status: Equatable {
+        case loading                   // first read is in flight; no prior snapshot to show yet
         case ok
         case noData                    // provider isn't installed or has no recent activity
         case disabled                  // user hasn't opted into this provider's monitoring yet
@@ -40,6 +41,16 @@ struct ProviderRateLimit: Equatable, Identifiable {
     var sevenDaySonnet: RateLimitWindow?   // Claude Max plan only
     var extraUsage: ExtraUsage?
     var planLabel: String?                 // e.g. "free", "Plus", "Pro", "Max"
+    /// Number of unused manual rate-limit "reset" credits on the account
+    /// (Codex only). Each credit lets the user reset one usage window early.
+    /// nil = unknown / not applicable (free plan, API-key session, or the
+    /// local-file fallback which can't see this server-side value).
+    var resetCredits: Int?
     var status: Status
     var fetchedAt: Date?
+    /// True while a refresh is in flight. Independent of `status` so a
+    /// background refresh (popover reopened, manual "更新数据") can keep the
+    /// last-known numbers on screen instead of yanking them out for a spinner —
+    /// only a *first-ever* read (no prior snapshot) uses `.loading` for that.
+    var isFetching: Bool = false
 }

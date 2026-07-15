@@ -59,6 +59,14 @@ final class MenuBarController: NSObject {
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
     private var isAnimating = false
+    private var rateLimitPollTimer: Timer?
+
+    /// While the panel is open, poll for fresher quota numbers so a user
+    /// watching the card doesn't have to close/reopen to see it update.
+    /// Shorter than the coordinator's 60s per-provider cooldown so a tick
+    /// never misses the moment that cooldown lapses; the cooldown itself
+    /// (not this interval) is what actually paces the real reads.
+    private static let rateLimitPollInterval: TimeInterval = 20
 
     /// Both surfaces want the panel lowered to `.normal` while they're up, and
     /// they can overlap (e.g. an update session started from Settings). Each
@@ -263,15 +271,35 @@ final class MenuBarController: NSObject {
         panel.makeKeyAndOrderFront(nil)
         animateOpen(panel)
         installEventMonitors()
+        startRateLimitPolling()
     }
 
     private func closePanel() {
         guard let panel, panel.isVisible, !isAnimating else { return }
+        stopRateLimitPolling()
         animateClose(panel) { [weak self] in
             panel.orderOut(nil)
             ActivationCoordinator.shared.popupDidClose()
             self?.removeEventMonitors()
         }
+    }
+
+    /// Re-fires the same debounced refresh popover-open already uses — this
+    /// timer just decides *when* to ask, the coordinator's 60s cooldown still
+    /// decides whether that ask turns into an actual file read. Local-file
+    /// reads only, so this is free background work, not a new network poll.
+    private func startRateLimitPolling() {
+        stopRateLimitPolling()
+        rateLimitPollTimer = Timer.scheduledTimer(withTimeInterval: Self.rateLimitPollInterval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { await self.appState.refreshCodexRateLimitIfNeeded() }
+            Task { await self.appState.refreshClaudeRateLimitIfNeeded() }
+        }
+    }
+
+    private func stopRateLimitPolling() {
+        rateLimitPollTimer?.invalidate()
+        rateLimitPollTimer = nil
     }
 
     private func ensurePanel() -> PopoverPanel {
