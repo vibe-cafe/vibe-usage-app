@@ -187,4 +187,117 @@ struct CodexUsageAPITests {
         """
         #expect(CodexUsageAPI.parseChatGPTBaseURL(toml) == nil)
     }
+
+    // MARK: - Snapshot cache
+
+    private func tempCacheURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("vibe-usage-tests-\(UUID().uuidString)")
+            .appendingPathComponent("codex-rate-limits.json")
+    }
+
+    @Test
+    func cacheRoundTripPreservesLiveFields() throws {
+        let url = tempCacheURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_784_000_000)
+        let live = ProviderRateLimit(
+            provider: .codex,
+            sevenDay: RateLimitWindow(
+                utilization: 42,
+                resetsAt: fetchedAt.addingTimeInterval(3 * 86_400),
+                windowDuration: 604_800
+            ),
+            planLabel: "Plus",
+            status: .ok,
+            fetchedAt: fetchedAt,
+            dataAsOf: fetchedAt,
+            fiveHourNotEnforced: true,
+            resetCreditsCount: 3
+        )
+        CodexUsageAPI.cache(live, to: url)
+
+        let now = fetchedAt.addingTimeInterval(600)
+        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now))
+
+        #expect(cached.status == .ok)
+        #expect(cached.sevenDay?.utilization == 42)
+        #expect(cached.sevenDay?.windowDuration == 604_800)
+        #expect(cached.planLabel == "Plus")
+        #expect(cached.fiveHourNotEnforced)
+        #expect(cached.resetCreditsCount == 3)
+        // dataAsOf must survive as the ORIGINAL fetch time (drives the
+        // 「数据截至」 note), while fetchedAt reflects the read.
+        #expect(cached.dataAsOf == fetchedAt)
+        #expect(cached.fetchedAt == now)
+    }
+
+    /// A cached window whose reset has passed is provably rolled over — its
+    /// percentage belongs to the previous window and must not be painted.
+    /// The surviving window keeps the card useful.
+    @Test
+    func cachedSnapshotDropsExpiredWindowsIndependently() throws {
+        let url = tempCacheURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_784_000_000)
+        let live = ProviderRateLimit(
+            provider: .codex,
+            fiveHour: RateLimitWindow(
+                utilization: 80,
+                resetsAt: fetchedAt.addingTimeInterval(3600),
+                windowDuration: 18_000
+            ),
+            sevenDay: RateLimitWindow(
+                utilization: 42,
+                resetsAt: fetchedAt.addingTimeInterval(3 * 86_400),
+                windowDuration: 604_800
+            ),
+            status: .ok,
+            fetchedAt: fetchedAt,
+            dataAsOf: fetchedAt
+        )
+        CodexUsageAPI.cache(live, to: url)
+
+        // Two hours later the 5h window has reset; the weekly one hasn't.
+        let now = fetchedAt.addingTimeInterval(2 * 3600)
+        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now))
+
+        #expect(cached.fiveHour == nil)
+        // An expiry-dropped 5h window says nothing about enforcement.
+        #expect(!cached.fiveHourNotEnforced)
+        #expect(cached.sevenDay?.utilization == 42)
+    }
+
+    /// All windows expired → nil, so the paint step shows nothing rather than
+    /// confidently-wrong percentages. Weekly resets within 7 days, so this is
+    /// also the natural age cap for the whole cache.
+    @Test
+    func cachedSnapshotNilWhenEveryWindowExpired() {
+        let url = tempCacheURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_784_000_000)
+        let live = ProviderRateLimit(
+            provider: .codex,
+            sevenDay: RateLimitWindow(
+                utilization: 42,
+                resetsAt: fetchedAt.addingTimeInterval(86_400),
+                windowDuration: 604_800
+            ),
+            status: .ok,
+            fetchedAt: fetchedAt,
+            dataAsOf: fetchedAt
+        )
+        CodexUsageAPI.cache(live, to: url)
+
+        let now = fetchedAt.addingTimeInterval(8 * 86_400)
+        #expect(CodexUsageAPI.cachedSnapshot(from: url, now: now) == nil)
+    }
+
+    @Test
+    func cachedSnapshotNilWhenFileMissing() {
+        #expect(CodexUsageAPI.cachedSnapshot(from: tempCacheURL()) == nil)
+    }
 }

@@ -54,6 +54,7 @@ enum CodexUsageAPI {
         guard let snapshot = parseUsageResponse(data, now: now) else {
             throw FetchError.unparseable
         }
+        cache(snapshot)
         return snapshot
     }
 
@@ -272,5 +273,105 @@ enum CodexUsageAPI {
     private static func formatPlanLabel(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
         return raw.prefix(1).uppercased() + raw.dropFirst()
+    }
+
+    // MARK: - Snapshot cache (~/.vibe-usage/codex-rate-limits.json)
+
+    /// The last successful live snapshot, persisted so the next popover open
+    /// (including after an app relaunch) paints instantly from data that is at
+    /// most as old as the previous refresh. This is what keeps the session-JSONL
+    /// scan off the happy path entirely: as an instant-paint source the JSONL
+    /// is both slower (the sessions tree can be hundreds of MB) and staler
+    /// (it only updates while Codex is running) than our own last fetch.
+    ///
+    /// Deliberately a minimal DTO rather than the raw response: the endpoint
+    /// payload carries account email / user ids we have no reason to write to
+    /// disk. Windows whose reset has passed are dropped on load (same
+    /// provably-rolled-over reasoning as `CodexRateLimitReader.parseWindow`);
+    /// the weekly window resets within 7 days, so a dead cache naturally
+    /// filters down to nil without a separate age cap.
+    private struct CachedSnapshot: Codable {
+        struct Window: Codable {
+            var utilization: Double
+            var resetsAt: Date?
+            var windowDuration: TimeInterval?
+        }
+
+        var fetchedAt: Date
+        var fiveHour: Window?
+        var sevenDay: Window?
+        var planLabel: String?
+        var fiveHourNotEnforced: Bool
+        var resetCreditsCount: Int?
+    }
+
+    static var cacheFileURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".vibe-usage")
+            .appendingPathComponent("codex-rate-limits.json")
+    }
+
+    /// Best-effort: a failed write just means the next cold open falls back to
+    /// the network wait (spinner), never an error state.
+    static func cache(_ snapshot: ProviderRateLimit, to url: URL = cacheFileURL) {
+        guard snapshot.status == .ok else { return }
+        func window(_ w: RateLimitWindow?) -> CachedSnapshot.Window? {
+            w.map { .init(utilization: $0.utilization, resetsAt: $0.resetsAt, windowDuration: $0.windowDuration) }
+        }
+        let cached = CachedSnapshot(
+            fetchedAt: snapshot.dataAsOf ?? Date(),
+            fiveHour: window(snapshot.fiveHour),
+            sevenDay: window(snapshot.sevenDay),
+            planLabel: snapshot.planLabel,
+            fiveHourNotEnforced: snapshot.fiveHourNotEnforced,
+            resetCreditsCount: snapshot.resetCreditsCount
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(cached) else { return }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// nil when there is no cache or every cached window has already reset —
+    /// painting a provably rolled-over percentage would be confidently wrong.
+    static func cachedSnapshot(from url: URL = cacheFileURL, now: Date = Date()) -> ProviderRateLimit? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let cached = try? decoder.decode(CachedSnapshot.self, from: data) else { return nil }
+
+        func liveWindow(_ w: CachedSnapshot.Window?) -> RateLimitWindow? {
+            guard let w else { return nil }
+            if let resetsAt = w.resetsAt, resetsAt <= now { return nil }
+            return RateLimitWindow(
+                utilization: w.utilization,
+                resetsAt: w.resetsAt,
+                windowDuration: w.windowDuration
+            )
+        }
+
+        let fiveHour = liveWindow(cached.fiveHour)
+        let sevenDay = liveWindow(cached.sevenDay)
+        guard fiveHour != nil || sevenDay != nil else { return nil }
+
+        return ProviderRateLimit(
+            provider: .codex,
+            fiveHour: fiveHour,
+            sevenDay: sevenDay,
+            planLabel: cached.planLabel,
+            status: .ok,
+            fetchedAt: now,
+            dataAsOf: cached.fetchedAt,
+            // Only honor the cached "not enforced" assertion when the 5h slot
+            // was empty at fetch time. A 5h window dropped just now for being
+            // expired says nothing about enforcement — that placeholder should
+            // read as "no data", and the live result corrects it in ~1s anyway.
+            fiveHourNotEnforced: cached.fiveHour == nil && cached.fiveHourNotEnforced,
+            resetCreditsCount: cached.resetCreditsCount
+        )
     }
 }

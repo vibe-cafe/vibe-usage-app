@@ -29,12 +29,18 @@ final class RateLimitCoordinator {
         appState.isCodexRateLimitRefreshing = true
         defer { appState.isCodexRateLimitRefreshing = false }
 
-        // Instant paint: if nothing usable is on screen yet, surface the local
-        // JSONL snapshot first so the card doesn't sit empty for the ~1s the
-        // network round-trip takes. The live result replaces it right after.
-        if currentSnapshot(.codex)?.status != .ok {
-            let cached = await Self.readCodexSessionFiles()
-            if cached.status == .ok { upsert(cached) }
+        // Instant paint: if nothing usable is on screen yet, surface the last
+        // *live* snapshot (single small file, negligible read) so the card
+        // doesn't sit empty for the ~1s the network round-trip takes. That
+        // cache beats the session JSONL as a paint source on both axes: it is
+        // at most as old as the previous successful refresh (the JSONL only
+        // updates while Codex is running) and it never walks the sessions
+        // tree (which can be hundreds of MB). Expired windows are filtered on
+        // load; the live result replaces the paint right after.
+        if currentSnapshot(.codex)?.status != .ok,
+           let cached = await Self.loadCachedCodexSnapshot(),
+           currentSnapshot(.codex)?.status != .ok {
+            upsert(cached)
         }
 
         do {
@@ -148,6 +154,12 @@ final class RateLimitCoordinator {
     private nonisolated static func readCodexSessionFiles() async -> ProviderRateLimit {
         await Task.detached(priority: .userInitiated) {
             CodexRateLimitReader.read()
+        }.value
+    }
+
+    private nonisolated static func loadCachedCodexSnapshot() async -> ProviderRateLimit? {
+        await Task.detached(priority: .userInitiated) {
+            CodexUsageAPI.cachedSnapshot()
         }.value
     }
 

@@ -154,10 +154,14 @@ private struct ProviderCard: View {
             }
         case .unauthorized:
             // Only Codex reaches this state today: the live endpoint rejected
-            // the token even after re-reading auth.json, so the fix genuinely
-            // is a CLI re-login (retry alone won't help, but stays available
-            // for the post-login refresh).
-            messageContent(text: "登录已过期，请在 \(snapshot.provider.rawValue) 重新登录", action: "重试")
+            // the token even after re-reading auth.json. The accurate remedy is
+            // "use the CLI once" — the CLI silently refreshes its own token on
+            // next use (we are a read-only consumer of its credentials and
+            // never run the refresh grant ourselves), and if the session is
+            // truly revoked, opening the CLI surfaces the re-login prompt too.
+            // Telling the user to "re-login" would be wrong advice in the
+            // common expired-while-idle case.
+            messageContent(text: "请打开 \(snapshot.provider.rawValue) 使用一次后重试", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:
             if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
