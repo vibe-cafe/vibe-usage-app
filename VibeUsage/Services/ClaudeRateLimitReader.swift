@@ -60,7 +60,8 @@ enum ClaudeRateLimitReader {
             return .init(provider: .claudeCode, status: .noData, fetchedAt: Date())
         }
 
-        if let capturedAt = (obj["captured_at"] as? Double).map({ Date(timeIntervalSince1970: $0) }) {
+        let capturedAt = (obj["captured_at"] as? Double).map { Date(timeIntervalSince1970: $0) }
+        if let capturedAt {
             let age = Date().timeIntervalSince(capturedAt)
             if age > stalenessThreshold {
                 debugLog("[rate-limit] capture is stale by \(Int(age))s (Claude Code may be idle)")
@@ -76,7 +77,10 @@ enum ClaudeRateLimitReader {
             // distinguish Pro vs Max from this payload, so leave the label nil.
             planLabel: nil,
             status: .ok,
-            fetchedAt: Date()
+            fetchedAt: Date(),
+            // Statusline captures age silently while Claude Code is idle; the
+            // card surfaces that as 「数据截至 N 分钟前」 instead of logging only.
+            dataAsOf: capturedAt
         )
     }
 

@@ -162,6 +162,13 @@ final class AppState {
     }
     var rateLimits: [ProviderRateLimit] = []
 
+    /// True while the corresponding provider's refresh is in flight — the card
+    /// header shows a mini spinner. Codex refreshes now include a network
+    /// round-trip (~1s), so unlike the old file-only reads the latency is
+    /// user-perceivable and needs an indicator.
+    var isCodexRateLimitRefreshing: Bool = false
+    var isClaudeRateLimitRefreshing: Bool = false
+
     /// Enabling Claude rate-limit monitoring installs a wrapper into Claude
     /// Code's `statusLine.command` (see `StatuslineHook`). Because that edits
     /// the user's Claude settings, we gate it behind an explicit opt-in click.
@@ -384,10 +391,18 @@ final class AppState {
         await rateLimitCoordinator?.refreshClaudeIfNeeded()
     }
 
-    /// Refresh both Codex and Claude. Both are auth-free local-file reads now,
-    /// so this is cheap and safe to call from any user-initiated path.
+    /// Refresh both Codex and Claude (in parallel). Prompt-free: Codex hits the
+    /// zero-quota usage endpoint with the CLI's own token, Claude reads the
+    /// local capture file. Safe to call from any user-initiated path.
     func refreshAllRateLimits() async {
         await rateLimitCoordinator?.refreshAll()
+    }
+
+    /// The menu-bar panel opened or closed. While it is visible the coordinator
+    /// watches the Claude capture directory so a statusline render updates the
+    /// card live; closing stops the watcher (nothing to update off-screen).
+    func rateLimitPanelVisibilityChanged(visible: Bool) {
+        rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
     /// Enable Claude rate-limit monitoring: install the statusline wrapper into

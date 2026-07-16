@@ -42,4 +42,20 @@ struct ProviderRateLimit: Equatable, Identifiable {
     var planLabel: String?                 // e.g. "free", "Plus", "Pro", "Max"
     var status: Status
     var fetchedAt: Date?
+
+    /// When the numbers were actually *produced*, as opposed to `fetchedAt`
+    /// (when we read them). Live network snapshots set this to now; file-based
+    /// snapshots inherit the event/capture timestamp, so the card can say
+    /// 「数据截至 N 分钟前」 instead of presenting idle-era data as current.
+    var dataAsOf: Date?
+
+    /// Codex only: the usage endpoint reports enforced windows exhaustively,
+    /// so a missing 5h window there means the limit is switched off (OpenAI
+    /// removed it on 2026-07-12), not "no recent activity". Drives the 5h
+    /// placeholder copy. Always false for file-based snapshots, which cannot
+    /// tell the two apart.
+    var fiveHourNotEnforced: Bool = false
+
+    /// Codex only: available rate-limit reset credits (nil when unknown or 0).
+    var resetCreditsCount: Int?
 }

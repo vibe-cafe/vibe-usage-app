@@ -87,6 +87,13 @@ private struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
+            if snapshot.status == .ok, let note = footerNote {
+                Text(note)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Color(white: 0.38))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
@@ -117,6 +124,10 @@ private struct ProviderCard: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
             Spacer()
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.mini)
+            }
             if let label = snapshot.planLabel {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
@@ -141,7 +152,12 @@ private struct ProviderCard: View {
             } else {
                 disabledContent
             }
-        case .unauthorized: messageContent(text: "未授权或登录已过期", action: "重试")
+        case .unauthorized:
+            // Only Codex reaches this state today: the live endpoint rejected
+            // the token even after re-reading auth.json, so the fix genuinely
+            // is a CLI re-login (retry alone won't help, but stays available
+            // for the post-login refresh).
+            messageContent(text: "登录已过期，请在 \(snapshot.provider.rawValue) 重新登录", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:
             if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
@@ -182,7 +198,13 @@ private struct ProviderCard: View {
         if let w = snapshot.fiveHour {
             out.append(.live(label: "5h", window: w))
         } else if expectsFiveHourWindow {
-            out.append(.placeholder(label: "5h", message: "近 5 小时无活动"))
+            // Two different truths behind a missing 5h window: the live
+            // endpoint asserts the limit is switched off provider-side, while
+            // a JSONL snapshot can only mean "no event carried it recently".
+            out.append(.placeholder(
+                label: "5h",
+                message: snapshot.fiveHourNotEnforced ? "官方当前未启用" : "近 5 小时无活动"
+            ))
         }
         if let w = snapshot.sevenDay { out.append(.live(label: "7d", window: w)) }
         return out
@@ -266,6 +288,35 @@ private struct ProviderCard: View {
         case "7d": return "7 天窗口"
         default:   return label
         }
+    }
+
+    // MARK: Freshness / footer
+
+    private var isRefreshing: Bool {
+        switch snapshot.provider {
+        case .codex:      return appState.isCodexRateLimitRefreshing
+        case .claudeCode: return appState.isClaudeRateLimitRefreshing
+        }
+    }
+
+    /// Data older than this gets a 「数据截至」 note. Claude captures age
+    /// whenever Claude Code is idle and JSONL fallbacks age with Codex — both
+    /// are normal, so the threshold is generous enough not to nag about a
+    /// snapshot from a coffee break, while a live fetch (dataAsOf ≈ now)
+    /// never shows the note.
+    private static let staleNoteThreshold: TimeInterval = 5 * 60
+
+    /// One quiet tertiary line under the quota rows; segments joined by 「 · 」.
+    private var footerNote: String? {
+        var notes: [String] = []
+        if let asOf = snapshot.dataAsOf,
+           Date().timeIntervalSince(asOf) > Self.staleNoteThreshold {
+            notes.append("数据截至 \(Formatters.formatRelativeTime(asOf))")
+        }
+        if let credits = snapshot.resetCreditsCount, credits > 0 {
+            notes.append("重置券 ×\(credits)")
+        }
+        return notes.isEmpty ? nil : notes.joined(separator: " · ")
     }
 
     // MARK: Disabled / error states
