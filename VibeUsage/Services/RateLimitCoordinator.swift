@@ -16,9 +16,35 @@ final class RateLimitCoordinator {
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
     private var claudeCaptureWatcher: DirectoryWatcher?
+    private var codexRefreshTask: Task<Void, Never>?
+    private var codexRefreshID: UUID?
+    private var claudeRefreshTask: Task<Void, Never>?
+    private var claudeRefreshID: UUID?
+    private let fetchCodexLive: @MainActor () async throws -> ProviderRateLimit
+    private let loadCodexCache: @MainActor () async -> ProviderRateLimit?
+    private let readCodexFallback: @MainActor () async -> ProviderRateLimit
+    private let readClaudeSnapshot: @MainActor () async -> ProviderRateLimit
 
-    init(appState: AppState) {
+    init(
+        appState: AppState,
+        fetchCodexLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
+            try await CodexUsageAPI.fetch()
+        },
+        loadCodexCache: @escaping @MainActor () async -> ProviderRateLimit? = {
+            await RateLimitCoordinator.loadCachedCodexSnapshot()
+        },
+        readCodexFallback: @escaping @MainActor () async -> ProviderRateLimit = {
+            await RateLimitCoordinator.readCodexSessionFiles()
+        },
+        readClaudeSnapshot: @escaping @MainActor () async -> ProviderRateLimit = {
+            await RateLimitCoordinator.readClaudeCapture()
+        }
+    ) {
         self.appState = appState
+        self.fetchCodexLive = fetchCodexLive
+        self.loadCodexCache = loadCodexCache
+        self.readCodexFallback = readCodexFallback
+        self.readClaudeSnapshot = readClaudeSnapshot
     }
 
     /// Refresh Codex unconditionally: live endpoint first, JSONL fallback.
@@ -26,8 +52,32 @@ final class RateLimitCoordinator {
     /// debounced `refreshCodexIfNeeded` to avoid repeat work on rapid open/close.
     func refreshCodex() async {
         guard let appState, appState.codexRateLimitEnabled else { return }
+        if let task = codexRefreshTask {
+            await task.value
+            return
+        }
+
+        let refreshID = UUID()
         appState.isCodexRateLimitRefreshing = true
-        defer { appState.isCodexRateLimitRefreshing = false }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performCodexRefresh()
+        }
+        codexRefreshID = refreshID
+        codexRefreshTask = task
+        await task.value
+
+        // A cancelled task may finish after a new refresh has already started.
+        // Only the task that still owns the slot may clear it or the spinner.
+        if codexRefreshID == refreshID {
+            codexRefreshTask = nil
+            codexRefreshID = nil
+            appState.isCodexRateLimitRefreshing = false
+        }
+    }
+
+    private func performCodexRefresh() async {
+        guard let appState, appState.codexRateLimitEnabled else { return }
 
         // Instant paint: if nothing usable is on screen yet, surface the last
         // *live* snapshot (single small file, negligible read) so the card
@@ -38,13 +88,17 @@ final class RateLimitCoordinator {
         // tree (which can be hundreds of MB). Expired windows are filtered on
         // load; the live result replaces the paint right after.
         if currentSnapshot(.codex)?.status != .ok,
-           let cached = await Self.loadCachedCodexSnapshot(),
+           let cached = await loadCodexCache(),
+           !Task.isCancelled,
+           appState.codexRateLimitEnabled,
            currentSnapshot(.codex)?.status != .ok {
             upsert(cached)
         }
 
         do {
-            upsert(try await CodexUsageAPI.fetch())
+            let live = try await fetchCodexLive()
+            guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
+            upsert(live)
         } catch is CancellationError {
             return
         } catch CodexUsageAPI.FetchError.unauthorized {
@@ -52,10 +106,11 @@ final class RateLimitCoordinator {
             // is logged out of Codex. Stale JSONL data (if any) still renders,
             // with its 「数据截至」 note; otherwise surface the re-login state.
             debugLog("[rate-limit] codex live fetch unauthorized — user logged out of Codex CLI")
-            let cached = await Self.readCodexSessionFiles()
-            if cached.status == .ok {
-                upsert(cached)
-            } else {
+            let fallback = await readCodexFallback()
+            guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
+            if fallback.status == .ok {
+                upsertIfNewer(fallback)
+            } else if currentSnapshot(.codex)?.status != .ok {
                 upsert(ProviderRateLimit(provider: .codex, status: .unauthorized, fetchedAt: Date()))
             }
         } catch {
@@ -65,11 +120,15 @@ final class RateLimitCoordinator {
             // it — its 「数据截至」 note communicates the age honestly, which
             // beats collapsing the card over a transient network blip.
             debugLog("[rate-limit] codex live fetch failed (\(error)) — falling back to session JSONL")
-            let cached = await Self.readCodexSessionFiles()
-            if cached.status == .ok || currentSnapshot(.codex)?.status != .ok {
-                upsert(cached)
+            let fallback = await readCodexFallback()
+            guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
+            if fallback.status == .ok {
+                upsertIfNewer(fallback)
+            } else if currentSnapshot(.codex)?.status != .ok {
+                upsert(fallback)
             }
         }
+        guard !Task.isCancelled else { return }
         lastCodexFetchAt = Date()
     }
 
@@ -87,12 +146,33 @@ final class RateLimitCoordinator {
     /// cheap; only runs while Claude monitoring is enabled.
     func refreshClaude() async {
         guard let appState, appState.claudeRateLimitEnabled else { return }
+        if let task = claudeRefreshTask {
+            await task.value
+            return
+        }
+
+        let refreshID = UUID()
         appState.isClaudeRateLimitRefreshing = true
-        defer { appState.isClaudeRateLimitRefreshing = false }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performClaudeRefresh()
+        }
+        claudeRefreshID = refreshID
+        claudeRefreshTask = task
+        await task.value
+
+        if claudeRefreshID == refreshID {
+            claudeRefreshTask = nil
+            claudeRefreshID = nil
+            appState.isClaudeRateLimitRefreshing = false
+        }
+    }
+
+    private func performClaudeRefresh() async {
+        guard let appState, appState.claudeRateLimitEnabled else { return }
         debugLog("[rate-limit] refreshClaude() entered")
-        let snapshot = await Task.detached(priority: .userInitiated) {
-            ClaudeRateLimitReader.read()
-        }.value
+        let snapshot = await readClaudeSnapshot()
+        guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
         debugLog("[rate-limit] refreshClaude() got snapshot status=\(snapshot.status)")
         upsert(snapshot)
         lastClaudeFetchAt = Date()
@@ -139,6 +219,7 @@ final class RateLimitCoordinator {
         guard visible else {
             claudeCaptureWatcher?.stop()
             claudeCaptureWatcher = nil
+            cancelCodexRefresh()
             return
         }
         guard appState?.claudeRateLimitEnabled == true, claudeCaptureWatcher == nil else { return }
@@ -151,20 +232,86 @@ final class RateLimitCoordinator {
 
     // MARK: - Helpers
 
+    /// Stop network work when the UI that requested it disappears. The
+    /// generation id prevents a late completion from clearing a newer task.
+    func cancelCodexRefresh() {
+        codexRefreshTask?.cancel()
+        codexRefreshTask = nil
+        codexRefreshID = nil
+        appState?.isCodexRateLimitRefreshing = false
+    }
+
+    func cancelClaudeRefresh() {
+        claudeRefreshTask?.cancel()
+        claudeRefreshTask = nil
+        claudeRefreshID = nil
+        appState?.isClaudeRateLimitRefreshing = false
+    }
+
     private nonisolated static func readCodexSessionFiles() async -> ProviderRateLimit {
-        await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             CodexRateLimitReader.read()
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     private nonisolated static func loadCachedCodexSnapshot() async -> ProviderRateLimit? {
-        await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             CodexUsageAPI.cachedSnapshot()
-        }.value
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private nonisolated static func readClaudeCapture() async -> ProviderRateLimit {
+        let task = Task.detached(priority: .userInitiated) {
+            ClaudeRateLimitReader.read()
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     private func currentSnapshot(_ provider: ProviderRateLimit.Provider) -> ProviderRateLimit? {
         appState?.rateLimits.first { $0.provider == provider }
+    }
+
+    /// Fallback data may replace the current card only when it was produced
+    /// later. This prevents a network failure from making utilization visibly
+    /// jump backwards from a recent live cache to an older session event.
+    @discardableResult
+    private func upsertIfNewer(_ candidate: ProviderRateLimit) -> Bool {
+        guard Self.isNewerSnapshot(candidate, than: currentSnapshot(candidate.provider)) else {
+            return false
+        }
+        upsert(candidate)
+        return true
+    }
+
+    nonisolated static func isNewerSnapshot(
+        _ candidate: ProviderRateLimit,
+        than current: ProviderRateLimit?
+    ) -> Bool {
+        guard candidate.status == .ok else { return false }
+        guard let current, current.status == .ok else { return true }
+
+        let candidateDate = candidate.dataAsOf ?? candidate.fetchedAt
+        let currentDate = current.dataAsOf ?? current.fetchedAt
+        switch (candidateDate, currentDate) {
+        case let (candidateDate?, currentDate?): return candidateDate > currentDate
+        case (_?, nil): return true
+        case (nil, _?): return false
+        case (nil, nil): return false
+        }
     }
 
     private func upsert(_ snapshot: ProviderRateLimit) {

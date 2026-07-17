@@ -109,6 +109,32 @@ struct CodexUsageAPITests {
         #expect(CodexUsageAPI.parseUsageResponse(Data(json.utf8)) == nil)
     }
 
+    /// A present-but-malformed window is schema drift, not evidence that the
+    /// provider disabled that limit. Reject the whole live payload so callers
+    /// can fall back to a source that does not make a false assertion.
+    @Test
+    func rejectsMalformedNonNullWindowInsteadOfClaimingNotEnforced() {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "primary_window": {
+              "used_percent": 42,
+              "limit_window_seconds": 604800,
+              "reset_at": 1784680014
+            },
+            "secondary_window": {
+              "used_percent": "unexpected-string",
+              "limit_window_seconds": 18000,
+              "reset_at": 1784100000
+            }
+          }
+        }
+        """
+
+        #expect(CodexUsageAPI.parseUsageResponse(Data(json.utf8)) == nil)
+    }
+
     // MARK: - auth.json parsing
 
     @Test
@@ -196,6 +222,13 @@ struct CodexUsageAPITests {
             .appendingPathComponent("codex-rate-limits.json")
     }
 
+    private var testScope: String {
+        CodexUsageAPI.cacheScope(
+            accountID: "account-a",
+            usageURL: URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        )!
+    }
+
     @Test
     func cacheRoundTripPreservesLiveFields() throws {
         let url = tempCacheURL()
@@ -216,10 +249,14 @@ struct CodexUsageAPITests {
             fiveHourNotEnforced: true,
             resetCreditsCount: 3
         )
-        CodexUsageAPI.cache(live, to: url)
+        CodexUsageAPI.cache(live, scope: testScope, to: url)
+
+        let persisted = try String(contentsOf: url, encoding: .utf8)
+        #expect(!persisted.contains("account-a"))
+        #expect(!persisted.contains("chatgpt.com"))
 
         let now = fetchedAt.addingTimeInterval(600)
-        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now))
+        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: testScope))
 
         #expect(cached.status == .ok)
         #expect(cached.sevenDay?.utilization == 42)
@@ -258,11 +295,11 @@ struct CodexUsageAPITests {
             fetchedAt: fetchedAt,
             dataAsOf: fetchedAt
         )
-        CodexUsageAPI.cache(live, to: url)
+        CodexUsageAPI.cache(live, scope: testScope, to: url)
 
         // Two hours later the 5h window has reset; the weekly one hasn't.
         let now = fetchedAt.addingTimeInterval(2 * 3600)
-        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now))
+        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: testScope))
 
         #expect(cached.fiveHour == nil)
         // An expiry-dropped 5h window says nothing about enforcement.
@@ -290,14 +327,54 @@ struct CodexUsageAPITests {
             fetchedAt: fetchedAt,
             dataAsOf: fetchedAt
         )
-        CodexUsageAPI.cache(live, to: url)
+        CodexUsageAPI.cache(live, scope: testScope, to: url)
 
         let now = fetchedAt.addingTimeInterval(8 * 86_400)
-        #expect(CodexUsageAPI.cachedSnapshot(from: url, now: now) == nil)
+        #expect(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: testScope) == nil)
     }
 
     @Test
     func cachedSnapshotNilWhenFileMissing() {
-        #expect(CodexUsageAPI.cachedSnapshot(from: tempCacheURL()) == nil)
+        #expect(CodexUsageAPI.cachedSnapshot(from: tempCacheURL(), scope: testScope) == nil)
+    }
+
+    @Test
+    func cachedSnapshotRejectsDifferentAccountOrEndpointScope() {
+        let url = tempCacheURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_784_000_000)
+        let live = ProviderRateLimit(
+            provider: .codex,
+            sevenDay: RateLimitWindow(
+                utilization: 42,
+                resetsAt: fetchedAt.addingTimeInterval(86_400),
+                windowDuration: 604_800
+            ),
+            status: .ok,
+            fetchedAt: fetchedAt,
+            dataAsOf: fetchedAt
+        )
+        CodexUsageAPI.cache(live, scope: testScope, to: url)
+
+        let otherAccount = CodexUsageAPI.cacheScope(
+            accountID: "account-b",
+            usageURL: URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        )!
+        let otherEndpoint = CodexUsageAPI.cacheScope(
+            accountID: "account-a",
+            usageURL: URL(string: "https://proxy.example.com/api/codex/usage")!
+        )!
+        let now = fetchedAt.addingTimeInterval(60)
+
+        #expect(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: otherAccount) == nil)
+        #expect(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: otherEndpoint) == nil)
+    }
+
+    @Test
+    func cacheScopeRequiresAccountIdentity() {
+        let url = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        #expect(CodexUsageAPI.cacheScope(accountID: nil, usageURL: url) == nil)
+        #expect(CodexUsageAPI.cacheScope(accountID: "", usageURL: url) == nil)
     }
 }

@@ -50,7 +50,10 @@ struct RateLimitCardView: View {
         case .claudeCode:
             return true
         default:
-            return snap.status != .noData
+            // On a cold open there is no snapshot to render yet. Keep the card
+            // visible while the network-first refresh runs so its spinner and
+            // loading copy are not replaced by a misleading static notice.
+            return snap.status != .noData || appState.isCodexRateLimitRefreshing
         }
     }
 
@@ -87,12 +90,16 @@ private struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
-            if snapshot.status == .ok, let note = footerNote {
-                Text(note)
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(Color(white: 0.38))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            if snapshot.status == .ok {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    if let note = footerNote(at: context.date) {
+                        Text(note)
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(Color(white: 0.38))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -166,6 +173,10 @@ private struct ProviderCard: View {
         case .noData:
             if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
                 waitingForClaudeContent
+            } else if snapshot.provider == .codex && isRefreshing {
+                Text("正在读取订阅配额…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.5))
             } else {
                 EmptyView()
             }
@@ -311,11 +322,11 @@ private struct ProviderCard: View {
     private static let staleNoteThreshold: TimeInterval = 5 * 60
 
     /// One quiet tertiary line under the quota rows; segments joined by 「 · 」.
-    private var footerNote: String? {
+    private func footerNote(at now: Date) -> String? {
         var notes: [String] = []
         if let asOf = snapshot.dataAsOf,
-           Date().timeIntervalSince(asOf) > Self.staleNoteThreshold {
-            notes.append("数据截至 \(Formatters.formatRelativeTime(asOf))")
+           now.timeIntervalSince(asOf) > Self.staleNoteThreshold {
+            notes.append("数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))")
         }
         if let credits = snapshot.resetCreditsCount, credits > 0 {
             notes.append("重置券 ×\(credits)")

@@ -343,6 +343,7 @@ final class AppState {
             if rateLimitCoordinator == nil { startRateLimitCoordinator() }
             await refreshCodexRateLimit()
         } else {
+            rateLimitCoordinator?.cancelCodexRefresh()
             removeRateLimit(for: .codex)
         }
     }
@@ -360,6 +361,7 @@ final class AppState {
             switch StatuslineHook.uninstall() {
             case .success:
                 claudeRateLimitEnabled = false
+                rateLimitCoordinator?.cancelClaudeRefresh()
                 removeRateLimit(for: .claudeCode)
                 debugLog("[rate-limit] statusline hook uninstalled; original command restored")
             case .failure(let error):

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Fetches Codex rate limits live from the zero-quota usage endpoint the
@@ -19,7 +20,8 @@ import Foundation
 /// reset credits.
 ///
 /// `CodexRateLimitReader` stays as the offline fallback: the coordinator paints
-/// its snapshot instantly, then replaces it with the live response.
+/// the last account-scoped live cache instantly, then replaces it with the live
+/// response (or a newer JSONL event when the network is unavailable).
 enum CodexUsageAPI {
 
     /// Why a live fetch produced no snapshot. The coordinator maps these to
@@ -36,17 +38,28 @@ enum CodexUsageAPI {
     // MARK: - Fetch
 
     static func fetch(now: Date = Date()) async throws -> ProviderRateLimit {
-        guard let auth = loadAuth() else { throw FetchError.notLoggedIn }
+        guard var auth = loadAuth() else { throw FetchError.notLoggedIn }
+        var endpoint = usageURL()
 
-        var (data, status) = try await send(token: auth.accessToken, accountID: auth.accountID)
+        var (data, status) = try await send(
+            url: endpoint,
+            token: auth.accessToken,
+            accountID: auth.accountID
+        )
 
         // The CLI rotates this token routinely, so a 401 usually means our copy
         // is outdated, not that the user logged out. Re-read auth.json once and
         // retry. We deliberately do NOT run the OAuth refresh grant ourselves —
         // rewriting the CLI's credential file from a GUI app isn't worth the
         // risk, and the CLI refreshes on its own next run.
-        if status == 401, let fresh = loadAuth(), fresh.accessToken != auth.accessToken {
-            (data, status) = try await send(token: fresh.accessToken, accountID: fresh.accountID)
+        if status == 401, let fresh = loadAuth(), fresh != auth {
+            auth = fresh
+            endpoint = usageURL()
+            (data, status) = try await send(
+                url: endpoint,
+                token: fresh.accessToken,
+                accountID: fresh.accountID
+            )
         }
         if status == 401 { throw FetchError.unauthorized }
         guard status == 200 else { throw FetchError.badResponse(status) }
@@ -54,7 +67,10 @@ enum CodexUsageAPI {
         guard let snapshot = parseUsageResponse(data, now: now) else {
             throw FetchError.unparseable
         }
-        cache(snapshot)
+        try Task.checkCancellation()
+        if let scope = cacheScope(accountID: auth.accountID, usageURL: endpoint) {
+            cache(snapshot, scope: scope)
+        }
         return snapshot
     }
 
@@ -63,8 +79,8 @@ enum CodexUsageAPI {
     private static let maxAttempts = 3
     private static let requestTimeout: TimeInterval = 10
 
-    private static func send(token: String, accountID: String?) async throws -> (Data, Int) {
-        var request = URLRequest(url: usageURL())
+    private static func send(url: URL, token: String, accountID: String?) async throws -> (Data, Int) {
+        var request = URLRequest(url: url)
         request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -212,8 +228,13 @@ enum CodexUsageAPI {
         var fiveHour: RateLimitWindow?
         var sevenDay: RateLimitWindow?
         for slot in ["primary_window", "secondary_window"] {
-            guard let dict = rateLimit[slot] as? [String: Any],
-                  let parsed = parseWindow(dict, now: now) else { continue }
+            guard let raw = rateLimit[slot], !(raw is NSNull) else { continue }
+            // A non-null window that we cannot parse is schema drift, not proof
+            // that the provider stopped enforcing that window. Reject the live
+            // payload so the coordinator can fall back instead of making a
+            // confidently false "officially disabled" claim.
+            guard let dict = raw as? [String: Any],
+                  let parsed = parseWindow(dict, now: now) else { return nil }
             if parsed.seconds >= weeklyMinSeconds {
                 sevenDay = parsed.window
             } else {
@@ -286,10 +307,13 @@ enum CodexUsageAPI {
     ///
     /// Deliberately a minimal DTO rather than the raw response: the endpoint
     /// payload carries account email / user ids we have no reason to write to
-    /// disk. Windows whose reset has passed are dropped on load (same
+    /// disk. `scopeHash` binds the snapshot to the account + endpoint without
+    /// persisting either raw value, preventing a previous account's quota from
+    /// flashing after a login or proxy switch. Windows whose reset has passed
+    /// are dropped on load (same
     /// provably-rolled-over reasoning as `CodexRateLimitReader.parseWindow`);
-    /// the weekly window resets within 7 days, so a dead cache naturally
-    /// filters down to nil without a separate age cap.
+    /// the weekly window resets within 7 days, and a matching hard age cap
+    /// prevents a malformed window without reset metadata becoming immortal.
     private struct CachedSnapshot: Codable {
         struct Window: Codable {
             var utilization: Double
@@ -297,6 +321,7 @@ enum CodexUsageAPI {
             var windowDuration: TimeInterval?
         }
 
+        var scopeHash: String
         var fetchedAt: Date
         var fiveHour: Window?
         var sevenDay: Window?
@@ -311,14 +336,35 @@ enum CodexUsageAPI {
             .appendingPathComponent("codex-rate-limits.json")
     }
 
+    /// Stable, non-reversible identity for the quota namespace. An account id
+    /// is required: without one we cannot prove that a prior snapshot belongs
+    /// to the current login, so correctness wins over instant paint.
+    static func cacheScope(accountID: String?, usageURL: URL) -> String? {
+        guard let accountID, !accountID.isEmpty else { return nil }
+        let material = Data("\(usageURL.absoluteString)\u{0}\(accountID)".utf8)
+        return SHA256.hash(data: material)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func currentCacheScope() -> String? {
+        guard let auth = loadAuth() else { return nil }
+        return cacheScope(accountID: auth.accountID, usageURL: usageURL())
+    }
+
     /// Best-effort: a failed write just means the next cold open falls back to
     /// the network wait (spinner), never an error state.
-    static func cache(_ snapshot: ProviderRateLimit, to url: URL = cacheFileURL) {
+    static func cache(
+        _ snapshot: ProviderRateLimit,
+        scope: String,
+        to url: URL = cacheFileURL
+    ) {
         guard snapshot.status == .ok else { return }
         func window(_ w: RateLimitWindow?) -> CachedSnapshot.Window? {
             w.map { .init(utilization: $0.utilization, resetsAt: $0.resetsAt, windowDuration: $0.windowDuration) }
         }
         let cached = CachedSnapshot(
+            scopeHash: scope,
             fetchedAt: snapshot.dataAsOf ?? Date(),
             fiveHour: window(snapshot.fiveHour),
             sevenDay: window(snapshot.sevenDay),
@@ -336,13 +382,32 @@ enum CodexUsageAPI {
         try? data.write(to: url, options: .atomic)
     }
 
-    /// nil when there is no cache or every cached window has already reset —
-    /// painting a provably rolled-over percentage would be confidently wrong.
-    static func cachedSnapshot(from url: URL = cacheFileURL, now: Date = Date()) -> ProviderRateLimit? {
+    /// Production entry point. An unreadable auth file or missing account id
+    /// deliberately disables instant paint because the cache cannot be scoped
+    /// safely to the active login.
+    static func cachedSnapshot(now: Date = Date()) -> ProviderRateLimit? {
+        guard let scope = currentCacheScope() else { return nil }
+        return cachedSnapshot(from: cacheFileURL, now: now, scope: scope)
+    }
+
+    /// nil when the cache belongs to a different quota namespace, is too old,
+    /// or every cached window has already reset.
+    static func cachedSnapshot(
+        from url: URL,
+        now: Date = Date(),
+        scope: String
+    ) -> ProviderRateLimit? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let cached = try? decoder.decode(CachedSnapshot.self, from: data) else { return nil }
+        guard cached.scopeHash == scope else { return nil }
+
+        // `reset_at` is expected on live windows, but retain a hard age bound
+        // so a partially degraded payload can never create an immortal cache.
+        let maxCacheAge: TimeInterval = 7 * 86_400
+        let cacheAge = now.timeIntervalSince(cached.fetchedAt)
+        guard cacheAge >= 0, cacheAge <= maxCacheAge else { return nil }
 
         func liveWindow(_ w: CachedSnapshot.Window?) -> RateLimitWindow? {
             guard let w else { return nil }
