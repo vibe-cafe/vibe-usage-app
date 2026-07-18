@@ -59,6 +59,27 @@ struct CodexRateLimitReaderTests {
 
         #expect(snapshot.fiveHour?.utilization == 84)
     }
+
+    @Test
+    func readsSessionsFromCustomCodexHome() throws {
+        let fixture = try SessionFixture()
+        defer { fixture.remove() }
+
+        try fixture.writeRollout(
+            named: "rollout-custom-home.jsonl",
+            eventTimestamp: "2026-07-10T03:45:00Z",
+            primaryUsed: 73,
+            modifiedAt: try #require(parseFixtureDate("2026-07-10T03:46:00Z"))
+        )
+
+        let snapshot = CodexRateLimitReader.read(
+            codexHome: fixture.root,
+            now: try #require(parseFixtureDate("2026-07-10T04:00:00Z"))
+        )
+
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.fiveHour?.utilization == 73)
+    }
 }
 
 private struct SessionFixture {
@@ -68,7 +89,7 @@ private struct SessionFixture {
     init() throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexRateLimitReaderTests-\(UUID().uuidString)")
-        sessionsDir = root.appendingPathComponent("2026/07/10", isDirectory: true)
+        sessionsDir = root.appendingPathComponent("sessions/2026/07/10", isDirectory: true)
         try FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
     }
 

@@ -217,6 +217,7 @@ final class AppState {
     // MARK: - Services (initialized after launch)
     private var syncScheduler: SyncScheduler?
     private var rateLimitCoordinator: RateLimitCoordinator?
+    private var isRateLimitPanelVisible = false
     private var config: VibeUsageConfig?
 
     // MARK: - Lifecycle
@@ -361,7 +362,7 @@ final class AppState {
             switch StatuslineHook.uninstall() {
             case .success:
                 claudeRateLimitEnabled = false
-                rateLimitCoordinator?.cancelClaudeRefresh()
+                rateLimitCoordinator?.claudeMonitoringDidChange()
                 removeRateLimit(for: .claudeCode)
                 debugLog("[rate-limit] statusline hook uninstalled; original command restored")
             case .failure(let error):
@@ -404,6 +405,7 @@ final class AppState {
     /// watches the Claude capture directory so a statusline render updates the
     /// card live; closing stops the watcher (nothing to update off-screen).
     func rateLimitPanelVisibilityChanged(visible: Bool) {
+        isRateLimitPanelVisible = visible
         rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
@@ -422,6 +424,7 @@ final class AppState {
         case .success:
             claudeRateLimitInstallError = nil
             claudeRateLimitEnabled = true
+            rateLimitCoordinator?.claudeMonitoringDidChange()
             await rateLimitCoordinator?.refreshClaude()
             debugLog("[rate-limit] statusline hook installed; Claude capture enabled")
 
@@ -458,9 +461,10 @@ final class AppState {
     private func startRateLimitCoordinator() {
         let coord = RateLimitCoordinator(appState: self)
         coord.seedPlaceholders()
-        // No background loop — Codex refreshes on popover open (debounced),
-        // Claude only on user-initiated actions.
         self.rateLimitCoordinator = coord
+        // Preserve panel state even when the coordinator is created lazily
+        // after the panel opened (for example, both providers started off).
+        coord.panelVisibilityChanged(visible: isRateLimitPanelVisible)
     }
 
     private func startScheduler() {

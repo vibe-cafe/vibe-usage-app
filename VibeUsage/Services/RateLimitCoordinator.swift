@@ -15,6 +15,7 @@ final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
+    private var isPanelVisible = false
     private var claudeCaptureWatcher: DirectoryWatcher?
     private var codexRefreshTask: Task<Void, Never>?
     private var codexRefreshID: UUID?
@@ -24,6 +25,7 @@ final class RateLimitCoordinator {
     private let loadCodexCache: @MainActor () async -> ProviderRateLimit?
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
     private let readClaudeSnapshot: @MainActor () async -> ProviderRateLimit
+    private let claudeCaptureDirectory: URL
 
     init(
         appState: AppState,
@@ -38,13 +40,15 @@ final class RateLimitCoordinator {
         },
         readClaudeSnapshot: @escaping @MainActor () async -> ProviderRateLimit = {
             await RateLimitCoordinator.readClaudeCapture()
-        }
+        },
+        claudeCaptureDirectory: URL = StatuslineHook.rateLimitFileURL.deletingLastPathComponent()
     ) {
         self.appState = appState
         self.fetchCodexLive = fetchCodexLive
         self.loadCodexCache = loadCodexCache
         self.readCodexFallback = readCodexFallback
         self.readClaudeSnapshot = readClaudeSnapshot
+        self.claudeCaptureDirectory = claudeCaptureDirectory
     }
 
     /// Refresh Codex unconditionally: live endpoint first, JSONL fallback.
@@ -216,18 +220,44 @@ final class RateLimitCoordinator {
     /// the next open. Codex needs no equivalent — its live source is the
     /// endpoint, refreshed on open.
     func panelVisibilityChanged(visible: Bool) {
-        guard visible else {
+        isPanelVisible = visible
+        reconcileClaudeCaptureWatcher()
+        if !visible {
+            cancelCodexRefresh()
+        }
+    }
+
+    /// Reconcile the watcher immediately when the provider toggle changes.
+    /// Without this, enabling Claude while the panel was already open would
+    /// not start live updates until the next close/reopen, while disabling it
+    /// left a needless directory watcher alive for the rest of that open.
+    func claudeMonitoringDidChange() {
+        reconcileClaudeCaptureWatcher()
+        if appState?.claudeRateLimitEnabled != true {
+            cancelClaudeRefresh()
+        }
+    }
+
+    private func reconcileClaudeCaptureWatcher() {
+        let shouldWatch = isPanelVisible && appState?.claudeRateLimitEnabled == true
+        guard shouldWatch else {
             claudeCaptureWatcher?.stop()
             claudeCaptureWatcher = nil
-            cancelCodexRefresh()
             return
         }
-        guard appState?.claudeRateLimitEnabled == true, claudeCaptureWatcher == nil else { return }
+        guard claudeCaptureWatcher == nil else { return }
         let watcher = DirectoryWatcher { [weak self] in
             Task { await self?.refreshClaude() }
         }
-        watcher.start(directory: StatuslineHook.rateLimitFileURL.deletingLastPathComponent())
-        claudeCaptureWatcher = watcher
+        if watcher.start(directory: claudeCaptureDirectory) {
+            claudeCaptureWatcher = watcher
+        }
+    }
+
+    /// Internal visibility for deterministic lifecycle tests; no filesystem
+    /// details escape the coordinator.
+    var isClaudeCaptureWatcherActive: Bool {
+        claudeCaptureWatcher != nil
     }
 
     // MARK: - Helpers

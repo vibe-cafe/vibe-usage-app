@@ -353,13 +353,20 @@ enum CodexUsageAPI {
     }
 
     /// Best-effort: a failed write just means the next cold open falls back to
-    /// the network wait (spinner), never an error state.
+    /// the network wait (spinner), never an error state. A successful live
+    /// `.noData` response clears a matching prior snapshot so a plan/window
+    /// change cannot make obsolete quota percentages flash on the next open.
     static func cache(
         _ snapshot: ProviderRateLimit,
         scope: String,
         to url: URL = cacheFileURL
     ) {
-        guard snapshot.status == .ok else { return }
+        guard snapshot.status == .ok else {
+            if snapshot.status == .noData {
+                removeCachedSnapshot(scope: scope, from: url)
+            }
+            return
+        }
         func window(_ w: RateLimitWindow?) -> CachedSnapshot.Window? {
             w.map { .init(utilization: $0.utilization, resetsAt: $0.resetsAt, windowDuration: $0.windowDuration) }
         }
@@ -380,6 +387,19 @@ enum CodexUsageAPI {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         try? data.write(to: url, options: .atomic)
+    }
+
+    /// Remove only the active account/endpoint snapshot. A cache belonging to
+    /// another scope is harmless and may still be useful if the user switches
+    /// back, so a no-data response for the current account must not erase it.
+    private static func removeCachedSnapshot(scope: String, from url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let cached = try? decoder.decode(CachedSnapshot.self, from: data),
+              cached.scopeHash == scope
+        else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// Production entry point. An unreadable auth file or missing account id

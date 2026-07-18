@@ -130,6 +130,16 @@ private struct ProviderCard: View {
             Text(snapshot.provider.displayName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
+            if let credits = snapshot.resetCreditsCount, credits > 0 {
+                Text("重置券 ×\(credits)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(Color(red: 0.95, green: 0.72, blue: 0.25))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(red: 0.95, green: 0.72, blue: 0.25).opacity(0.12))
+                    .clipShape(Capsule())
+                    .lineLimit(1)
+            }
             Spacer()
             if isRefreshing {
                 ProgressView()
@@ -321,17 +331,14 @@ private struct ProviderCard: View {
     /// never shows the note.
     private static let staleNoteThreshold: TimeInterval = 5 * 60
 
-    /// One quiet tertiary line under the quota rows; segments joined by 「 · 」.
+    /// One quiet tertiary line under the quota rows for stale-data context.
+    /// Reset credits live beside the provider title so they never add a row.
     private func footerNote(at now: Date) -> String? {
-        var notes: [String] = []
         if let asOf = snapshot.dataAsOf,
            now.timeIntervalSince(asOf) > Self.staleNoteThreshold {
-            notes.append("数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))")
+            return "数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))"
         }
-        if let credits = snapshot.resetCreditsCount, credits > 0 {
-            notes.append("重置券 ×\(credits)")
-        }
-        return notes.isEmpty ? nil : notes.joined(separator: " · ")
+        return nil
     }
 
     // MARK: Disabled / error states

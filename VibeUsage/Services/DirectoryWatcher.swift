@@ -19,12 +19,13 @@ final class DirectoryWatcher {
         self.onChange = onChange
     }
 
-    func start(directory: URL) {
+    @discardableResult
+    func start(directory: URL) -> Bool {
         stop()
         let fd = open(directory.path, O_EVTONLY)
         guard fd >= 0 else {
             debugLog("[watcher] cannot open \(directory.path) — live refresh disabled")
-            return
+            return false
         }
         let source = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd,
@@ -41,6 +42,7 @@ final class DirectoryWatcher {
         source.setCancelHandler { close(fd) }
         source.resume()
         self.source = source
+        return true
     }
 
     func stop() {

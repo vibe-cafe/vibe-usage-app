@@ -132,4 +132,40 @@ struct RateLimitCoordinatorTests {
         #expect(!appState.isCodexRateLimitRefreshing)
         #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == nil)
     }
+
+    @Test @MainActor
+    func claudeWatcherReconcilesWhenMonitoringChangesWhilePanelIsOpen() throws {
+        let defaults = UserDefaults.standard
+        let previousPreference = defaults.object(forKey: "claudeRateLimitEnabled")
+        defer {
+            if let previousPreference {
+                defaults.set(previousPreference, forKey: "claudeRateLimitEnabled")
+            } else {
+                defaults.removeObject(forKey: "claudeRateLimitEnabled")
+            }
+        }
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RateLimitCoordinatorTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeCaptureDirectory: directory
+        )
+
+        coordinator.panelVisibilityChanged(visible: true)
+        #expect(!coordinator.isClaudeCaptureWatcherActive)
+
+        appState.claudeRateLimitEnabled = true
+        coordinator.claudeMonitoringDidChange()
+        #expect(coordinator.isClaudeCaptureWatcherActive)
+
+        appState.claudeRateLimitEnabled = false
+        coordinator.claudeMonitoringDidChange()
+        #expect(!coordinator.isClaudeCaptureWatcherActive)
+    }
 }

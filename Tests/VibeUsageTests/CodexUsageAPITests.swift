@@ -333,6 +333,70 @@ struct CodexUsageAPITests {
         #expect(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: testScope) == nil)
     }
 
+    /// A successful live response with no enforced windows is authoritative.
+    /// It must invalidate the previous scoped snapshot, otherwise the next
+    /// cold paint flashes obsolete percentages before the network completes.
+    @Test
+    func noDataLiveSnapshotClearsMatchingCache() throws {
+        let url = tempCacheURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_784_000_000)
+        let live = ProviderRateLimit(
+            provider: .codex,
+            sevenDay: RateLimitWindow(
+                utilization: 42,
+                resetsAt: fetchedAt.addingTimeInterval(86_400),
+                windowDuration: 604_800
+            ),
+            status: .ok,
+            fetchedAt: fetchedAt,
+            dataAsOf: fetchedAt
+        )
+        CodexUsageAPI.cache(live, scope: testScope, to: url)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+
+        CodexUsageAPI.cache(
+            ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: fetchedAt),
+            scope: testScope,
+            to: url
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test
+    func noDataLiveSnapshotDoesNotClearAnotherScope() throws {
+        let url = tempCacheURL()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let fetchedAt = Date(timeIntervalSince1970: 1_784_000_000)
+        let live = ProviderRateLimit(
+            provider: .codex,
+            sevenDay: RateLimitWindow(
+                utilization: 42,
+                resetsAt: fetchedAt.addingTimeInterval(86_400),
+                windowDuration: 604_800
+            ),
+            status: .ok,
+            fetchedAt: fetchedAt,
+            dataAsOf: fetchedAt
+        )
+        CodexUsageAPI.cache(live, scope: testScope, to: url)
+
+        let otherScope = CodexUsageAPI.cacheScope(
+            accountID: "account-b",
+            usageURL: URL(string: "https://chatgpt.com/backend-api/wham/usage")!
+        )!
+        CodexUsageAPI.cache(
+            ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: fetchedAt),
+            scope: otherScope,
+            to: url
+        )
+
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
     @Test
     func cachedSnapshotNilWhenFileMissing() {
         #expect(CodexUsageAPI.cachedSnapshot(from: tempCacheURL(), scope: testScope) == nil)
