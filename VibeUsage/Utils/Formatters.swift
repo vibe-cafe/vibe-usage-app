@@ -43,8 +43,8 @@ enum Formatters {
     }
 
     /// Format relative time: "刚刚", "3 分钟前", "1 小时前"
-    static func formatRelativeTime(_ date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
+    static func formatRelativeTime(_ date: Date, relativeTo now: Date = Date()) -> String {
+        let interval = now.timeIntervalSince(date)
         if interval < 60 { return "刚刚" }
         if interval < 3600 { return "\(Int(interval / 60)) 分钟前" }
         if interval < 86400 { return "\(Int(interval / 3600)) 小时前" }

@@ -162,6 +162,13 @@ final class AppState {
     }
     var rateLimits: [ProviderRateLimit] = []
 
+    /// True while the corresponding provider's refresh is in flight — the card
+    /// header shows a mini spinner. Codex refreshes now include a network
+    /// round-trip (~1s), so unlike the old file-only reads the latency is
+    /// user-perceivable and needs an indicator.
+    var isCodexRateLimitRefreshing: Bool = false
+    var isClaudeRateLimitRefreshing: Bool = false
+
     /// Enabling Claude rate-limit monitoring installs a wrapper into Claude
     /// Code's `statusLine.command` (see `StatuslineHook`). Because that edits
     /// the user's Claude settings, we gate it behind an explicit opt-in click.
@@ -210,6 +217,7 @@ final class AppState {
     // MARK: - Services (initialized after launch)
     private var syncScheduler: SyncScheduler?
     private var rateLimitCoordinator: RateLimitCoordinator?
+    private var isRateLimitPanelVisible = false
     private var config: VibeUsageConfig?
 
     // MARK: - Lifecycle
@@ -336,6 +344,7 @@ final class AppState {
             if rateLimitCoordinator == nil { startRateLimitCoordinator() }
             await refreshCodexRateLimit()
         } else {
+            rateLimitCoordinator?.cancelCodexRefresh()
             removeRateLimit(for: .codex)
         }
     }
@@ -353,6 +362,7 @@ final class AppState {
             switch StatuslineHook.uninstall() {
             case .success:
                 claudeRateLimitEnabled = false
+                rateLimitCoordinator?.claudeMonitoringDidChange()
                 removeRateLimit(for: .claudeCode)
                 debugLog("[rate-limit] statusline hook uninstalled; original command restored")
             case .failure(let error):
@@ -384,10 +394,19 @@ final class AppState {
         await rateLimitCoordinator?.refreshClaudeIfNeeded()
     }
 
-    /// Refresh both Codex and Claude. Both are auth-free local-file reads now,
-    /// so this is cheap and safe to call from any user-initiated path.
+    /// Refresh both Codex and Claude (in parallel). Prompt-free: Codex hits the
+    /// zero-quota usage endpoint with the CLI's own token, Claude reads the
+    /// local capture file. Safe to call from any user-initiated path.
     func refreshAllRateLimits() async {
         await rateLimitCoordinator?.refreshAll()
+    }
+
+    /// The menu-bar panel opened or closed. While it is visible the coordinator
+    /// watches the Claude capture directory so a statusline render updates the
+    /// card live; closing stops the watcher (nothing to update off-screen).
+    func rateLimitPanelVisibilityChanged(visible: Bool) {
+        isRateLimitPanelVisible = visible
+        rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
     /// Enable Claude rate-limit monitoring: install the statusline wrapper into
@@ -405,6 +424,7 @@ final class AppState {
         case .success:
             claudeRateLimitInstallError = nil
             claudeRateLimitEnabled = true
+            rateLimitCoordinator?.claudeMonitoringDidChange()
             await rateLimitCoordinator?.refreshClaude()
             debugLog("[rate-limit] statusline hook installed; Claude capture enabled")
 
@@ -441,9 +461,10 @@ final class AppState {
     private func startRateLimitCoordinator() {
         let coord = RateLimitCoordinator(appState: self)
         coord.seedPlaceholders()
-        // No background loop — Codex refreshes on popover open (debounced),
-        // Claude only on user-initiated actions.
         self.rateLimitCoordinator = coord
+        // Preserve panel state even when the coordinator is created lazily
+        // after the panel opened (for example, both providers started off).
+        coord.panelVisibilityChanged(visible: isRateLimitPanelVisible)
     }
 
     private func startScheduler() {

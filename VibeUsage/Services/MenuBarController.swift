@@ -248,11 +248,13 @@ final class MenuBarController: NSObject {
         positionPanel(panel)
 
         Task { await appState.fetchUsageDataIfNeeded() }
-        // Popover open refreshes both Codex and Claude — both are silent local
-        // file reads now (no prompts). 60s cooldown so rapid open/close doesn't
-        // re-walk the Codex session tree or re-parse the capture file.
+        // Popover open refreshes both Codex (live endpoint, CLI-token auth —
+        // no prompts) and Claude (local capture file). 60s cooldown so rapid
+        // open/close doesn't re-hit the endpoint or re-parse the capture file.
         Task { await appState.refreshCodexRateLimitIfNeeded() }
         Task { await appState.refreshClaudeRateLimitIfNeeded() }
+        // Live-update the Claude card while the panel is on screen.
+        appState.rateLimitPanelVisibilityChanged(visible: true)
 
         // Keep activation policy reconciliation centralized. The app is
         // Dock-regular by default, and this call records popup visibility.
@@ -267,6 +269,7 @@ final class MenuBarController: NSObject {
 
     private func closePanel() {
         guard let panel, panel.isVisible, !isAnimating else { return }
+        appState.rateLimitPanelVisibilityChanged(visible: false)
         animateClose(panel) { [weak self] in
             panel.orderOut(nil)
             ActivationCoordinator.shared.popupDidClose()

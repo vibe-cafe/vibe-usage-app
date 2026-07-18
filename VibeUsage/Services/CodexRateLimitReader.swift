@@ -10,11 +10,13 @@ import Foundation
 enum CodexRateLimitReader {
 
     static func read() -> ProviderRateLimit {
-        let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex")
-            .appendingPathComponent("sessions")
+        read(codexHome: CodexUsageAPI.codexHome)
+    }
 
-        return read(sessionsDir: sessionsDir)
+    /// Keep the offline fallback in the same Codex namespace as auth/config.
+    /// This matters for users who launch the app with a custom `CODEX_HOME`.
+    static func read(codexHome: URL, now: Date = Date()) -> ProviderRateLimit {
+        read(sessionsDir: codexHome.appendingPathComponent("sessions"), now: now)
     }
 
     /// Internal entry point used by tests with an isolated sessions directory.
@@ -42,7 +44,11 @@ enum CodexRateLimitReader {
                 sevenDay: snapshot.sevenDay,
                 planLabel: snapshot.planLabel,
                 status: .ok,
-                fetchedAt: now
+                fetchedAt: now,
+                // The JSONL event timestamp: how old these numbers really are.
+                // `.distantPast` fallbacks (mtime lookup failed) stay nil so the
+                // card doesn't render a nonsense 「数据截至 55 年前」.
+                dataAsOf: snapshot.recordedAt > .distantPast ? snapshot.recordedAt : nil
             )
         }
         return .init(provider: .codex, status: .noData, fetchedAt: now)
