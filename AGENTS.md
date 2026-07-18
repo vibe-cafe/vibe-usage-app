@@ -306,6 +306,15 @@ gh release upload vX.Y.Z dist/<missing-file> --clobber
 - **Sparkle public key**: In `Info.plist` as `SUPublicEDKey`
 - The build script signs Sparkle internals inside-out, then the framework, then the app bundle
 
+### Releasing From Another Mac — Mandatory Sparkle-Key Check
+
+- The Sparkle key was rotated for `v0.5.4`. All later releases must use the private key matching the current `SUPublicEDKey` in `VibeUsage/Info.plist`; an older release Mac may still hold the retired key.
+- Before every release, run `.build/artifacts/sparkle/Sparkle/bin/generate_keys -p` and compare it with `/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' VibeUsage/Info.plist`. They must match before `generate-appcast.sh` runs.
+- If the key is absent or mismatched, **stop**. Do not generate or rotate a key merely to make the release pass. Import the current private key from the secure backup or another authorized release Mac using `generate_keys -f <private-key-file>`.
+- To provision another release Mac, export from a Mac holding the current key with `generate_keys -x <private-key-file>`, transfer it through an encrypted channel, import it, verify the public-key match, and then remove or securely archive the transfer copy. Never commit the exported key.
+- Also verify that the destination Mac has the Developer ID private key and a working `VibeUsage` notarization profile. See `docs/RELEASING.md` for the complete migration checklist.
+- A deliberate future key rotation requires explicit authorization and an update-path validation against the currently released app; it is not routine release-machine setup.
+
 ## Known Constraints
 
 - LSUIElement apps cannot use SwiftUI `Settings` scene — must use NSWindow directly

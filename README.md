@@ -45,6 +45,8 @@ cd vibe-usage-app
 open "dist/Vibe Usage.app"
 ```
 
+维护者请参阅[发布与更换发布 Mac 指南](docs/RELEASING.md)，尤其是在另一台 Mac 上生成 Sparkle 更新之前迁移并校验当前签名密钥。
+
 ## 相关项目
 
 - [@vibe-cafe/vibe-usage](https://github.com/vibe-cafe/vibe-usage) — 命令行同步工具
