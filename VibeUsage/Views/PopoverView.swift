@@ -322,7 +322,7 @@ struct PopoverView: View {
             Spacer()
 
             headerLinkButton(title: "详情", url: "\(AppConfig.defaultApiUrl)/usage")
-            headerLinkButton(title: "排行榜", url: "\(AppConfig.defaultApiUrl)/usage/rank")
+            headerLinkButton(title: "排行榜", url: "\(AppConfig.defaultApiUrl)/rank")
 
             // Settings — NSWindow directly (SwiftUI scenes don't work in LSUIElement MenuBarExtra)
             Button {
