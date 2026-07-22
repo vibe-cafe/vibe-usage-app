@@ -43,15 +43,7 @@ enum CLIBridge {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: runtime.executablePath)
 
-            // Build full arguments: [runtime-specific prefix] + [@vibe-cafe/vibe-usage] + args
-            var fullArgs: [String] = []
-            switch runtime.name {
-            case "bun":
-                fullArgs = ["x", "@vibe-cafe/vibe-usage"] + args
-            default:
-                fullArgs = ["--yes", "@vibe-cafe/vibe-usage"] + args
-            }
-            process.arguments = fullArgs
+            process.arguments = RuntimeDetector.arguments(runtimeName: runtime.name, command: args)
 
             // Inherit environment with runtime dir in PATH
             var env = ProcessInfo.processInfo.environment
@@ -61,12 +53,13 @@ enum CLIBridge {
             } else {
                 env["PATH"] = runtimeDir
             }
-            process.environment = env
+            env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
 
             // In dev mode, tell CLI to use config.dev.json
             #if DEBUG
             env["VIBE_USAGE_DEV"] = "1"
             #endif
+            process.environment = env
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()

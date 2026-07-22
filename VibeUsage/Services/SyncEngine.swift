@@ -57,6 +57,7 @@ actor SyncEngine {
             } else {
                 env["PATH"] = runtimeDir
             }
+            env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
 
             // In dev mode, tell CLI to use config.dev.json
             #if DEBUG

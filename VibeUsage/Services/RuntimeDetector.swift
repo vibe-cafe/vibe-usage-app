@@ -2,18 +2,24 @@ import Foundation
 
 /// Detects available Node.js runtime (bun preferred, npx fallback)
 enum RuntimeDetector {
+    static let packageSpecifier = "@vibe-cafe/vibe-usage@latest"
+
     struct Runtime {
         let executablePath: String
         let name: String /// "bun" or "npx"
 
         /// Arguments to run vibe-usage sync
         var syncArguments: [String] {
-            switch name {
-            case "bun":
-                return ["x", "@vibe-cafe/vibe-usage", "sync"]
-            default:
-                return ["--yes", "@vibe-cafe/vibe-usage", "sync"]
-            }
+            RuntimeDetector.arguments(runtimeName: name, command: ["sync"])
+        }
+    }
+
+    static func arguments(runtimeName: String, command: [String]) -> [String] {
+        switch runtimeName {
+        case "bun":
+            ["x", packageSpecifier] + command
+        default:
+            ["--yes", packageSpecifier] + command
         }
     }
 

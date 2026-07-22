@@ -1,7 +1,12 @@
 import Foundation
 
 enum AppConfig {
-    static let version = "0.5.4"
+    static let version = "0.5.5"
+
+    static let cliIdentityEnvironment = [
+        "VIBE_USAGE_SURFACE": "mac-app",
+        "VIBE_USAGE_SURFACE_VERSION": version,
+    ]
 
     #if DEBUG
     static let defaultApiUrl = "http://localhost:3000"
