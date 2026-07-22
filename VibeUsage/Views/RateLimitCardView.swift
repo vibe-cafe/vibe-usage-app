@@ -80,8 +80,8 @@ private struct ProviderCard: View {
 
     /// Which window-label is currently hovered (`"5h"` / `"7d"`). Lifted to the
     /// card level so the tooltip can render as ONE overlay on the rows VStack
-    /// instead of per-row — overlay paints after its parent's content, which
-    /// gives us the correct stacking automatically without any zIndex hacks.
+    /// instead of per-row. The content layer is raised above the freshness
+    /// footer below, so stale-data copy can never paint over the tooltip.
     /// (See `BarChartView` for the same pattern with multi-bar tooltips.)
     @State private var hoveredLabel: String? = nil
     @State private var isEnablingClaude = false
@@ -90,6 +90,7 @@ private struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
+                .zIndex(1)
             if snapshot.status == .ok {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     if let note = footerNote(at: context.date) {
@@ -261,8 +262,9 @@ private struct ProviderCard: View {
         }
         // The tooltip overlay attached HERE — at the rows VStack — paints
         // above all child rows as a natural property of how SwiftUI composes
-        // overlays (overlay always renders after its underlying content,
-        // so it cannot be obscured by sibling rows). No zIndex needed.
+        // overlays (overlay always renders after its underlying content).
+        // ProviderCard raises this whole content layer above its later footer
+        // sibling so 「数据截至」 cannot bleed through the tooltip.
         .overlay(alignment: .topLeading) {
             if let hovered = hoveredLabel,
                let idx = rows.firstIndex(where: { $0.hoverLabel == hovered }),

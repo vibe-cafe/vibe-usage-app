@@ -121,7 +121,7 @@ struct FilterTagsView: View {
             ForEach(TimeRange.allCases, id: \.rawValue) { range in
                 let isActive = appState.timeRange == range
                 Button {
-                    guard !appState.isLoadingData, appState.timeRange != range else { return }
+                    guard appState.timeRange != range else { return }
                     withAnimation(.easeInOut(duration: 0.2)) {
                         appState.timeRange = range
                     }
@@ -136,7 +136,6 @@ struct FilterTagsView: View {
                         .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(appState.isLoadingData)
             }
         }
         .padding(2)
@@ -188,8 +187,6 @@ struct FilterTagsView: View {
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(appState.isLoadingData)
-            .opacity(appState.isLoadingData ? 0.55 : 1)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)

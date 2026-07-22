@@ -217,6 +217,7 @@ struct PopoverView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     if appState.isInitialDataLoad || (!appState.hasLoadedUsageData && appState.buckets.isEmpty) {
                         rateLimitSection
+                        FilterTagsView()
                         loadingDashboardView
                     } else if !appState.hasAnyData {
                         rateLimitSection
@@ -480,6 +481,7 @@ struct PopoverView: View {
         .clipShape(Capsule())
         .overlay(Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1))
         .shadow(color: .black.opacity(0.28), radius: 10, y: 5)
+        .allowsHitTesting(false)
     }
 
     private var emptyStateView: some View {

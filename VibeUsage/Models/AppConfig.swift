@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppConfig {
-    static let version = "0.5.5"
+    static let version = "0.5.6"
 
     static let cliIdentityEnvironment = [
         "VIBE_USAGE_SURFACE": "mac-app",

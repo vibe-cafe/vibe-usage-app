@@ -89,6 +89,7 @@ final class AppState {
     var hasAnyData: Bool = false
     var isLoadingData: Bool = false
     var hasLoadedUsageData: Bool = false
+    private var usageFetchGeneration: UInt = 0
 
     var isInitialDataLoad: Bool {
         isLoadingData && !hasLoadedUsageData && buckets.isEmpty
@@ -219,6 +220,18 @@ final class AppState {
     private var rateLimitCoordinator: RateLimitCoordinator?
     private var isRateLimitPanelVisible = false
     private var config: VibeUsageConfig?
+    private let usageFetcher: (String, String, UsageQueryRange) async throws -> UsageResponse
+
+    init(
+        initialConfig: VibeUsageConfig? = nil,
+        usageFetcher: @escaping (String, String, UsageQueryRange) async throws -> UsageResponse = { apiUrl, apiKey, range in
+            try await APIClient(baseURL: apiUrl, apiKey: apiKey).fetchUsage(range: range)
+        }
+    ) {
+        self.config = initialConfig
+        self.isConfigured = initialConfig?.apiKey != nil
+        self.usageFetcher = usageFetcher
+    }
 
     // MARK: - Lifecycle
 
@@ -301,25 +314,33 @@ final class AppState {
 
     func fetchUsageData() async {
         guard let config, let apiKey = config.apiKey else { return }
-        guard !isLoadingData else { return }
+
+        usageFetchGeneration &+= 1
+        let generation = usageFetchGeneration
+        let queryRange = currentQueryRange
         isLoadingData = true
         defer {
-            lastFetchTime = Date()
-            hasLoadedUsageData = true
-            isLoadingData = false
+            // An older request may finish after the user selects a new range.
+            // Only the newest request owns the loading state and freshness marker.
+            if generation == usageFetchGeneration {
+                lastFetchTime = Date()
+                hasLoadedUsageData = true
+                isLoadingData = false
+            }
         }
 
         let apiUrl = config.apiUrl ?? AppConfig.defaultApiUrl
-        let client = APIClient(baseURL: apiUrl, apiKey: apiKey)
 
         do {
-            let response = try await client.fetchUsage(range: currentQueryRange)
+            let response = try await usageFetcher(apiUrl, apiKey, queryRange)
+            guard generation == usageFetchGeneration else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 buckets = response.buckets
                 sessions = response.sessions ?? []
                 hasAnyData = response.hasAnyData
             }
         } catch {
+            guard generation == usageFetchGeneration else { return }
             // Silently fail — dashboard shows stale data or empty state
             print("Failed to fetch usage data: \(error)")
         }
@@ -328,6 +349,10 @@ final class AppState {
     /// Fetch dashboard data unless we already fetched within the last 60s.
     /// Used by popover open to avoid hammering /api/usage on rapid open/close.
     func fetchUsageDataIfNeeded() async {
+        // Opening the panel during the eager launch fetch must not start the
+        // same request again. Explicit range changes call fetchUsageData()
+        // directly and are still allowed to supersede the in-flight request.
+        guard !isLoadingData else { return }
         if let last = lastFetchTime, Date().timeIntervalSince(last) < 60 {
             return
         }
