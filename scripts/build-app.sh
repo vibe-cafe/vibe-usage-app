@@ -2,14 +2,19 @@
 set -euo pipefail
 
 # Build Vibe Usage.app from SPM release binary
-# Usage: ./scripts/build-app.sh [--notarize]
+# Usage:
+#   ./scripts/build-app.sh [--notarize] [--universal]
+#   ./scripts/build-app.sh [--notarize] [--arch arm64] [--arch x86_64]
+#
+# --universal is shorthand for --arch arm64 --arch x86_64 (fat/universal binary).
+# Omit --arch/--universal to build the host architecture only (faster local builds).
+# Release builds should use --universal so Intel and Apple Silicon Macs both work.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_NAME="Vibe Usage"
 BUNDLE_ID="ai.vibecafe.vibe-usage"
 EXECUTABLE="VibeUsage"
-BUILD_DIR="$PROJECT_DIR/.build/release"
 DIST_DIR="$PROJECT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 ZIP_PATH="$DIST_DIR/VibeUsage.zip"
@@ -17,10 +22,86 @@ DMG_PATH="$DIST_DIR/VibeUsage.dmg"
 ICON_SOURCE_DIR="$PROJECT_DIR/VibeUsage/Resources/Assets.xcassets/AppIcon.appiconset"
 SIGN_IDENTITY="Developer ID Application: Yin Ming (D33463FWDZ)"
 NOTARIZE_PROFILE="VibeUsage"
+# Matches Package.swift platforms: .macOS(.v14)
+MACOS_DEPLOYMENT_TARGET="14.0"
 
 NOTARIZE=false
-if [[ "${1:-}" == "--notarize" ]]; then
-    NOTARIZE=true
+UNIVERSAL=false
+ARCHS=()
+
+usage() {
+    cat <<EOF
+Usage: $0 [--notarize] [--universal]
+       $0 [--notarize] [--arch <arch>]...
+
+Options:
+  --notarize          Notarize the signed app + DMG (requires Developer ID)
+  --universal         Build a universal (arm64 + x86_64) binary
+  --arch <arch>       Build for architecture (repeatable: arm64, x86_64)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --notarize)
+            NOTARIZE=true
+            shift
+            ;;
+        --universal)
+            UNIVERSAL=true
+            shift
+            ;;
+        --arch)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --arch requires a value (arm64 or x86_64)" >&2
+                exit 1
+            fi
+            case "$2" in
+                arm64|x86_64) ;;
+                *)
+                    echo "ERROR: unsupported architecture '$2' (expected arm64 or x86_64)" >&2
+                    exit 1
+                    ;;
+            esac
+            ARCHS+=("$2")
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: unknown option '$1'" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+if $UNIVERSAL; then
+    if [[ ${#ARCHS[@]} -gt 0 ]]; then
+        echo "ERROR: use either --universal or --arch, not both" >&2
+        exit 1
+    fi
+    ARCHS=(arm64 x86_64)
+fi
+
+# Deduplicate while preserving order
+if [[ ${#ARCHS[@]} -gt 0 ]]; then
+    DEDUPED=()
+    for arch in "${ARCHS[@]}"; do
+        seen=false
+        for existing in "${DEDUPED[@]+"${DEDUPED[@]}"}"; do
+            if [[ "$existing" == "$arch" ]]; then
+                seen=true
+                break
+            fi
+        done
+        if ! $seen; then
+            DEDUPED+=("$arch")
+        fi
+    done
+    ARCHS=("${DEDUPED[@]}")
 fi
 
 # Fall back to ad-hoc signing when Developer ID is unavailable (e.g. local dev install).
@@ -48,9 +129,75 @@ fi
 echo "==> Checking version sync..."
 "$SCRIPT_DIR/check-version.sh"
 
-echo "==> Building release binary..."
 cd "$PROJECT_DIR"
-swift build -c release
+
+# Prefer SwiftPM --arch when available (Xcode toolchain); otherwise --triple (CLT).
+SWIFT_SUPPORTS_ARCH=false
+if swift build --help 2>&1 | grep -q -- '--arch'; then
+    SWIFT_SUPPORTS_ARCH=true
+fi
+
+arch_bin_dir() {
+    local arch="$1"
+    echo "$PROJECT_DIR/.build/${arch}-apple-macosx/release"
+}
+
+build_host() {
+    echo "==> Building release binary (host architecture)..."
+    swift build -c release
+}
+
+build_arch() {
+    local arch="$1"
+    echo "==> Building release binary ($arch)..."
+    if $SWIFT_SUPPORTS_ARCH; then
+        swift build -c release --arch "$arch"
+    else
+        swift build -c release --triple "${arch}-apple-macosx${MACOS_DEPLOYMENT_TARGET}"
+    fi
+}
+
+STAGING_BIN="$(mktemp -t vibe-usage-bin)"
+RESOURCE_BUILD_DIR=""
+
+if [[ ${#ARCHS[@]} -eq 0 ]]; then
+    build_host
+    HOST_BUILD_DIR="$PROJECT_DIR/.build/release"
+    if [[ ! -f "$HOST_BUILD_DIR/$EXECUTABLE" ]]; then
+        echo "ERROR: missing executable at $HOST_BUILD_DIR/$EXECUTABLE" >&2
+        exit 1
+    fi
+    cp "$HOST_BUILD_DIR/$EXECUTABLE" "$STAGING_BIN"
+    RESOURCE_BUILD_DIR="$HOST_BUILD_DIR"
+elif [[ ${#ARCHS[@]} -eq 1 ]]; then
+    arch="${ARCHS[0]}"
+    build_arch "$arch"
+    ARCH_DIR="$(arch_bin_dir "$arch")"
+    if [[ ! -f "$ARCH_DIR/$EXECUTABLE" ]]; then
+        echo "ERROR: missing $arch executable at $ARCH_DIR/$EXECUTABLE" >&2
+        exit 1
+    fi
+    cp "$ARCH_DIR/$EXECUTABLE" "$STAGING_BIN"
+    RESOURCE_BUILD_DIR="$ARCH_DIR"
+else
+    LIPO_INPUTS=()
+    for arch in "${ARCHS[@]}"; do
+        build_arch "$arch"
+        ARCH_DIR="$(arch_bin_dir "$arch")"
+        if [[ ! -f "$ARCH_DIR/$EXECUTABLE" ]]; then
+            echo "ERROR: missing $arch executable at $ARCH_DIR/$EXECUTABLE" >&2
+            exit 1
+        fi
+        LIPO_INPUTS+=("$ARCH_DIR/$EXECUTABLE")
+        if [[ -z "$RESOURCE_BUILD_DIR" ]]; then
+            RESOURCE_BUILD_DIR="$ARCH_DIR"
+        fi
+    done
+    echo "==> Creating universal binary (${ARCHS[*]})..."
+    lipo -create "${LIPO_INPUTS[@]}" -output "$STAGING_BIN"
+fi
+
+echo "    Binary architectures: $(lipo -archs "$STAGING_BIN" 2>/dev/null || lipo -info "$STAGING_BIN")"
 
 echo "==> Creating .app bundle..."
 rm -rf "$APP_BUNDLE"
@@ -60,9 +207,9 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 # Embed Sparkle.framework
 echo "==> Embedding Sparkle.framework..."
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
-SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build/artifacts" -name "Sparkle.framework" -path "*/macos-*" | head -1)
+SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build/artifacts" -name "Sparkle.framework" -path "*/macos-*" 2>/dev/null | head -1)
 if [ -z "$SPARKLE_FRAMEWORK" ]; then
-    SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build" -name "Sparkle.framework" -not -path "*/Sparkle.framework/Versions/*" | head -1)
+    SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build" -name "Sparkle.framework" -not -path "*/Sparkle.framework/Versions/*" 2>/dev/null | head -1)
 fi
 if [ -d "$SPARKLE_FRAMEWORK" ]; then
     cp -R "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"
@@ -71,12 +218,14 @@ else
     echo "    ERROR: Sparkle.framework not found in build artifacts"
     exit 1
 fi
-cp "$BUILD_DIR/$EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/"
+cp "$STAGING_BIN" "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE"
+rm -f "$STAGING_BIN"
+chmod +x "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE"
 
 cp "$PROJECT_DIR/VibeUsage/Info.plist" "$APP_BUNDLE/Contents/"
 
-RESOURCE_BUNDLE="$BUILD_DIR/VibeUsage_VibeUsage.bundle"
+RESOURCE_BUNDLE="$RESOURCE_BUILD_DIR/VibeUsage_VibeUsage.bundle"
 if [ -d "$RESOURCE_BUNDLE" ]; then
     cp -R "$RESOURCE_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
     echo "    Copied SPM resource bundle"
@@ -181,8 +330,9 @@ else
     echo ""
     echo "==> Done! Signed app bundle at:"
     echo "    $APP_BUNDLE"
+    echo "    Architectures: $(lipo -archs "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE" 2>/dev/null || true)"
     echo ""
-    echo "    To notarize: $0 --notarize"
+    echo "    To notarize (universal): $0 --universal --notarize"
     echo "    To install:  cp -R \"$APP_BUNDLE\" /Applications/"
     echo "    To run:      open \"$APP_BUNDLE\""
 fi

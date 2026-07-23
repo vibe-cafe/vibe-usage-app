@@ -47,7 +47,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   └── Resources/
 │       └── Assets.xcassets/       # App icon, menu bar icon
 ├── scripts/
-│   ├── build-app.sh               # Build + sign + notarize pipeline (runs check-version.sh first)
+│   ├── build-app.sh               # Build + sign + notarize pipeline; supports --universal / --arch
 │   ├── check-version.sh           # Guards AppConfig/Info.plist version sync + monotonic CFBundleVersion
 │   └── generate-appcast.sh        # Generate Sparkle appcast.xml
 └── dist/                          # Build output (gitignored)
@@ -63,8 +63,9 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 swift build                              # Debug build
 swift build -c release                   # Release build
 ./scripts/check-version.sh               # Validate version sync across AppConfig + Info.plist
-./scripts/build-app.sh                   # Build + codesign .app (runs check-version.sh first)
-./scripts/build-app.sh --notarize        # Full pipeline: build + sign + notarize + DMG
+./scripts/build-app.sh                   # Build + codesign .app for host arch (runs check-version.sh first)
+./scripts/build-app.sh --universal       # Build universal (arm64 + x86_64) .app
+./scripts/build-app.sh --universal --notarize  # Release pipeline: universal + sign + notarize + DMG
 ./scripts/generate-appcast.sh            # Generate appcast.xml from dist/VibeUsage.zip
 ```
 
@@ -247,7 +248,7 @@ git add -A && git commit -m "bump version to X.Y.Z" && git push
 ### 3. Build + Sign + Notarize
 
 ```bash
-./scripts/build-app.sh --notarize
+./scripts/build-app.sh --universal --notarize
 ```
 
 Produces in `dist/`:
