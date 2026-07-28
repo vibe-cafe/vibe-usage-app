@@ -2,21 +2,29 @@ import Foundation
 
 /// Refreshes rate-limit snapshots on demand and pushes results into AppState.
 ///
+/// Both providers follow the same shape: paint an on-disk snapshot instantly,
+/// then replace it with a live reading.
+///
 /// Codex is network-first: `CodexUsageAPI` reads the zero-quota usage endpoint
 /// with the CLI's own OAuth token (a plain-file read — no prompts), falling
-/// back to the session-JSONL scan when offline or logged out. Claude stays a
-/// pure local read of the statusline-capture file written by `StatuslineHook`.
+/// back to the session-JSONL scan when offline or logged out.
+///
+/// Claude paints from `ClaudeUsageCache` (Claude Code's own `~/.claude.json`
+/// cache, else Claude Desktop's usage history) and then runs
+/// `ClaudeUsageProbe`, which delegates the actual fetch to a Claude Code binary
+/// over the stdio control protocol. That replaced the statusline capture hook,
+/// which could never work for Claude Desktop users — Desktop hosts sessions
+/// through the SDK and never renders a statusline.
+///
 /// Nothing is uploaded to the Vibe Usage backend. There is no background
-/// timer — refreshes are driven by popover-open (debounced), user-initiated
-/// actions, and (while the popover is visible) a watcher on the Claude capture
-/// directory so a statusline render updates the card live.
+/// timer — refreshes are driven by popover-open (debounced) and user-initiated
+/// actions.
 @MainActor
 final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
     private var isPanelVisible = false
-    private var claudeCaptureWatcher: DirectoryWatcher?
     private var codexRefreshTask: Task<Void, Never>?
     private var codexRefreshID: UUID?
     private var claudeRefreshTask: Task<Void, Never>?
@@ -24,8 +32,8 @@ final class RateLimitCoordinator {
     private let fetchCodexLive: @MainActor () async throws -> ProviderRateLimit
     private let loadCodexCache: @MainActor () async -> ProviderRateLimit?
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
-    private let readClaudeSnapshot: @MainActor () async -> ProviderRateLimit
-    private let claudeCaptureDirectory: URL
+    private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
+    private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
 
     init(
         appState: AppState,
@@ -38,17 +46,19 @@ final class RateLimitCoordinator {
         readCodexFallback: @escaping @MainActor () async -> ProviderRateLimit = {
             await RateLimitCoordinator.readCodexSessionFiles()
         },
-        readClaudeSnapshot: @escaping @MainActor () async -> ProviderRateLimit = {
-            await RateLimitCoordinator.readClaudeCapture()
+        fetchClaudeLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
+            try await ClaudeUsageProbe.fetch()
         },
-        claudeCaptureDirectory: URL = StatuslineHook.rateLimitFileURL.deletingLastPathComponent()
+        loadClaudeCache: @escaping @MainActor () async -> ProviderRateLimit? = {
+            await RateLimitCoordinator.loadClaudeDiskSnapshot()
+        }
     ) {
         self.appState = appState
         self.fetchCodexLive = fetchCodexLive
         self.loadCodexCache = loadCodexCache
         self.readCodexFallback = readCodexFallback
-        self.readClaudeSnapshot = readClaudeSnapshot
-        self.claudeCaptureDirectory = claudeCaptureDirectory
+        self.fetchClaudeLive = fetchClaudeLive
+        self.loadClaudeCache = loadClaudeCache
     }
 
     /// Refresh Codex unconditionally: live endpoint first, JSONL fallback.
@@ -146,8 +156,8 @@ final class RateLimitCoordinator {
         await refreshCodex()
     }
 
-    /// Refresh Claude from the local statusline-capture file. Auth-free and
-    /// cheap; only runs while Claude monitoring is enabled.
+    /// Refresh Claude: paint the on-disk cache, then run the probe.
+    /// Only runs while Claude monitoring is enabled.
     func refreshClaude() async {
         guard let appState, appState.claudeRateLimitEnabled else { return }
         if let task = claudeRefreshTask {
@@ -175,10 +185,42 @@ final class RateLimitCoordinator {
     private func performClaudeRefresh() async {
         guard let appState, appState.claudeRateLimitEnabled else { return }
         debugLog("[rate-limit] refreshClaude() entered")
-        let snapshot = await readClaudeSnapshot()
-        guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-        debugLog("[rate-limit] refreshClaude() got snapshot status=\(snapshot.status)")
-        upsert(snapshot)
+
+        // Instant paint from disk, for the same reason Codex does it: the live
+        // reading costs a ~2.5s subprocess round trip, and an empty card for
+        // that long reads as "broken". Skipped once real data is on screen.
+        if currentSnapshot(.claudeCode)?.status != .ok,
+           let cached = await loadClaudeCache(),
+           !Task.isCancelled,
+           appState.claudeRateLimitEnabled,
+           currentSnapshot(.claudeCode)?.status != .ok {
+            upsert(cached)
+        }
+
+        do {
+            let live = try await fetchClaudeLive()
+            guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+            upsert(live)
+        } catch is CancellationError {
+            return
+        } catch ClaudeUsageProbe.ProbeError.limitsNotApplicable {
+            // API key / Bedrock / Vertex session: this account has no plan
+            // quota at all, so there is nothing to show and nothing to retry.
+            // Collapse the card rather than implying a transient failure.
+            guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+            debugLog("[rate-limit] claude plan limits not applicable for this account")
+            upsert(ProviderRateLimit(provider: .claudeCode, status: .noData, fetchedAt: Date()))
+        } catch {
+            // No binary, offline, or the binary's own usage fetch failed. Keep
+            // whatever the cache painted — its 「数据截至」 note states the age
+            // honestly, which beats blanking the card over a transient failure.
+            debugLog("[rate-limit] claude probe failed (\(error)) — keeping cached snapshot")
+            guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+            if currentSnapshot(.claudeCode)?.status != .ok {
+                upsert(ProviderRateLimit(provider: .claudeCode, status: .noData, fetchedAt: Date()))
+            }
+        }
+        guard !Task.isCancelled else { return }
         lastClaudeFetchAt = Date()
     }
 
@@ -199,65 +241,42 @@ final class RateLimitCoordinator {
         _ = await (codex, claude)
     }
 
-    /// Ensure both providers have at least a placeholder entry so the UI renders
-    /// the disabled / enable affordance for Claude on first launch.
+    /// Ensure every enabled provider has a placeholder entry so the card row
+    /// renders its loading state on a cold open instead of appearing empty.
     func seedPlaceholders() {
-        if appState?.codexRateLimitEnabled == true,
-           appState?.rateLimits.contains(where: { $0.provider == .codex }) != true {
-            upsert(ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: nil))
-        }
-        if appState?.claudeRateLimitEnabled == true,
-           appState?.rateLimits.contains(where: { $0.provider == .claudeCode }) != true {
-            upsert(ProviderRateLimit(provider: .claudeCode, status: .disabled, fetchedAt: nil))
+        for provider in [ProviderRateLimit.Provider.codex, .claudeCode] {
+            let enabled = provider == .codex
+                ? appState?.codexRateLimitEnabled == true
+                : appState?.claudeRateLimitEnabled == true
+            guard enabled,
+                  appState?.rateLimits.contains(where: { $0.provider == provider }) != true
+            else { continue }
+            upsert(ProviderRateLimit(provider: provider, status: .noData, fetchedAt: nil))
         }
     }
 
-    // MARK: - Live capture watching (popover visible only)
+    // MARK: - Panel lifecycle
 
-    /// While the popover is visible, watch `~/.vibe-usage` so a Claude Code
-    /// statusline render (the wrapper rewrites the capture file via mv, i.e. a
-    /// directory-entry change) updates the card live instead of waiting for
-    /// the next open. Codex needs no equivalent — its live source is the
-    /// endpoint, refreshed on open.
+    /// Off-screen refreshes have no one to display them, and both providers now
+    /// cost a real round trip (Codex over HTTP, Claude over a subprocess), so
+    /// closing the panel cancels whatever is in flight.
+    ///
+    /// There is no live file watcher any more: the statusline capture that used
+    /// to justify one is gone, and both providers refresh on open instead.
     func panelVisibilityChanged(visible: Bool) {
         isPanelVisible = visible
-        reconcileClaudeCaptureWatcher()
         if !visible {
             cancelCodexRefresh()
-        }
-    }
-
-    /// Reconcile the watcher immediately when the provider toggle changes.
-    /// Without this, enabling Claude while the panel was already open would
-    /// not start live updates until the next close/reopen, while disabling it
-    /// left a needless directory watcher alive for the rest of that open.
-    func claudeMonitoringDidChange() {
-        reconcileClaudeCaptureWatcher()
-        if appState?.claudeRateLimitEnabled != true {
             cancelClaudeRefresh()
         }
     }
 
-    private func reconcileClaudeCaptureWatcher() {
-        let shouldWatch = isPanelVisible && appState?.claudeRateLimitEnabled == true
-        guard shouldWatch else {
-            claudeCaptureWatcher?.stop()
-            claudeCaptureWatcher = nil
-            return
+    /// Stop an in-flight Claude probe the moment monitoring is switched off, so
+    /// a subprocess started for a now-hidden card doesn't outlive it.
+    func claudeMonitoringDidChange() {
+        if appState?.claudeRateLimitEnabled != true {
+            cancelClaudeRefresh()
         }
-        guard claudeCaptureWatcher == nil else { return }
-        let watcher = DirectoryWatcher { [weak self] in
-            Task { await self?.refreshClaude() }
-        }
-        if watcher.start(directory: claudeCaptureDirectory) {
-            claudeCaptureWatcher = watcher
-        }
-    }
-
-    /// Internal visibility for deterministic lifecycle tests; no filesystem
-    /// details escape the coordinator.
-    var isClaudeCaptureWatcherActive: Bool {
-        claudeCaptureWatcher != nil
     }
 
     // MARK: - Helpers
@@ -300,9 +319,9 @@ final class RateLimitCoordinator {
         }
     }
 
-    private nonisolated static func readClaudeCapture() async -> ProviderRateLimit {
+    private nonisolated static func loadClaudeDiskSnapshot() async -> ProviderRateLimit? {
         let task = Task.detached(priority: .userInitiated) {
-            ClaudeRateLimitReader.read()
+            ClaudeUsageCache.bestSnapshot()
         }
         return await withTaskCancellationHandler {
             await task.value

@@ -133,39 +133,95 @@ struct RateLimitCoordinatorTests {
         #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == nil)
     }
 
+    private func claudeSnapshot(
+        utilization: Double,
+        dataAsOf: Date?
+    ) -> ProviderRateLimit {
+        ProviderRateLimit(
+            provider: .claudeCode,
+            fiveHour: RateLimitWindow(utilization: utilization),
+            status: .ok,
+            fetchedAt: dataAsOf,
+            dataAsOf: dataAsOf
+        )
+    }
+
+    /// The cold-open contract: the on-disk cache paints first so the card is
+    /// never blank during the probe's ~2.5s round trip, then the live reading
+    /// replaces it.
     @Test @MainActor
-    func claudeWatcherReconcilesWhenMonitoringChangesWhilePanelIsOpen() throws {
-        let defaults = UserDefaults.standard
-        let previousPreference = defaults.object(forKey: "claudeRateLimitEnabled")
-        defer {
-            if let previousPreference {
-                defaults.set(previousPreference, forKey: "claudeRateLimitEnabled")
-            } else {
-                defaults.removeObject(forKey: "claudeRateLimitEnabled")
-            }
-        }
-
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RateLimitCoordinatorTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
+    func claudeCachePaintsBeforeLiveProbeReplacesIt() async {
         let appState = AppState()
-        appState.claudeRateLimitEnabled = false
-        let coordinator = RateLimitCoordinator(
-            appState: appState,
-            claudeCaptureDirectory: directory
+        appState.claudeRateLimitEnabled = true
+        var paintedWhileProbing: ProviderRateLimit?
+
+        let cached = claudeSnapshot(
+            utilization: 10,
+            dataAsOf: Date(timeIntervalSince1970: 100)
+        )
+        let live = claudeSnapshot(
+            utilization: 42,
+            dataAsOf: Date(timeIntervalSince1970: 200)
         )
 
-        coordinator.panelVisibilityChanged(visible: true)
-        #expect(!coordinator.isClaudeCaptureWatcherActive)
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: {
+                paintedWhileProbing = appState.rateLimits.first { $0.provider == .claudeCode }
+                return live
+            },
+            loadClaudeCache: { cached }
+        )
 
+        await coordinator.refreshClaude()
+
+        #expect(paintedWhileProbing == cached)
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode } == live)
+        #expect(!appState.isClaudeRateLimitRefreshing)
+    }
+
+    /// A failing probe must not blank a card the cache already filled — the
+    /// 「数据截至」 footer states the age honestly instead.
+    @Test @MainActor
+    func claudeProbeFailureKeepsCachedSnapshot() async {
+        let appState = AppState()
         appState.claudeRateLimitEnabled = true
-        coordinator.claudeMonitoringDidChange()
-        #expect(coordinator.isClaudeCaptureWatcherActive)
+        let cached = claudeSnapshot(
+            utilization: 10,
+            dataAsOf: Date(timeIntervalSince1970: 100)
+        )
 
-        appState.claudeRateLimitEnabled = false
-        coordinator.claudeMonitoringDidChange()
-        #expect(!coordinator.isClaudeCaptureWatcherActive)
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.noBinary },
+            loadClaudeCache: { cached }
+        )
+
+        await coordinator.refreshClaude()
+
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode } == cached)
+    }
+
+    /// An API-key / Bedrock session has no plan quota at all. That is a
+    /// permanent answer, so the card collapses rather than showing stale
+    /// percentages or implying a retry would help.
+    @Test @MainActor
+    func claudeAccountWithoutPlanLimitsCollapsesTheCard() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.limitsNotApplicable },
+            loadClaudeCache: {
+                self.claudeSnapshot(
+                    utilization: 10,
+                    dataAsOf: Date(timeIntervalSince1970: 100)
+                )
+            }
+        )
+
+        await coordinator.refreshClaude()
+
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.status == .noData)
     }
 }

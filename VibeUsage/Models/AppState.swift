@@ -170,12 +170,12 @@ final class AppState {
     var isCodexRateLimitRefreshing: Bool = false
     var isClaudeRateLimitRefreshing: Bool = false
 
-    /// Enabling Claude rate-limit monitoring installs a wrapper into Claude
-    /// Code's `statusLine.command` (see `StatuslineHook`). Because that edits
-    /// the user's Claude settings, we gate it behind an explicit opt-in click.
-    /// Persisted across launches. Once enabled, reads are auth-free local-file
-    /// reads — no keychain, no network.
-    var claudeRateLimitEnabled: Bool = false {
+    /// Whether to show the Claude quota card. Purely a display preference now,
+    /// exactly like `codexRateLimitEnabled`: reads go through `ClaudeUsageProbe`
+    /// and `ClaudeUsageCache`, neither of which modifies the user's Claude
+    /// configuration. It used to gate installing a statusline hook, which is
+    /// why it defaulted off and needed an explicit opt-in click.
+    var claudeRateLimitEnabled: Bool = true {
         didSet { UserDefaults.standard.set(claudeRateLimitEnabled, forKey: "claudeRateLimitEnabled") }
     }
 
@@ -242,15 +242,11 @@ final class AppState {
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
         let legacyRateLimitEnabled = UserDefaults.standard.object(forKey: "rateLimitMonitoringEnabled") as? Bool
         self.codexRateLimitEnabled = UserDefaults.standard.object(forKey: "codexRateLimitEnabled") as? Bool ?? legacyRateLimitEnabled ?? true
-        self.claudeRateLimitEnabled = UserDefaults.standard.bool(forKey: "claudeRateLimitEnabled")
+        self.claudeRateLimitEnabled = Self.resolveClaudeRateLimitPreference()
+        self.claudeUsesDesktopBundledCLI = ClaudeUsageProbe.primarySourceKind() == .desktop
 
-        // Self-heal only while Claude monitoring is enabled. When disabled,
-        // restore Claude Code's statusline command and keep that provider idle.
-        if claudeRateLimitEnabled {
-            StatuslineHook.verifyAndRepair(enabled: true)
-        } else {
-            _ = StatuslineHook.uninstall()
-        }
+        // Hand back the `statusLine.command` edit the pre-probe releases made.
+        LegacyStatuslineRetirement.run()
 
         let loadedConfig = ConfigManager.load()
         self.config = loadedConfig
@@ -268,6 +264,22 @@ final class AppState {
         if codexRateLimitEnabled || claudeRateLimitEnabled {
             startRateLimitCoordinator()
         }
+    }
+
+    /// A stored `false` used to mean two different things: "I don't want this
+    /// card" and, far more often, "I never clicked the 启用 button that would
+    /// have edited my Claude settings". Now that showing the card costs the
+    /// user nothing, that ambiguity is resolved once in favour of on — matching
+    /// the Codex default — and the answer is respected from then on.
+    private static func resolveClaudeRateLimitPreference() -> Bool {
+        let defaults = UserDefaults.standard
+        let migrationKey = "claudeRateLimitProbeMigrationDone"
+        guard defaults.bool(forKey: migrationKey) else {
+            defaults.set(true, forKey: migrationKey)
+            defaults.set(true, forKey: "claudeRateLimitEnabled")
+            return true
+        }
+        return defaults.object(forKey: "claudeRateLimitEnabled") as? Bool ?? true
     }
 
     /// Save config to disk and start scheduler.
@@ -374,26 +386,18 @@ final class AppState {
         }
     }
 
-    /// Toggle Claude quota monitoring. Only flips persisted state after the
-    /// hook operation succeeds; failures leave the toggle reflecting reality.
+    /// Toggle Claude quota monitoring. Read-only like Codex — nothing to
+    /// install, so the preference flips immediately.
     func setClaudeRateLimitEnabled(_ enabled: Bool) async {
         guard claudeRateLimitEnabled != enabled else { return }
-        claudeRateLimitInstallError = nil
+        claudeRateLimitEnabled = enabled
 
         if enabled {
             if rateLimitCoordinator == nil { startRateLimitCoordinator() }
-            await enableClaudeRateLimit()
+            await rateLimitCoordinator?.refreshClaude()
         } else {
-            switch StatuslineHook.uninstall() {
-            case .success:
-                claudeRateLimitEnabled = false
-                rateLimitCoordinator?.claudeMonitoringDidChange()
-                removeRateLimit(for: .claudeCode)
-                debugLog("[rate-limit] statusline hook uninstalled; original command restored")
-            case .failure(let error):
-                debugLog("[rate-limit] statusline uninstall failed: \(error)")
-                claudeRateLimitInstallError = error.localizedDescription
-            }
+            rateLimitCoordinator?.claudeMonitoringDidChange()
+            removeRateLimit(for: .claudeCode)
         }
     }
 
@@ -412,8 +416,8 @@ final class AppState {
         await rateLimitCoordinator?.refreshCodexIfNeeded()
     }
 
-    /// Refresh Claude rate limits on popover-open (debounced). Cheap local-file
-    /// read now — safe to fire automatically, no prompts.
+    /// Refresh Claude rate limits on popover-open (debounced). Prompt-free: the
+    /// probe delegates to a Claude Code binary, which reads its own credentials.
     func refreshClaudeRateLimitIfNeeded() async {
         guard claudeRateLimitEnabled else { return }
         await rateLimitCoordinator?.refreshClaudeIfNeeded()
@@ -426,56 +430,22 @@ final class AppState {
         await rateLimitCoordinator?.refreshAll()
     }
 
-    /// The menu-bar panel opened or closed. While it is visible the coordinator
-    /// watches the Claude capture directory so a statusline render updates the
-    /// card live; closing stops the watcher (nothing to update off-screen).
+    /// The menu-bar panel opened or closed. Closing cancels in-flight refreshes
+    /// for both providers — nothing off-screen is worth a round trip.
     func rateLimitPanelVisibilityChanged(visible: Bool) {
         isRateLimitPanelVisible = visible
         rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
-    /// Enable Claude rate-limit monitoring: install the statusline wrapper into
-    /// Claude Code's settings, then read whatever it has captured so far.
-    /// Surfaces an install failure via the Claude card's error state.
+    /// True when Claude quota is read through the copy of Claude Code that
+    /// Claude Desktop bundles, i.e. this machine has Desktop but no CLI of its
+    /// own. Settings calls that out, because it is the one case where the data
+    /// comes from somewhere the user did not install directly. With a CLI
+    /// present there is nothing to explain, so the note stays hidden.
     ///
-    /// On a *fresh* enable the capture file doesn't exist yet — Claude Code only
-    /// writes it on its next statusline render (typically within ~1s of any
-    /// activity). So after a successful install we poll briefly and re-read, so
-    /// a single 启用 click populates the card on its own instead of leaving it
-    /// stuck on "disabled" until the user pokes it again.
-    func enableClaudeRateLimit() async {
-        debugLog("[rate-limit] enableClaudeRateLimit() called")
-        switch StatuslineHook.install() {
-        case .success:
-            claudeRateLimitInstallError = nil
-            claudeRateLimitEnabled = true
-            rateLimitCoordinator?.claudeMonitoringDidChange()
-            await rateLimitCoordinator?.refreshClaude()
-            debugLog("[rate-limit] statusline hook installed; Claude capture enabled")
-
-            // Card is .disabled/.noData until Claude Code renders a statusline
-            // and the wrapper writes the file. Poll up to ~6s; stop early once
-            // a real snapshot lands. No-op if it was already captured.
-            for attempt in 1...6 {
-                if claudeRateLimitSnapshot?.status == .ok { break }
-                try? await Task.sleep(for: .seconds(1))
-                debugLog("[rate-limit] post-install poll attempt \(attempt)")
-                await rateLimitCoordinator?.refreshClaude()
-            }
-        case .failure(let error):
-            debugLog("[rate-limit] statusline install failed: \(error)")
-            claudeRateLimitInstallError = error.localizedDescription
-        }
-    }
-
-    /// Current Claude snapshot in `rateLimits` (nil before the first read).
-    private var claudeRateLimitSnapshot: ProviderRateLimit? {
-        rateLimits.first { $0.provider == .claudeCode }
-    }
-
-    /// Last statusline-install failure message, surfaced in the Claude card.
-    /// Cleared on the next successful enable.
-    var claudeRateLimitInstallError: String?
+    /// Resolved once at launch: it depends only on which binaries exist on
+    /// disk, and re-scanning on every Settings redraw would buy nothing.
+    private(set) var claudeUsesDesktopBundledCLI = false
 
     // MARK: - Private
 

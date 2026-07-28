@@ -98,25 +98,25 @@ struct SettingsView: View {
                 ))
                 .tint(.green)
 
-                Toggle("显示 Claude Code 订阅配额", isOn: Binding(
+                Toggle(isOn: Binding(
                     get: { appState.claudeRateLimitEnabled },
                     set: { newValue in
                         Task { await appState.setClaudeRateLimitEnabled(newValue) }
                     }
-                ))
-                .tint(.green)
-
-                if let error = appState.claudeRateLimitInstallError {
-                    HStack(alignment: .top, spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 11))
-                        Text(error)
-                            .font(.caption)
-                            .lineLimit(nil)
-                        Spacer(minLength: 0)
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("显示 Claude 订阅配额")
+                        // Only worth explaining when the numbers come from the
+                        // Claude Code copy bundled inside Claude Desktop, which
+                        // the user never installed themselves.
+                        if appState.claudeUsesDesktopBundledCLI {
+                            Text("数据来源：Claude Desktop")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    .foregroundStyle(.red)
                 }
+                .tint(.green)
             } header: {
                 Text("订阅配额")
             }

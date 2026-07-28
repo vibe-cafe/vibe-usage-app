@@ -47,13 +47,18 @@ struct RateLimitCardView: View {
             return false
         case .claudeCode where !appState.claudeRateLimitEnabled:
             return false
-        case .claudeCode:
-            return true
         default:
             // On a cold open there is no snapshot to render yet. Keep the card
-            // visible while the network-first refresh runs so its spinner and
-            // loading copy are not replaced by a misleading static notice.
-            return snap.status != .noData || appState.isCodexRateLimitRefreshing
+            // visible while the refresh runs so its spinner and loading copy
+            // are not replaced by a misleading static notice.
+            return snap.status != .noData || isRefreshing(snap.provider)
+        }
+    }
+
+    private func isRefreshing(_ provider: ProviderRateLimit.Provider) -> Bool {
+        switch provider {
+        case .codex:      return appState.isCodexRateLimitRefreshing
+        case .claudeCode: return appState.isClaudeRateLimitRefreshing
         }
     }
 
@@ -84,7 +89,6 @@ private struct ProviderCard: View {
     /// footer below, so stale-data copy can never paint over the tooltip.
     /// (See `BarChartView` for the same pattern with multi-bar tooltips.)
     @State private var hoveredLabel: String? = nil
-    @State private var isEnablingClaude = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -165,11 +169,10 @@ private struct ProviderCard: View {
         switch snapshot.status {
         case .ok:           quotaRows
         case .disabled:
-            if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
-                waitingForClaudeContent
-            } else {
-                disabledContent
-            }
+            // No provider reaches this state any more: Claude used to sit here
+            // until the user installed the statusline hook. Kept as a graceful
+            // landing for a snapshot persisted by an older build.
+            messageContent(text: "订阅配额未启用", action: "重试")
         case .unauthorized:
             // Only Codex reaches this state today: the live endpoint rejected
             // the token even after re-reading auth.json. The accurate remedy is
@@ -182,12 +185,14 @@ private struct ProviderCard: View {
             messageContent(text: "请打开 \(snapshot.provider.rawValue) 使用一次后重试", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:
-            if snapshot.provider == .claudeCode && appState.claudeRateLimitEnabled {
-                waitingForClaudeContent
-            } else if snapshot.provider == .codex && isRefreshing {
+            if isRefreshing {
                 Text("正在读取订阅配额…")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.5))
+            } else if snapshot.provider == .claudeCode {
+                // Reached when the probe found no Claude Code binary, could not
+                // reach the usage endpoint, and no cache existed either.
+                messageContent(text: "暂无订阅配额数据", action: "重试")
             } else {
                 EmptyView()
             }
@@ -343,79 +348,7 @@ private struct ProviderCard: View {
         return nil
     }
 
-    // MARK: Disabled / error states
-
-    /// Claude `.disabled` means the statusline capture hook isn't installed yet.
-    /// The button installs it (a one-time edit to Claude Code's settings.json);
-    /// thereafter reads are auth-free. Copy is kept to one plain-language line
-    /// (matching the other states); an install failure replaces it inline.
-    private var disabledContent: some View {
-        HStack(spacing: 8) {
-            Text(appState.claudeRateLimitInstallError ?? "读取 Claude 用量数据")
-                .font(.system(size: 11))
-                .foregroundStyle(
-                    appState.claudeRateLimitInstallError != nil
-                        ? Color(red: 0.94, green: 0.27, blue: 0.27)
-                        : Color(white: 0.5)
-                )
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 4)
-            Button {
-                guard !isEnablingClaude else { return }
-                isEnablingClaude = true
-                Task { @MainActor in
-                    await appState.setClaudeRateLimitEnabled(true)
-                    isEnablingClaude = false
-                }
-            } label: {
-                HStack(spacing: 5) {
-                    if isEnablingClaude {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .tint(.black)
-                    }
-                    Text(isEnablingClaude ? "启用中..." : "启用")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(.black)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Color.white)
-                .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(isEnablingClaude)
-        }
-    }
-
-    private var waitingForClaudeContent: some View {
-        HStack(spacing: 8) {
-            Text("已启用，使用 Claude Code 后会自动显示")
-                .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.5))
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .layoutPriority(1)
-            Spacer(minLength: 4)
-            Button {
-                Task { await appState.refreshAllRateLimits() }
-            } label: {
-                Text("刷新")
-                    .font(.system(size: 11))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(Color(white: 0.78))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 3)
-                    .background(Color(white: 0.16))
-                    .clipShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .fixedSize(horizontal: true, vertical: false)
-        }
-    }
+    // MARK: Error states
 
     private func messageContent(text: String, action: String) -> some View {
         HStack(spacing: 8) {
