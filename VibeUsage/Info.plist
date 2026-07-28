@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.6</string>
+	<string>0.5.7</string>
 	<key>CFBundleVersion</key>
-	<string>27</string>
+	<string>28</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -33,11 +33,11 @@
 	<false/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
-	<key>SUScheduledCheckInterval</key>
-	<integer>28800</integer>
 	<key>SUFeedURL</key>
 	<string>https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>JX3NSElSp3pJq7T4YAGHagN9OubPsBDjTZUB8m4rXq0=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>28800</integer>
 </dict>
 </plist>
