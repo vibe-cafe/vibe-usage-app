@@ -1,5 +1,20 @@
 import Foundation
 
+/// Provider-neutral meaning of a failed live refresh. Concrete transports
+/// conform to `RateLimitFetchError` so the coordinator can decide whether a
+/// card should stay quiet, collapse, request login, or offer retry without
+/// knowing each provider's private error enum.
+enum RateLimitFetchFailure: Equatable {
+    case absent
+    case notApplicable
+    case unauthorized
+    case transient
+}
+
+protocol RateLimitFetchError: Error {
+    var rateLimitFailure: RateLimitFetchFailure { get }
+}
+
 /// One subscription window (e.g. 5h or 7d) for a single provider.
 struct RateLimitWindow: Equatable {
     var utilization: Double  // 0-100
@@ -29,6 +44,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case noData                    // provider isn't installed or has no recent activity
         case disabled                  // user hasn't opted into this provider's monitoring yet
         case unauthorized              // tried to fetch but token missing/expired/keychain denied
+        case retryableError             // concrete read failed; UI supplies localized retry copy
         case error(String)
     }
 

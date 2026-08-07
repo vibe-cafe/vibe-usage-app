@@ -118,8 +118,10 @@ struct ClaudeUsageProbeTests {
 
         let desktop = root
             .appendingPathComponent("Library/Application Support/Claude/claude-code/2.1.219/claude.app/Contents/MacOS")
+        let olderDesktop = root
+            .appendingPathComponent("Library/Application Support/Claude/claude-code/2.1.9/claude.app/Contents/MacOS")
         let cli = root.appendingPathComponent(".local/bin")
-        for dir in [desktop, cli] {
+        for dir in [desktop, olderDesktop, cli] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
         func makeExecutable(_ url: URL) throws {
@@ -127,6 +129,7 @@ struct ClaudeUsageProbeTests {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         }
         try makeExecutable(desktop.appendingPathComponent("claude"))
+        try makeExecutable(olderDesktop.appendingPathComponent("claude"))
         try makeExecutable(cli.appendingPathComponent("claude"))
 
         let fileManager = HomeOverridingFileManager(home: root)
@@ -140,6 +143,10 @@ struct ClaudeUsageProbeTests {
         try FileManager.default.removeItem(at: cli.appendingPathComponent("claude"))
         let desktopOnly = ClaudeUsageProbe.discoverBinaries(fileManager: fileManager, environment: [:])
         #expect(desktopOnly.map(\.kind) == [.desktop])
+        #expect(
+            desktopOnly.first?.url.resolvingSymlinksInPath()
+                == desktop.appendingPathComponent("claude").resolvingSymlinksInPath()
+        )
         #expect(ClaudeUsageProbe.primarySourceKind(fileManager: fileManager, environment: [:]) == .desktop)
     }
 
@@ -163,6 +170,47 @@ struct ClaudeUsageProbeTests {
         #expect(ClaudeUsageProbe.isVersion("2.1.220", newerThan: "2.1.9"))
         #expect(ClaudeUsageProbe.isVersion("2.2.0", newerThan: "2.1.220"))
         #expect(!ClaudeUsageProbe.isVersion("2.1.219", newerThan: "2.1.219"))
+    }
+
+    /// Foundation's pipe read is blocking, so cancelling only the surrounding
+    /// Swift task used to leave the Claude process alive until its watchdog
+    /// fired. A panel close must tear it down immediately.
+    @Test
+    func cancellationTerminatesBlockingProbePromptly() async throws {
+        let binary = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-blocking-\(UUID().uuidString)")
+        let script = """
+        #!/bin/sh
+        # Keep a descendant alive with stdout inherited. Cancellation must not
+        # wait for that process to close the pipe.
+        sleep 3 &
+        while IFS= read -r line; do
+          :
+        done
+        """
+        try Data(script.utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        defer { try? FileManager.default.removeItem(at: binary) }
+
+        let candidate = ClaudeUsageProbe.Binary(url: binary, kind: .override, label: "测试阻塞进程")
+        let started = Date()
+        let task = Task {
+            try await ClaudeUsageProbe.fetch(candidates: [candidate], timeout: 30)
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+
+        var returnedCancellation = false
+        do {
+            _ = try await task.value
+        } catch is CancellationError {
+            returnedCancellation = true
+        } catch {
+            returnedCancellation = false
+        }
+
+        #expect(returnedCancellation)
+        #expect(Date().timeIntervalSince(started) < 2)
     }
 
     @Test

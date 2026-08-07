@@ -408,6 +408,20 @@ final class AppState {
         await rateLimitCoordinator?.refreshCodex()
     }
 
+    /// Refresh exactly one provider. Card-level retry routes through this
+    /// provider-keyed command so adding another provider does not require a new
+    /// view-facing AppState method or duplicated retry logic.
+    func refreshRateLimit(for provider: ProviderRateLimit.Provider) async {
+        switch provider {
+        case .codex:
+            guard codexRateLimitEnabled else { return }
+            await rateLimitCoordinator?.refreshCodex()
+        case .claudeCode:
+            guard claudeRateLimitEnabled else { return }
+            await rateLimitCoordinator?.refreshClaude()
+        }
+    }
+
     /// Refresh Codex rate limits only if the last fetch was over a minute ago.
     /// Used by popover-open so toggling the menu bar doesn't re-walk the
     /// Codex session tree on every click.
@@ -425,7 +439,8 @@ final class AppState {
 
     /// Refresh both Codex and Claude (in parallel). Prompt-free: Codex hits the
     /// zero-quota usage endpoint with the CLI's own token, Claude reads the
-    /// local capture file. Safe to call from any user-initiated path.
+    /// local cache then delegates the live read to Claude Code. Safe to call
+    /// from the global user-initiated refresh path.
     func refreshAllRateLimits() async {
         await rateLimitCoordinator?.refreshAll()
     }

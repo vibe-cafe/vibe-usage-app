@@ -115,31 +115,36 @@ final class RateLimitCoordinator {
             upsert(live)
         } catch is CancellationError {
             return
-        } catch CodexUsageAPI.FetchError.unauthorized {
-            // Token rejected even after re-reading auth.json — the user really
-            // is logged out of Codex. Stale JSONL data (if any) still renders,
-            // with its 「数据截至」 note; otherwise surface the re-login state.
-            debugLog("[rate-limit] codex live fetch unauthorized — user logged out of Codex CLI")
-            let fallback = await readCodexFallback()
-            guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
-            if fallback.status == .ok {
-                upsertIfNewer(fallback)
-            } else if currentSnapshot(.codex)?.status != .ok {
-                upsert(ProviderRateLimit(provider: .codex, status: .unauthorized, fetchedAt: Date()))
-            }
         } catch {
             // Offline / endpoint drift → degrade to exactly the pre-network
             // behavior: whatever the session JSONL has. If the JSONL has
             // nothing but a previous live snapshot is still on screen, keep
             // it — its 「数据截至」 note communicates the age honestly, which
-            // beats collapsing the card over a transient network blip.
-            debugLog("[rate-limit] codex live fetch failed (\(error)) — falling back to session JSONL")
+            // beats collapsing the card over a transient network blip. On a
+            // cold read, distinguish "Codex is not installed/logged in" from
+            // an actual request failure: the latter must stay visible with a
+            // retry affordance instead of silently collapsing to `.noData`.
+            let failure = Self.classify(error)
+            if failure == .unauthorized {
+                debugLog("[rate-limit] codex live fetch unauthorized — user logged out of Codex CLI")
+            } else {
+                debugLog("[rate-limit] codex live fetch failed (\(error)) — falling back to session JSONL")
+            }
             let fallback = await readCodexFallback()
             guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
             if fallback.status == .ok {
                 upsertIfNewer(fallback)
             } else if currentSnapshot(.codex)?.status != .ok {
-                upsert(fallback)
+                let status: ProviderRateLimit.Status
+                switch failure {
+                case .absent, .notApplicable:
+                    status = .noData
+                case .unauthorized:
+                    status = .unauthorized
+                case .transient:
+                    status = .retryableError
+                }
+                upsert(ProviderRateLimit(provider: .codex, status: status, fetchedAt: Date()))
             }
         }
         guard !Task.isCancelled else { return }
@@ -203,21 +208,25 @@ final class RateLimitCoordinator {
             upsert(live)
         } catch is CancellationError {
             return
-        } catch ClaudeUsageProbe.ProbeError.limitsNotApplicable {
-            // API key / Bedrock / Vertex session: this account has no plan
-            // quota at all, so there is nothing to show and nothing to retry.
-            // Collapse the card rather than implying a transient failure.
-            guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-            debugLog("[rate-limit] claude plan limits not applicable for this account")
-            upsert(ProviderRateLimit(provider: .claudeCode, status: .noData, fetchedAt: Date()))
         } catch {
-            // No binary, offline, or the binary's own usage fetch failed. Keep
-            // whatever the cache painted — its 「数据截至」 note states the age
-            // honestly, which beats blanking the card over a transient failure.
-            debugLog("[rate-limit] claude probe failed (\(error)) — keeping cached snapshot")
+            let failure = Self.classify(error)
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-            if currentSnapshot(.claudeCode)?.status != .ok {
+            if failure == .notApplicable {
+                // API key / Bedrock / Vertex session: this account has no plan
+                // quota at all, so there is nothing to show and nothing to retry.
+                debugLog("[rate-limit] claude plan limits not applicable for this account")
                 upsert(ProviderRateLimit(provider: .claudeCode, status: .noData, fetchedAt: Date()))
+            } else {
+                // No binary, offline, or the binary's own usage fetch failed.
+                // Keep whatever cache painted; with no cache, absence stays
+                // quiet while a concrete failure remains retryable.
+                debugLog("[rate-limit] claude probe failed (\(error)) — keeping cached snapshot")
+                if currentSnapshot(.claudeCode)?.status != .ok {
+                    let status: ProviderRateLimit.Status = failure == .absent
+                        ? .noData
+                        : .retryableError
+                    upsert(ProviderRateLimit(provider: .claudeCode, status: status, fetchedAt: Date()))
+                }
             }
         }
         guard !Task.isCancelled else { return }
@@ -332,6 +341,13 @@ final class RateLimitCoordinator {
 
     private func currentSnapshot(_ provider: ProviderRateLimit.Provider) -> ProviderRateLimit? {
         appState?.rateLimits.first { $0.provider == provider }
+    }
+
+    /// Provider adapters expose a shared semantic contract. Unknown injected
+    /// errors are conservative/transient so tests and future adapters never
+    /// make a concrete read failure disappear as mere absence.
+    private nonisolated static func classify(_ error: Error) -> RateLimitFetchFailure {
+        (error as? any RateLimitFetchError)?.rateLimitFailure ?? .transient
     }
 
     /// Fallback data may replace the current card only when it was produced

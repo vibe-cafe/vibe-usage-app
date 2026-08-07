@@ -37,10 +37,11 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    /// Hide a card only when the provider has produced no signal at all
-    /// (`.noData`). `.disabled` / `.unauthorized` / `.error` all carry an
-    /// actionable affordance and stay visible. When BOTH sides are `.noData`,
-    /// `body` swaps the row for `noticeBar` so the empty state is whisper-quiet.
+    /// Hide a card only when the provider is genuinely absent or its plan has
+    /// no subscription quota (`.noData`). `.disabled` / `.unauthorized` /
+    /// `.retryableError` / `.error` all carry an actionable affordance and stay
+    /// visible. When BOTH sides are `.noData`, `body` swaps the row for
+    /// `noticeBar` so the empty state is whisper-quiet.
     private func shouldShowCard(_ snap: ProviderRateLimit) -> Bool {
         switch snap.provider {
         case .codex where !appState.codexRateLimitEnabled:
@@ -183,17 +184,18 @@ private struct ProviderCard: View {
             // Telling the user to "re-login" would be wrong advice in the
             // common expired-while-idle case.
             messageContent(text: "请打开 \(snapshot.provider.rawValue) 使用一次后重试", action: "重试")
+        case .retryableError:
+            messageContent(text: "暂时无法读取订阅配额", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:
             if isRefreshing {
                 Text("正在读取订阅配额…")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.5))
-            } else if snapshot.provider == .claudeCode {
-                // Reached when the probe found no Claude Code binary, could not
-                // reach the usage endpoint, and no cache existed either.
-                messageContent(text: "暂无订阅配额数据", action: "重试")
             } else {
+                // Settled `.noData` cards are collapsed by `shouldShowCard`;
+                // concrete read failures use `.retryableError` and remain
+                // retryable.
                 EmptyView()
             }
         }
@@ -359,7 +361,7 @@ private struct ProviderCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 0)
             Button {
-                Task { await appState.refreshAllRateLimits() }
+                Task { await retryProvider() }
             } label: {
                 Text(action)
                     .font(.system(size: 11))
@@ -371,6 +373,13 @@ private struct ProviderCard: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// A card-level retry must touch only the failed provider. In particular,
+    /// retrying Codex should not spawn a Claude subprocess, and retrying Claude
+    /// should not issue an unrelated Codex network request.
+    private func retryProvider() async {
+        await appState.refreshRateLimit(for: snapshot.provider)
     }
 }
 

@@ -133,6 +133,51 @@ struct RateLimitCoordinatorTests {
         #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == nil)
     }
 
+    /// A genuine endpoint failure with no usable fallback must remain visible;
+    /// treating it as `.noData` hides the card and makes retry unreachable.
+    @Test @MainActor
+    func codexTransportFailureWithoutFallbackSurfacesRetryableError() async {
+        let appState = AppState()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                throw CodexUsageAPI.FetchError.transport(URLError(.notConnectedToInternet))
+            },
+            loadCodexCache: { nil },
+            readCodexFallback: {
+                ProviderRateLimit(provider: .codex, status: .noData)
+            }
+        )
+
+        await coordinator.refreshCodex()
+
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .codex })?.status
+                == .retryableError
+        )
+    }
+
+    /// A machine with no Codex OAuth login and no sessions is an absent feature,
+    /// not a noisy network error; preserve the compact `.noData` treatment.
+    @Test @MainActor
+    func missingCodexLoginWithoutFallbackStaysQuiet() async {
+        let appState = AppState()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: { throw CodexUsageAPI.FetchError.notLoggedIn },
+            loadCodexCache: { nil },
+            readCodexFallback: {
+                ProviderRateLimit(provider: .codex, status: .noData)
+            }
+        )
+
+        await coordinator.refreshCodex()
+
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .codex })?.status == .noData
+        )
+    }
+
     private func claudeSnapshot(
         utilization: Double,
         dataAsOf: Date?
@@ -200,6 +245,45 @@ struct RateLimitCoordinatorTests {
         await coordinator.refreshClaude()
 
         #expect(appState.rateLimits.first { $0.provider == .claudeCode } == cached)
+    }
+
+    /// If a Claude executable exists but the live probe fails and no cache can
+    /// paint, surface the retryable card instead of collapsing it as no data.
+    @Test @MainActor
+    func claudeProbeFailureWithoutCacheSurfacesRetryableError() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.timedOut },
+            loadClaudeCache: { nil }
+        )
+
+        await coordinator.refreshClaude()
+
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .claudeCode })?.status
+                == .retryableError
+        )
+    }
+
+    /// Not having Claude installed is expected on many Macs and should retain
+    /// the quiet capability notice rather than looking like an app failure.
+    @Test @MainActor
+    func missingClaudeInstallationWithoutCacheStaysQuiet() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.noBinary },
+            loadClaudeCache: { nil }
+        )
+
+        await coordinator.refreshClaude()
+
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .claudeCode })?.status == .noData
+        )
     }
 
     /// An API-key / Bedrock session has no plan quota at all. That is a

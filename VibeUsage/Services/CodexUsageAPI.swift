@@ -27,12 +27,20 @@ enum CodexUsageAPI {
     /// Why a live fetch produced no snapshot. The coordinator maps these to
     /// different fallbacks: `unauthorized` surfaces a re-login affordance,
     /// everything else silently degrades to the JSONL scan.
-    enum FetchError: Error {
+    enum FetchError: RateLimitFetchError {
         case notLoggedIn        // no auth.json / no OAuth tokens (API-key-only login)
         case unauthorized       // token rejected even after re-reading auth.json
         case transport(Error)   // offline, DNS failure, timeout
         case badResponse(Int)   // non-200 that survived the retry policy
         case unparseable        // 200 but not a JSON shape we recognize
+
+        var rateLimitFailure: RateLimitFetchFailure {
+            switch self {
+            case .notLoggedIn: return .absent
+            case .unauthorized: return .unauthorized
+            case .transport, .badResponse, .unparseable: return .transient
+            }
+        }
     }
 
     // MARK: - Fetch
