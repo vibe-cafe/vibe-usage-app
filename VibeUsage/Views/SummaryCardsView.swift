@@ -2,6 +2,19 @@ import SwiftUI
 
 struct SummaryCardsView: View {
     @Environment(AppState.self) private var appState
+    @State private var currencyMode: CurrencyMode = .usd
+    @State private var totalTokenMode: TokenMode = .international
+    @State private var cachedTokenMode: TokenMode = .international
+
+    private enum CurrencyMode: Equatable {
+        case usd
+        case cny
+    }
+
+    private enum TokenMode: Equatable {
+        case international
+        case chinese
+    }
 
     private var filtered: [UsageBucket] {
         let cutoff = appState.timeRange.startCutoff
@@ -38,9 +51,25 @@ struct SummaryCardsView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            StatCard(label: "预估费用", value: Formatters.formatCost(totalCost), color: Color(red: 0.2, green: 0.8, blue: 0.5))
-            StatCard(label: "总 Token", value: Formatters.formatNumber(totalTokens))
-            StatCard(label: "缓存 Token", value: Formatters.formatNumber(totalCachedInputTokens))
+            StatCard(
+                label: "预估费用",
+                value: currencyMode == .usd ? Formatters.formatCost(totalCost) : Formatters.formatCnyCost(totalCost),
+                color: Color(red: 0.2, green: 0.8, blue: 0.5),
+                action: { currencyMode = currencyMode == .usd ? .cny : .usd },
+                help: "点击切换美元/人民币；精确值：\(Formatters.formatCost(totalCost))"
+            )
+            StatCard(
+                label: "总 Token",
+                value: totalTokenMode == .international ? Formatters.formatNumber(totalTokens) : Formatters.formatChineseTokens(totalTokens),
+                action: { totalTokenMode = totalTokenMode == .international ? .chinese : .international },
+                help: "点击切换国际/中文单位；精确值：\(formatExactInteger(totalTokens))"
+            )
+            StatCard(
+                label: "缓存 Token",
+                value: cachedTokenMode == .international ? Formatters.formatNumber(totalCachedInputTokens) : Formatters.formatChineseTokens(totalCachedInputTokens),
+                action: { cachedTokenMode = cachedTokenMode == .international ? .chinese : .international },
+                help: "点击切换国际/中文单位；精确值：\(formatExactInteger(totalCachedInputTokens))"
+            )
             StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: Color(red: 0.38, green: 0.6, blue: 1.0))
         }
         .frame(maxWidth: .infinity)
@@ -49,12 +78,21 @@ struct SummaryCardsView: View {
         .animation(.easeInOut(duration: 0.28), value: totalCachedInputTokens)
         .animation(.easeInOut(duration: 0.28), value: totalActiveSeconds)
     }
+
+    private func formatExactInteger(_ value: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.locale = Locale(identifier: "zh_CN")
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
 }
 
 private struct StatCard: View {
     let label: String
     let value: String
     var color: Color = .white
+    var action: (() -> Void)?
+    var help: String?
 
     // Reserve fixed line-box heights so all cards render at exactly the same height,
     // even when minimumScaleFactor shrinks the value glyphs in narrower columns.
@@ -62,6 +100,21 @@ private struct StatCard: View {
     private let valueHeight: CGFloat = 24   // 20pt font
 
     var body: some View {
+        Group {
+            if let action {
+                Button(action: action) {
+                    cardContent
+                }
+                .buttonStyle(.plain)
+                .help(help ?? label)
+                .accessibilityLabel(label)
+            } else {
+                cardContent
+            }
+        }
+    }
+
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.system(size: 12))
@@ -71,7 +124,8 @@ private struct StatCard: View {
                 .minimumScaleFactor(0.85)
                 .frame(height: labelHeight, alignment: .leading)
             Text(value)
-                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                .font(.system(size: 20, weight: .bold))
+                .monospacedDigit()
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)

@@ -23,6 +23,59 @@ enum Formatters {
         return String(format: "$%.2f", cost)
     }
 
+    /// Format an estimated USD cost as CNY using the product's fixed display rate.
+    static func formatCnyCost(_ cost: Double) -> String {
+        let cny = cost * 7
+        if cny == 0 { return "￥0.00" }
+        if cny < 0.01 { return String(format: "￥%.4f", cny) }
+        return String(format: "￥%.2f", cny)
+    }
+
+    /// Format a token count with the compact Chinese unit convention.
+    static func formatChineseTokens(_ tokens: Int) -> String {
+        guard tokens >= 0 else { return "—" }
+        guard tokens >= 1_000 else { return "\(tokens)" }
+
+        let units: [(factor: Double, suffix: String)] = [
+            (1, ""),
+            (1_000, "千"),
+            (10_000, "万"),
+            (10_000_000, "千万"),
+            (100_000_000, "亿"),
+            (100_000_000_000, "千亿"),
+            (1_000_000_000_000, "万亿"),
+        ]
+        let count = Double(tokens)
+        var unitIndex = units.indices.last!
+        while unitIndex > 0 && count < units[unitIndex].factor {
+            unitIndex -= 1
+        }
+
+        while true {
+            let unit = units[unitIndex]
+            let coefficient = roundToThreeSignificantDigits(count / unit.factor)
+            if unitIndex + 1 < units.count,
+               coefficient * unit.factor >= units[unitIndex + 1].factor {
+                unitIndex += 1
+                continue
+            }
+            return "\(formatCoefficient(coefficient))\(unit.suffix)"
+        }
+    }
+
+    private static func roundToThreeSignificantDigits(_ value: Double) -> Double {
+        let scale = pow(10, 2 - floor(log10(abs(value))))
+        let floatingPointGuard = Double.ulpOfOne * max(1, abs(value)) * 10
+        return ((value + floatingPointGuard) * scale).rounded() / scale
+    }
+
+    private static func formatCoefficient(_ value: Double) -> String {
+        var text = String(format: "%.3f", value)
+        while text.last == "0" { text.removeLast() }
+        if text.last == "." { text.removeLast() }
+        return text
+    }
+
     /// Format date for chart axis: "2/25"
     static func formatDateShort(_ dateString: String) -> String {
         let isoFormatter = ISO8601DateFormatter()
