@@ -261,19 +261,25 @@ enum ClaudeUsageProbe {
     /// descendants) closing the pipe. Bytes rather than a parsed dictionary
     /// because `[String: Any]` cannot cross an isolation boundary under strict
     /// concurrency.
+    /// `--input-format stream-json` is accepted only in print mode by current
+    /// Claude Code releases. Keep the process arguments testable so a future
+    /// CLI flag change cannot silently turn every probe into `.noResponse`.
+    static let processArguments = [
+        "--print",
+        "--safe-mode",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--mcp-config", #"{"mcpServers":{}}"#,
+        "--tools", "",
+        "--output-format", "stream-json",
+        "--input-format", "stream-json",
+        "--verbose",
+    ]
+
     private static func run(candidate: Binary, timeout: TimeInterval) async throws -> Data {
         let process = Process()
         process.executableURL = candidate.url
-        process.arguments = [
-            "--safe-mode",
-            "--no-session-persistence",
-            "--strict-mcp-config",
-            "--mcp-config", #"{"mcpServers":{}}"#,
-            "--tools", "",
-            "--output-format", "stream-json",
-            "--input-format", "stream-json",
-            "--verbose",
-        ]
+        process.arguments = processArguments
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         process.environment = childEnvironment()
 

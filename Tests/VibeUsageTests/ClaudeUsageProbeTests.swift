@@ -4,6 +4,24 @@ import Testing
 
 struct ClaudeUsageProbeTests {
 
+    /// Claude Code 2.1.246 rejects stream-json stdin unless print mode is
+    /// explicit. Without this flag the process exits before `initialize`, and
+    /// the app silently loses the Claude quota card.
+    @Test
+    func streamJSONProbeRunsInPrintMode() {
+        #expect(ClaudeUsageProbe.processArguments == [
+            "--print",
+            "--safe-mode",
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "--mcp-config", #"{"mcpServers":{}}"#,
+            "--tools", "",
+            "--output-format", "stream-json",
+            "--input-format", "stream-json",
+            "--verbose",
+        ])
+    }
+
     /// Verbatim shape of a real `get_usage` control response (trimmed to the
     /// fields we read), so schema drift in the binary shows up as a test failure
     /// rather than a silently empty card.
