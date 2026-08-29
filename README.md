@@ -29,7 +29,7 @@ macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常�
 - 可在菜单栏显示今日费用和 Token 数
 - 可在设置中显示或隐藏 Dock 图标
 - 可在设置中分别显示或隐藏 Codex / Claude 订阅配额
-- 可在设置中选择一个额外的 Codex Home（例如第三方 Codex 管理器目录）；默认 `~/.codex` 会继续同时扫描
+- 可在设置中为 Codex、Grok、Antigravity / AGY 添加多个 Multica 或其他隔离运行时目录；旧版单一 Codex Home 配置和各工具默认目录仍会继续扫描
 - 支持开机自启动
 
 ## 系统要求

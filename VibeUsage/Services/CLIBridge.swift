@@ -3,6 +3,8 @@ import Foundation
 /// Shells out to `vibe-usage` CLI for config management.
 /// The Mac app reads config.json directly (read-only) but all writes go through the CLI.
 enum CLIBridge {
+    typealias ExtraRoots = [String: [String]]
+
     enum CLIError: LocalizedError {
         case noRuntime
         case processFailure(String)
@@ -29,6 +31,24 @@ enum CLIBridge {
         let output = try await runCLI(args: ["config", "get", key])
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// List tool-specific additional roots as JSON.
+    static func configRoots() async throws -> ExtraRoots {
+        try decodeRoots(await runCLI(args: ["config", "roots"]))
+    }
+
+    static func configAddRoot(source: String, path: String) async throws {
+        try await runCLI(args: ["config", "add-root", source, path])
+    }
+
+    static func configRemoveRoot(source: String, path: String) async throws {
+        try await runCLI(args: ["config", "remove-root", source, path])
+    }
+
+    static func decodeRoots(_ output: String) throws -> ExtraRoots {
+        guard let data = output.data(using: .utf8) else { return [:] }
+        return try JSONDecoder().decode(ExtraRoots.self, from: data)
     }
 
     // MARK: - Private

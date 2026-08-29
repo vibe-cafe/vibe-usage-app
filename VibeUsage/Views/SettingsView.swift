@@ -16,6 +16,15 @@ struct SettingsView: View {
     @State private var isSavingCodexHome = false
     @State private var codexHomeMessage: String?
     @State private var codexHomeError: String?
+    @State private var extraRoots: CLIBridge.ExtraRoots = [:]
+    @State private var extraRootsError: String?
+    @State private var editingExtraRoots = false
+
+    private let extraRootSources = [
+        (id: "codex", name: "Codex"),
+        (id: "grok", name: "Grok"),
+        (id: "antigravity", name: "Antigravity / AGY"),
+    ]
 
     var body: some View {
         Form {
@@ -136,6 +145,58 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
+            Section {
+                ForEach(extraRootSources, id: \.id) { source in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(source.name)
+                            Spacer()
+                            Button("添加目录…") {
+                                chooseExtraRoot(source: source.id, name: source.name)
+                            }
+                            .font(.caption)
+                            .disabled(editingExtraRoots)
+                        }
+
+                        ForEach(extraRoots[source.id] ?? [], id: \.self) { path in
+                            HStack(spacing: 8) {
+                                Text(path)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(path)
+                                Spacer(minLength: 8)
+                                Button(role: .destructive) {
+                                    Task { await removeExtraRoot(source: source.id, path: path) }
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(editingExtraRoots)
+                                .help("移除此目录")
+                            }
+                        }
+                    }
+                }
+
+                if editingExtraRoots {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                if let extraRootsError {
+                    Text(extraRootsError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(3)
+                }
+            } header: {
+                Text("隔离运行时目录")
+            } footer: {
+                Text("可为每种工具添加多个 Multica 或其他隔离目录；默认目录仍会照常统计。")
+                    .font(.caption)
+            }
+
             // Subscription quota monitoring
             Section {
                 Toggle("显示 Codex 订阅配额", isOn: Binding(
@@ -245,6 +306,7 @@ struct SettingsView: View {
         .frame(width: 420, height: 460)
         .onAppear {
             loadSettings()
+            Task { await loadExtraRoots() }
         }
     }
 
@@ -303,6 +365,53 @@ struct SettingsView: View {
             await appState.triggerSync()
         } catch {
             codexHomeError = error.localizedDescription
+        }
+    }
+
+    private func chooseExtraRoot(source: String, name: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "添加"
+        panel.message = "请选择 \(name) 的数据根目录或包含多个隔离 Home 的容器目录"
+
+        guard panel.runModal() == .OK, let path = panel.url?.path else { return }
+        Task { await addExtraRoot(source: source, path: path) }
+    }
+
+    private func loadExtraRoots() async {
+        do {
+            extraRoots = try await CLIBridge.configRoots()
+            extraRootsError = nil
+        } catch {
+            extraRootsError = error.localizedDescription
+        }
+    }
+
+    private func addExtraRoot(source: String, path: String) async {
+        editingExtraRoots = true
+        extraRootsError = nil
+        defer { editingExtraRoots = false }
+        do {
+            try await CLIBridge.configAddRoot(source: source, path: path)
+            extraRoots = try await CLIBridge.configRoots()
+            await appState.triggerSync()
+        } catch {
+            extraRootsError = error.localizedDescription
+        }
+    }
+
+    private func removeExtraRoot(source: String, path: String) async {
+        editingExtraRoots = true
+        extraRootsError = nil
+        defer { editingExtraRoots = false }
+        do {
+            try await CLIBridge.configRemoveRoot(source: source, path: path)
+            extraRoots = try await CLIBridge.configRoots()
+            await appState.triggerSync()
+        } catch {
+            extraRootsError = error.localizedDescription
         }
     }
 
