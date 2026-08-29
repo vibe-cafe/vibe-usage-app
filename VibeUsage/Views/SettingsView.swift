@@ -376,8 +376,10 @@ struct SettingsView: View {
         panel.prompt = "添加"
         panel.message = "请选择 \(name) 的数据根目录或包含多个隔离 Home 的容器目录"
 
-        guard panel.runModal() == .OK, let path = panel.url?.path else { return }
-        Task { await addExtraRoot(source: source, path: path) }
+        panel.begin { response in
+            guard response == .OK, let path = panel.url?.path else { return }
+            Task { await addExtraRoot(source: source, path: path) }
+        }
     }
 
     private func loadExtraRoots() async {

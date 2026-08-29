@@ -2,7 +2,11 @@ import Foundation
 
 /// Detects available Node.js runtime (bun preferred, npx fallback)
 enum RuntimeDetector {
-    static let packageSpecifier = "@vibe-cafe/vibe-usage@latest"
+    static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@latest"
+    static var packageSpecifier: String {
+        ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"]
+            ?? defaultPackageSpecifier
+    }
 
     struct Runtime {
         let executablePath: String
@@ -114,6 +118,12 @@ enum RuntimeDetector {
 
     /// Detect the best available JS runtime
     static func detect() -> Runtime? {
+        // Local package paths are an integration-test hook; bun x does not
+        // accept them, while npx does.
+        if ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] != nil,
+           let npxPath = findExecutable("npx") {
+            return Runtime(executablePath: npxPath, name: "npx")
+        }
         // Prefer bun for speed
         if let bunPath = findExecutable("bun") {
             return Runtime(executablePath: bunPath, name: "bun")

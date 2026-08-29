@@ -9,8 +9,9 @@ struct VibeUsageConfig: Codable {
 }
 
 enum ConfigManager {
-    private static let configDir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".vibe-usage")
+    private static let configDir = ProcessInfo.processInfo.environment["VIBE_USAGE_CONFIG_DIR"]
+        .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".vibe-usage")
     private static let configFile = configDir.appendingPathComponent(AppConfig.configFileName)
 
     static func load() -> VibeUsageConfig? {
