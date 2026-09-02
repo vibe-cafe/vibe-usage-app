@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import VibeUsage
 
+@MainActor
 struct RateLimitCardViewTests {
     private func snapshot(
         provider: ProviderRateLimit.Provider,
