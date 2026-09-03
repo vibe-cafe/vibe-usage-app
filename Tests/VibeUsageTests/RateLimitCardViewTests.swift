@@ -85,4 +85,48 @@ struct RateLimitCardViewTests {
 
         #expect(visible == [.codex])
     }
+
+    @Test
+    func enabledGrokRemainsVisibleBesideAvailableCodex() {
+        let visible = RateLimitCardView.visibleProviders(
+            codex: snapshot(provider: .codex, status: .ok),
+            claude: snapshot(provider: .claudeCode, status: .noData),
+            grok: snapshot(provider: .grok, status: .noData),
+            codexEnabled: true,
+            claudeEnabled: false,
+            grokEnabled: true,
+            codexRefreshing: false,
+            claudeRefreshing: false,
+            grokRefreshing: false
+        )
+
+        #expect(visible == [.codex, .grok])
+    }
+
+    @Test
+    func threeSettledEmptyProvidersUseTheNoticeBar() {
+        let visible = RateLimitCardView.visibleProviders(
+            codex: snapshot(provider: .codex, status: .noData),
+            claude: snapshot(provider: .claudeCode, status: .noData),
+            grok: snapshot(provider: .grok, status: .noData),
+            codexEnabled: true,
+            claudeEnabled: true,
+            grokEnabled: true,
+            codexRefreshing: false,
+            claudeRefreshing: false,
+            grokRefreshing: false
+        )
+
+        #expect(visible.isEmpty)
+    }
+
+    @Test
+    func grokWeeklyWindowKeepsSevenDayLabel() {
+        let snapshot = ProviderRateLimit(
+            provider: .grok,
+            sevenDay: RateLimitWindow(utilization: 9, windowDuration: 7 * 86_400),
+            status: .ok
+        )
+        #expect(RateLimitCardView.longWindowLabel(for: snapshot, window: snapshot.sevenDay!) == "7d")
+    }
 }

@@ -157,7 +157,7 @@ final class AppState {
     var isConfigured: Bool = false
     var runtimeAvailable: Bool = true
 
-    // MARK: - Rate Limits (subscription quota for Claude + Codex)
+    // MARK: - Rate Limits (subscription quota for Codex / Claude / Grok)
     var codexRateLimitEnabled: Bool = true {
         didSet { UserDefaults.standard.set(codexRateLimitEnabled, forKey: "codexRateLimitEnabled") }
     }
@@ -169,6 +169,7 @@ final class AppState {
     /// user-perceivable and needs an indicator.
     var isCodexRateLimitRefreshing: Bool = false
     var isClaudeRateLimitRefreshing: Bool = false
+    var isGrokRateLimitRefreshing: Bool = false
 
     /// Whether to show the Claude quota card. Purely a display preference now,
     /// exactly like `codexRateLimitEnabled`: reads go through `ClaudeUsageProbe`
@@ -177,6 +178,13 @@ final class AppState {
     /// why it defaulted off and needed an explicit opt-in click.
     var claudeRateLimitEnabled: Bool = true {
         didSet { UserDefaults.standard.set(claudeRateLimitEnabled, forKey: "claudeRateLimitEnabled") }
+    }
+
+    /// Whether to show the Grok quota card. Defaults off so the dashboard
+    /// stays a two-card Codex/Claude row unless the user opts in. Read-only
+    /// like Codex: live fetch uses the Grok CLI's `auth.json` token.
+    var grokRateLimitEnabled: Bool = false {
+        didSet { UserDefaults.standard.set(grokRateLimitEnabled, forKey: "grokRateLimitEnabled") }
     }
 
     // MARK: - Menu Bar Display Prefs
@@ -243,6 +251,7 @@ final class AppState {
         let legacyRateLimitEnabled = UserDefaults.standard.object(forKey: "rateLimitMonitoringEnabled") as? Bool
         self.codexRateLimitEnabled = UserDefaults.standard.object(forKey: "codexRateLimitEnabled") as? Bool ?? legacyRateLimitEnabled ?? true
         self.claudeRateLimitEnabled = Self.resolveClaudeRateLimitPreference()
+        self.grokRateLimitEnabled = UserDefaults.standard.object(forKey: "grokRateLimitEnabled") as? Bool ?? false
         self.claudeUsesDesktopBundledCLI = ClaudeUsageProbe.primarySourceKind() == .desktop
 
         // Hand back the `statusLine.command` edit the pre-probe releases made.
@@ -259,9 +268,10 @@ final class AppState {
             startScheduler()
         }
 
-        // Rate limits are independent of configuration — both Codex and Claude
-        // read local files (no auth). Start only for enabled providers.
-        if codexRateLimitEnabled || claudeRateLimitEnabled {
+        // Rate limits are independent of configuration — Codex / Claude / Grok
+        // all read local credentials (no extra auth). Start only for enabled
+        // providers.
+        if anyRateLimitEnabled {
             startRateLimitCoordinator()
         }
     }
@@ -383,6 +393,7 @@ final class AppState {
         } else {
             rateLimitCoordinator?.cancelCodexRefresh()
             removeRateLimit(for: .codex)
+            stopRateLimitCoordinatorIfIdle()
         }
     }
 
@@ -398,6 +409,23 @@ final class AppState {
         } else {
             rateLimitCoordinator?.claudeMonitoringDidChange()
             removeRateLimit(for: .claudeCode)
+            stopRateLimitCoordinatorIfIdle()
+        }
+    }
+
+    /// Toggle Grok quota monitoring. Read-only like Codex — nothing to
+    /// install, so the preference flips immediately.
+    func setGrokRateLimitEnabled(_ enabled: Bool) async {
+        guard grokRateLimitEnabled != enabled else { return }
+        grokRateLimitEnabled = enabled
+
+        if enabled {
+            if rateLimitCoordinator == nil { startRateLimitCoordinator() }
+            await rateLimitCoordinator?.refreshGrok()
+        } else {
+            rateLimitCoordinator?.cancelGrokRefresh()
+            removeRateLimit(for: .grok)
+            stopRateLimitCoordinatorIfIdle()
         }
     }
 
@@ -419,6 +447,9 @@ final class AppState {
         case .claudeCode:
             guard claudeRateLimitEnabled else { return }
             await rateLimitCoordinator?.refreshClaude()
+        case .grok:
+            guard grokRateLimitEnabled else { return }
+            await rateLimitCoordinator?.refreshGrok()
         }
     }
 
@@ -437,10 +468,17 @@ final class AppState {
         await rateLimitCoordinator?.refreshClaudeIfNeeded()
     }
 
-    /// Refresh both Codex and Claude (in parallel). Prompt-free: Codex hits the
-    /// zero-quota usage endpoint with the CLI's own token, Claude reads the
-    /// local cache then delegates the live read to Claude Code. Safe to call
-    /// from the global user-initiated refresh path.
+    /// Refresh Grok rate limits on popover-open (debounced). Prompt-free: the
+    /// live path uses the Grok CLI's own `auth.json` token.
+    func refreshGrokRateLimitIfNeeded() async {
+        guard grokRateLimitEnabled else { return }
+        await rateLimitCoordinator?.refreshGrokIfNeeded()
+    }
+
+    /// Refresh Codex, Claude, and Grok in parallel. Prompt-free: Codex and Grok
+    /// hit their official usage endpoints with each CLI's own token; Claude
+    /// reads the local cache then delegates the live read to Claude Code. Safe
+    /// to call from the global user-initiated refresh path.
     func refreshAllRateLimits() async {
         await rateLimitCoordinator?.refreshAll()
     }
@@ -464,8 +502,17 @@ final class AppState {
 
     // MARK: - Private
 
+    private var anyRateLimitEnabled: Bool {
+        codexRateLimitEnabled || claudeRateLimitEnabled || grokRateLimitEnabled
+    }
+
     private func removeRateLimit(for provider: ProviderRateLimit.Provider) {
         rateLimits.removeAll { $0.provider == provider }
+    }
+
+    private func stopRateLimitCoordinatorIfIdle() {
+        guard !anyRateLimitEnabled else { return }
+        rateLimitCoordinator = nil
     }
 
     private func startRateLimitCoordinator() {

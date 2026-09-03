@@ -226,6 +226,14 @@ struct SettingsView: View {
                     }
                 }
                 .tint(.green)
+
+                Toggle("显示 Grok 订阅配额", isOn: Binding(
+                    get: { appState.grokRateLimitEnabled },
+                    set: { newValue in
+                        Task { await appState.setGrokRateLimitEnabled(newValue) }
+                    }
+                ))
+                .tint(.green)
             } header: {
                 Text("订阅配额")
             }

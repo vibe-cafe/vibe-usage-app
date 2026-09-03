@@ -2,12 +2,15 @@ import Foundation
 
 /// Refreshes rate-limit snapshots on demand and pushes results into AppState.
 ///
-/// Both providers follow the same shape: paint an on-disk snapshot instantly,
+/// Every provider follows the same shape: paint an on-disk snapshot instantly,
 /// then replace it with a live reading.
 ///
 /// Codex is network-first: `CodexUsageAPI` reads the zero-quota usage endpoint
 /// with the CLI's own OAuth token (a plain-file read — no prompts), falling
 /// back to the session-JSONL scan when offline or logged out.
+///
+/// Grok is the same shape against the Grok CLI-proxy billing endpoint and
+/// `~/.grok/auth.json`, with `unified.jsonl` as the offline fallback.
 ///
 /// Claude paints from `ClaudeUsageCache` (Claude Code's own `~/.claude.json`
 /// cache, else Claude Desktop's usage history) and then runs
@@ -24,16 +27,22 @@ final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
+    private var lastGrokFetchAt: Date?
     private var isPanelVisible = false
     private var codexRefreshTask: Task<Void, Never>?
     private var codexRefreshID: UUID?
     private var claudeRefreshTask: Task<Void, Never>?
     private var claudeRefreshID: UUID?
+    private var grokRefreshTask: Task<Void, Never>?
+    private var grokRefreshID: UUID?
     private let fetchCodexLive: @MainActor () async throws -> ProviderRateLimit
     private let loadCodexCache: @MainActor () async -> ProviderRateLimit?
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
+    private let fetchGrokLive: @MainActor () async throws -> ProviderRateLimit
+    private let loadGrokCache: @MainActor () async -> ProviderRateLimit?
+    private let readGrokFallback: @MainActor () async -> ProviderRateLimit
 
     init(
         appState: AppState,
@@ -51,6 +60,15 @@ final class RateLimitCoordinator {
         },
         loadClaudeCache: @escaping @MainActor () async -> ProviderRateLimit? = {
             await RateLimitCoordinator.loadClaudeDiskSnapshot()
+        },
+        fetchGrokLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
+            try await GrokUsageAPI.fetch()
+        },
+        loadGrokCache: @escaping @MainActor () async -> ProviderRateLimit? = {
+            await RateLimitCoordinator.loadCachedGrokSnapshot()
+        },
+        readGrokFallback: @escaping @MainActor () async -> ProviderRateLimit = {
+            await RateLimitCoordinator.readGrokLogFiles()
         }
     ) {
         self.appState = appState
@@ -59,6 +77,9 @@ final class RateLimitCoordinator {
         self.readCodexFallback = readCodexFallback
         self.fetchClaudeLive = fetchClaudeLive
         self.loadClaudeCache = loadClaudeCache
+        self.fetchGrokLive = fetchGrokLive
+        self.loadGrokCache = loadGrokCache
+        self.readGrokFallback = readGrokFallback
     }
 
     /// Refresh Codex unconditionally: live endpoint first, JSONL fallback.
@@ -242,22 +263,109 @@ final class RateLimitCoordinator {
         await refreshClaude()
     }
 
-    /// Refresh everything currently visible, in parallel — the Codex leg now
-    /// includes a network round-trip, so serializing would double the wait.
+    /// Refresh Grok unconditionally: live billing endpoint first, unified.jsonl
+    /// fallback. Same single-flight / cancel contract as Codex.
+    func refreshGrok() async {
+        guard let appState, appState.grokRateLimitEnabled else { return }
+        if let task = grokRefreshTask {
+            await task.value
+            return
+        }
+
+        let refreshID = UUID()
+        appState.isGrokRateLimitRefreshing = true
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performGrokRefresh()
+        }
+        grokRefreshID = refreshID
+        grokRefreshTask = task
+        await task.value
+
+        if grokRefreshID == refreshID {
+            grokRefreshTask = nil
+            grokRefreshID = nil
+            appState.isGrokRateLimitRefreshing = false
+        }
+    }
+
+    private func performGrokRefresh() async {
+        guard let appState, appState.grokRateLimitEnabled else { return }
+
+        if currentSnapshot(.grok)?.status != .ok,
+           let cached = await loadGrokCache(),
+           !Task.isCancelled,
+           appState.grokRateLimitEnabled,
+           currentSnapshot(.grok)?.status != .ok {
+            upsert(cached)
+        }
+
+        do {
+            let live = try await fetchGrokLive()
+            guard !Task.isCancelled, appState.grokRateLimitEnabled else { return }
+            upsert(live)
+        } catch is CancellationError {
+            return
+        } catch {
+            let failure = Self.classify(error)
+            if failure == .notApplicable {
+                debugLog("[rate-limit] grok plan limits not applicable for this account")
+                guard !Task.isCancelled, appState.grokRateLimitEnabled else { return }
+                upsert(ProviderRateLimit(provider: .grok, status: .noData, fetchedAt: Date()))
+            } else {
+                if failure == .unauthorized {
+                    debugLog("[rate-limit] grok live fetch unauthorized — user logged out of Grok CLI")
+                } else {
+                    debugLog("[rate-limit] grok live fetch failed (\(error)) — falling back to unified.jsonl")
+                }
+                let fallback = await readGrokFallback()
+                guard !Task.isCancelled, appState.grokRateLimitEnabled else { return }
+                if fallback.status == .ok {
+                    upsertIfNewer(fallback)
+                } else if currentSnapshot(.grok)?.status != .ok {
+                    let status: ProviderRateLimit.Status
+                    switch failure {
+                    case .absent, .notApplicable:
+                        status = .noData
+                    case .unauthorized:
+                        status = .unauthorized
+                    case .transient:
+                        status = .retryableError
+                    }
+                    upsert(ProviderRateLimit(provider: .grok, status: status, fetchedAt: Date()))
+                }
+            }
+        }
+        guard !Task.isCancelled else { return }
+        lastGrokFetchAt = Date()
+    }
+
+    func refreshGrokIfNeeded(maxAge: TimeInterval = 60) async {
+        if let last = lastGrokFetchAt, Date().timeIntervalSince(last) < maxAge {
+            return
+        }
+        await refreshGrok()
+    }
+
+    /// Refresh everything currently visible, in parallel — Codex and Grok both
+    /// include a network round-trip, so serializing would multiply the wait.
     func refreshAll() async {
         async let codex: Void = refreshCodex()
         async let claude: Void = refreshClaude()
-        _ = await (codex, claude)
+        async let grok: Void = refreshGrok()
+        _ = await (codex, claude, grok)
     }
 
     /// Ensure every enabled provider has a placeholder entry so the card row
     /// renders its loading state on a cold open instead of appearing empty.
     func seedPlaceholders() {
-        for provider in [ProviderRateLimit.Provider.codex, .claudeCode] {
-            let enabled = provider == .codex
-                ? appState?.codexRateLimitEnabled == true
-                : appState?.claudeRateLimitEnabled == true
-            guard enabled,
+        let enabled: [ProviderRateLimit.Provider: Bool] = [
+            .codex: appState?.codexRateLimitEnabled == true,
+            .claudeCode: appState?.claudeRateLimitEnabled == true,
+            .grok: appState?.grokRateLimitEnabled == true
+        ]
+        for provider in [ProviderRateLimit.Provider.codex, .claudeCode, .grok] {
+            guard enabled[provider] == true,
                   appState?.rateLimits.contains(where: { $0.provider == provider }) != true
             else { continue }
             upsert(ProviderRateLimit(provider: provider, status: .noData, fetchedAt: nil))
@@ -266,17 +374,18 @@ final class RateLimitCoordinator {
 
     // MARK: - Panel lifecycle
 
-    /// Off-screen refreshes have no one to display them, and both providers now
-    /// cost a real round trip (Codex over HTTP, Claude over a subprocess), so
-    /// closing the panel cancels whatever is in flight.
+    /// Off-screen refreshes have no one to display them, and every provider now
+    /// costs a real round trip (Codex/Grok over HTTP, Claude over a subprocess),
+    /// so closing the panel cancels whatever is in flight.
     ///
     /// There is no live file watcher any more: the statusline capture that used
-    /// to justify one is gone, and both providers refresh on open instead.
+    /// to justify one is gone, and providers refresh on open instead.
     func panelVisibilityChanged(visible: Bool) {
         isPanelVisible = visible
         if !visible {
             cancelCodexRefresh()
             cancelClaudeRefresh()
+            cancelGrokRefresh()
         }
     }
 
@@ -306,6 +415,13 @@ final class RateLimitCoordinator {
         appState?.isClaudeRateLimitRefreshing = false
     }
 
+    func cancelGrokRefresh() {
+        grokRefreshTask?.cancel()
+        grokRefreshTask = nil
+        grokRefreshID = nil
+        appState?.isGrokRateLimitRefreshing = false
+    }
+
     private nonisolated static func readCodexSessionFiles() async -> ProviderRateLimit {
         let task = Task.detached(priority: .userInitiated) {
             CodexRateLimitReader.read()
@@ -331,6 +447,28 @@ final class RateLimitCoordinator {
     private nonisolated static func loadClaudeDiskSnapshot() async -> ProviderRateLimit? {
         let task = Task.detached(priority: .userInitiated) {
             ClaudeUsageCache.bestSnapshot()
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private nonisolated static func readGrokLogFiles() async -> ProviderRateLimit {
+        let task = Task.detached(priority: .userInitiated) {
+            GrokRateLimitReader.read()
+        }
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private nonisolated static func loadCachedGrokSnapshot() async -> ProviderRateLimit? {
+        let task = Task.detached(priority: .userInitiated) {
+            GrokUsageAPI.cachedSnapshot()
         }
         return await withTaskCancellationHandler {
             await task.value

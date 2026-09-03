@@ -267,7 +267,7 @@ struct PopoverView: View {
 
     @ViewBuilder
     private var rateLimitSection: some View {
-        if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
+        if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled || appState.grokRateLimitEnabled {
             // zIndex must beat FilterTagsView's (10): the quota hover tooltip
             // overflows below the card, and the filter row would otherwise
             // paint over it.

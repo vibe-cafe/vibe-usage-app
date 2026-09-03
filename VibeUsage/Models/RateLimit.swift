@@ -24,7 +24,7 @@ struct RateLimitWindow: Equatable {
     var windowDuration: TimeInterval?
 }
 
-/// Pay-as-you-go credits beyond the base subscription quota (Claude only).
+/// Pay-as-you-go credits beyond the base subscription quota (Claude / Grok).
 struct ExtraUsage: Equatable {
     var isEnabled: Bool
     var spend: Double
@@ -37,6 +37,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
     enum Provider: String {
         case codex = "Codex"
         case claudeCode = "Claude Code"
+        case grok = "Grok"
     }
 
     enum Status: Equatable {

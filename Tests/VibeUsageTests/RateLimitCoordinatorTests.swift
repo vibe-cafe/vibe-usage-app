@@ -308,4 +308,184 @@ struct RateLimitCoordinatorTests {
 
         #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.status == .noData)
     }
+
+    private func grokSnapshot(
+        utilization: Double,
+        dataAsOf: Date?
+    ) -> ProviderRateLimit {
+        ProviderRateLimit(
+            provider: .grok,
+            sevenDay: RateLimitWindow(utilization: utilization),
+            status: .ok,
+            fetchedAt: dataAsOf,
+            dataAsOf: dataAsOf
+        )
+    }
+
+    @Test @MainActor
+    func grokCachePaintsBeforeLiveFetchReplacesIt() async {
+        let appState = AppState()
+        appState.grokRateLimitEnabled = true
+        var paintedWhileFetching: ProviderRateLimit?
+
+        let cached = grokSnapshot(
+            utilization: 4,
+            dataAsOf: Date(timeIntervalSince1970: 100)
+        )
+        let live = grokSnapshot(
+            utilization: 9,
+            dataAsOf: Date(timeIntervalSince1970: 200)
+        )
+
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchGrokLive: {
+                paintedWhileFetching = appState.rateLimits.first { $0.provider == .grok }
+                return live
+            },
+            loadGrokCache: { cached },
+            readGrokFallback: {
+                ProviderRateLimit(provider: .grok, status: .noData)
+            }
+        )
+
+        await coordinator.refreshGrok()
+
+        #expect(paintedWhileFetching == cached)
+        #expect(appState.rateLimits.first { $0.provider == .grok } == live)
+        #expect(!appState.isGrokRateLimitRefreshing)
+    }
+
+    @Test @MainActor
+    func grokTransportFailureWithoutFallbackSurfacesRetryableError() async {
+        let appState = AppState()
+        appState.grokRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchGrokLive: {
+                throw GrokUsageAPI.FetchError.transport(URLError(.notConnectedToInternet))
+            },
+            loadGrokCache: { nil },
+            readGrokFallback: {
+                ProviderRateLimit(provider: .grok, status: .noData)
+            }
+        )
+
+        await coordinator.refreshGrok()
+
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .grok })?.status
+                == .retryableError
+        )
+    }
+
+    @Test @MainActor
+    func missingGrokLoginWithoutFallbackStaysQuiet() async {
+        let appState = AppState()
+        appState.grokRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchGrokLive: { throw GrokUsageAPI.FetchError.notLoggedIn },
+            loadGrokCache: { nil },
+            readGrokFallback: {
+                ProviderRateLimit(provider: .grok, status: .noData)
+            }
+        )
+
+        await coordinator.refreshGrok()
+
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .grok })?.status == .noData
+        )
+    }
+
+    @Test @MainActor
+    func grokAccountWithoutPlanLimitsCollapsesTheCard() async {
+        let appState = AppState()
+        appState.grokRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchGrokLive: { throw GrokUsageAPI.FetchError.notApplicable },
+            loadGrokCache: {
+                self.grokSnapshot(
+                    utilization: 9,
+                    dataAsOf: Date(timeIntervalSince1970: 100)
+                )
+            },
+            readGrokFallback: {
+                self.grokSnapshot(
+                    utilization: 9,
+                    dataAsOf: Date(timeIntervalSince1970: 100)
+                )
+            }
+        )
+
+        await coordinator.refreshGrok()
+
+        #expect(appState.rateLimits.first { $0.provider == .grok }?.status == .noData)
+    }
+
+    @Test @MainActor
+    func concurrentGrokRefreshesShareOneLiveRequest() async {
+        let appState = AppState()
+        appState.grokRateLimitEnabled = true
+        var fetchCount = 0
+        let live = grokSnapshot(
+            utilization: 9,
+            dataAsOf: Date(timeIntervalSince1970: 200)
+        )
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchGrokLive: {
+                fetchCount += 1
+                try await Task.sleep(for: .milliseconds(50))
+                return live
+            },
+            loadGrokCache: { nil },
+            readGrokFallback: {
+                ProviderRateLimit(provider: .grok, status: .noData)
+            }
+        )
+
+        let first = Task { @MainActor in await coordinator.refreshGrok() }
+        let second = Task { @MainActor in await coordinator.refreshGrok() }
+        await first.value
+        await second.value
+
+        #expect(fetchCount == 1)
+        #expect(appState.rateLimits.first(where: { $0.provider == .grok }) == live)
+        #expect(!appState.isGrokRateLimitRefreshing)
+    }
+
+    @Test @MainActor
+    func closingPanelCancelsGrokRefreshWithoutPublishingLateData() async {
+        let appState = AppState()
+        appState.grokRateLimitEnabled = true
+        var requestStarted = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchGrokLive: {
+                requestStarted = true
+                try await Task.sleep(for: .seconds(30))
+                return self.grokSnapshot(
+                    utilization: 99,
+                    dataAsOf: Date(timeIntervalSince1970: 300)
+                )
+            },
+            loadGrokCache: { nil },
+            readGrokFallback: {
+                ProviderRateLimit(provider: .grok, status: .noData)
+            }
+        )
+
+        let refresh = Task { @MainActor in await coordinator.refreshGrok() }
+        while !requestStarted { await Task.yield() }
+        #expect(appState.isGrokRateLimitRefreshing)
+
+        coordinator.panelVisibilityChanged(visible: false)
+        await refresh.value
+
+        #expect(!appState.isGrokRateLimitRefreshing)
+        #expect(appState.rateLimits.first(where: { $0.provider == .grok }) == nil)
+    }
 }

@@ -1,42 +1,58 @@
 import SwiftUI
 import AppKit
 
-/// Side-by-side subscription quota cards for Codex (left) and Claude (right).
+/// Subscription quota cards for Codex, Claude, and Grok. Two visible
+/// providers sit side-by-side; a third wraps to a full-width row below so
+/// the 520px popover never squeezes three columns.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
         let codex = snapshot(for: .codex)
         let claude = snapshot(for: .claudeCode)
+        let grok = snapshot(for: .grok)
         let visibleProviders = Self.visibleProviders(
             codex: codex,
             claude: claude,
+            grok: grok,
             codexEnabled: appState.codexRateLimitEnabled,
             claudeEnabled: appState.claudeRateLimitEnabled,
+            grokEnabled: appState.grokRateLimitEnabled,
             codexRefreshing: appState.isCodexRateLimitRefreshing,
-            claudeRefreshing: appState.isClaudeRateLimitRefreshing
+            claudeRefreshing: appState.isClaudeRateLimitRefreshing,
+            grokRefreshing: appState.isGrokRateLimitRefreshing
         )
-        let showCodex = visibleProviders.contains(.codex)
-        let showClaude = visibleProviders.contains(.claudeCode)
+        let ordered = [codex, claude, grok].filter { visibleProviders.contains($0.provider) }
 
-        if showCodex && showClaude {
+        switch ordered.count {
+        case 0:
+            if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled || appState.grokRateLimitEnabled {
+                noticeBar
+            } else {
+                EmptyView()
+            }
+        case 1:
+            ProviderCard(snapshot: ordered[0])
+        case 2:
             // Grid keeps both row cells the same height by default — needed
             // for visual symmetry when one provider has more rows than the
             // other (e.g. free Codex with only 7d, vs Claude Pro with 5h+7d).
             Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
                 GridRow {
-                    ProviderCard(snapshot: codex)
-                    ProviderCard(snapshot: claude)
+                    ProviderCard(snapshot: ordered[0])
+                    ProviderCard(snapshot: ordered[1])
                 }
             }
-        } else if showCodex {
-            ProviderCard(snapshot: codex)
-        } else if showClaude {
-            ProviderCard(snapshot: claude)
-        } else if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
-            noticeBar
-        } else {
-            EmptyView()
+        default:
+            VStack(spacing: 8) {
+                Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                    GridRow {
+                        ProviderCard(snapshot: ordered[0])
+                        ProviderCard(snapshot: ordered[1])
+                    }
+                }
+                ProviderCard(snapshot: ordered[2])
+            }
         }
     }
 
@@ -48,39 +64,58 @@ struct RateLimitCardView: View {
     /// Keep every enabled provider visible once at least one provider has a
     /// real or actionable card. This makes the Settings toggles truthful: an
     /// enabled Claude card cannot silently disappear beside working Codex data
-    /// just because Claude currently reports `.noData`. When both enabled
-    /// providers have no data and are idle, `body` still uses the compact
-    /// `noticeBar` instead of reserving two empty cards.
+    /// just because Claude currently reports `.noData`. When every enabled
+    /// provider has no data and is idle, `body` still uses the compact
+    /// `noticeBar` instead of reserving empty cards.
     static func visibleProviders(
         codex: ProviderRateLimit,
         claude: ProviderRateLimit,
+        grok: ProviderRateLimit = ProviderRateLimit(provider: .grok, status: .noData),
         codexEnabled: Bool,
         claudeEnabled: Bool,
+        grokEnabled: Bool = false,
         codexRefreshing: Bool,
-        claudeRefreshing: Bool
+        claudeRefreshing: Bool,
+        grokRefreshing: Bool = false
     ) -> Set<ProviderRateLimit.Provider> {
-        let codexHasContent = codexEnabled && (codex.status != .noData || codexRefreshing)
-        let claudeHasContent = claudeEnabled && (claude.status != .noData || claudeRefreshing)
-        guard codexHasContent || claudeHasContent else { return [] }
+        let entries: [(ProviderRateLimit.Provider, Bool, Bool, ProviderRateLimit.Status)] = [
+            (.codex, codexEnabled, codexRefreshing, codex.status),
+            (.claudeCode, claudeEnabled, claudeRefreshing, claude.status),
+            (.grok, grokEnabled, grokRefreshing, grok.status)
+        ]
+        let anyContent = entries.contains { _, enabled, refreshing, status in
+            enabled && (status != .noData || refreshing)
+        }
+        guard anyContent else { return [] }
 
-        var visible: Set<ProviderRateLimit.Provider> = []
-        if codexEnabled { visible.insert(.codex) }
-        if claudeEnabled { visible.insert(.claudeCode) }
-        return visible
+        return Set(entries.compactMap { provider, enabled, _, _ in
+            enabled ? provider : nil
+        })
     }
 
-    /// Single-line whisper shown when neither Codex nor Claude has any data.
+    /// Single-line whisper shown when no enabled provider has any data.
     /// Mirrors the generic "feature exists; use a tool to populate" hint without
     /// reserving the full card row's vertical space.
     private var noticeBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
                 .font(.system(size: 10))
-            Text("支持 Codex / Claude 订阅配额监控")
+            Text("支持 Codex / Claude / Grok 订阅配额监控")
                 .font(.system(size: 11))
         }
         .foregroundStyle(Color(white: 0.4))
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Codex / Claude weekly slots stay "7d". Grok's shared pool is weekly
+    /// today but the credits config can report a monthly period — label from
+    /// duration so a 30-day window is not dressed up as 7d.
+    static func longWindowLabel(for snapshot: ProviderRateLimit, window: RateLimitWindow) -> String {
+        guard snapshot.provider == .grok else { return "7d" }
+        if let duration = window.windowDuration, duration >= 20 * 86_400 {
+            return "30d"
+        }
+        return "7d"
     }
 }
 
@@ -244,7 +279,9 @@ private struct ProviderCard: View {
                 message: snapshot.fiveHourNotEnforced ? "官方当前未启用" : "近 5 小时无活动"
             ))
         }
-        if let w = snapshot.sevenDay { out.append(.live(label: "7d", window: w)) }
+        if let w = snapshot.sevenDay {
+            out.append(.live(label: RateLimitCardView.longWindowLabel(for: snapshot, window: w), window: w))
+        }
         return out
     }
 
@@ -325,6 +362,7 @@ private struct ProviderCard: View {
         switch label {
         case "5h": return "5 小时窗口"
         case "7d": return "7 天窗口"
+        case "30d": return "30 天窗口"
         default:   return label
         }
     }
@@ -335,6 +373,7 @@ private struct ProviderCard: View {
         switch snapshot.provider {
         case .codex:      return appState.isCodexRateLimitRefreshing
         case .claudeCode: return appState.isClaudeRateLimitRefreshing
+        case .grok:       return appState.isGrokRateLimitRefreshing
         }
     }
 
@@ -593,7 +632,7 @@ private struct ProviderIcon: View {
                 .interpolation(.high)
                 .scaledToFit()
         } else {
-            Image(systemName: provider == .codex ? "terminal" : "sparkles")
+            Image(systemName: provider.placeholderSymbol)
                 .font(.system(size: 12))
                 .foregroundStyle(Color(white: 0.6))
         }
@@ -607,6 +646,7 @@ private struct ProviderIcon: View {
         switch provider {
         case .codex:      resource = "codex-icon"
         case .claudeCode: resource = "claude-icon"
+        case .grok:       resource = "grok-icon"
         }
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
             ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
@@ -656,6 +696,15 @@ private extension ProviderRateLimit.Provider {
         switch self {
         case .codex:      return "Codex"
         case .claudeCode: return "Claude"
+        case .grok:       return "Grok"
+        }
+    }
+
+    var placeholderSymbol: String {
+        switch self {
+        case .codex:      return "terminal"
+        case .claudeCode: return "sparkles"
+        case .grok:       return "sparkle"
         }
     }
 }

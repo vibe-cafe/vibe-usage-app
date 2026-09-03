@@ -248,11 +248,12 @@ final class MenuBarController: NSObject {
         positionPanel(panel)
 
         Task { await appState.fetchUsageDataIfNeeded() }
-        // Popover open refreshes both Codex (live endpoint, CLI-token auth —
-        // no prompts) and Claude (local capture file). 60s cooldown so rapid
-        // open/close doesn't re-hit the endpoint or re-parse the capture file.
+        // Popover open refreshes enabled providers (Codex/Grok live endpoints
+        // with each CLI's token; Claude via the local probe). 60s cooldown so
+        // rapid open/close doesn't re-hit the network.
         Task { await appState.refreshCodexRateLimitIfNeeded() }
         Task { await appState.refreshClaudeRateLimitIfNeeded() }
+        Task { await appState.refreshGrokRateLimitIfNeeded() }
         // Live-update the Claude card while the panel is on screen.
         appState.rateLimitPanelVisibilityChanged(visible: true)
 
