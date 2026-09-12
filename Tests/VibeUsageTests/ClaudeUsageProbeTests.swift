@@ -19,7 +19,30 @@ struct ClaudeUsageProbeTests {
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--verbose",
+            "--settings", ClaudeUsageProbe.nonessentialTrafficOverrideSettings,
         ])
+        #expect(!ClaudeUsageProbe.processArguments.contains("--bare"))
+    }
+
+    /// Users often set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in
+    /// `~/.claude/settings.json` `env`. The binary re-applies that after spawn,
+    /// so argv must unset it in-memory: empty string (JS-falsy), only that one
+    /// key, and never `"0"` (still truthy). The probe must not persist this.
+    @Test
+    func settingsOverrideUnsetsNonessentialTrafficWithoutClobberingOtherEnv() throws {
+        let arguments = ClaudeUsageProbe.processArguments
+        let settingsIndex = try #require(arguments.firstIndex(of: "--settings"))
+        #expect(settingsIndex + 1 < arguments.count)
+
+        let raw = arguments[settingsIndex + 1]
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
+        )
+        let env = try #require(object["env"] as? [String: Any])
+        #expect(Set(env.keys) == ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"])
+        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] as? String == "")
+        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] as? String != "0")
+        #expect(object.count == 1)
     }
 
     /// Verbatim shape of a real `get_usage` control response (trimmed to the
@@ -123,6 +146,32 @@ struct ClaudeUsageProbeTests {
             "rate_limits": NSNull(),
         ]
         #expect(ClaudeUsageProbe.parse(failedFetch, now: now) == nil)
+    }
+
+    /// Claude Code 2.1.259 adds extra windows and dollar fields. The card still
+    /// only needs `five_hour` / `seven_day`; unknown keys must not drop those.
+    @Test
+    func extraLivePayloadFieldsDoNotDropKnownWindows() throws {
+        var live = payload()
+        var limits = live["rate_limits"] as? [String: Any] ?? [:]
+        limits["limits"] = [["kind": "weekly_scoped"]]
+        limits["model_scoped"] = [["display_name": "Fable", "utilization": 1]]
+        limits["cinder_cove"] = ["utilization": 0, "resets_at": "2026-08-01T20:00:00Z"]
+        limits["five_hour"] = [
+            "utilization": 9,
+            "resets_at": "2026-07-28T05:20:00.420021+00:00",
+            "limit_dollars": NSNull(),
+            "used_dollars": NSNull(),
+            "remaining_dollars": NSNull(),
+            "locked_reason": NSNull(),
+        ]
+        live["rate_limits"] = limits
+        live["behaviors"] = ["day": ["request_count": 1], "week": ["request_count": 2]]
+
+        let snapshot = try #require(ClaudeUsageProbe.parse(live, now: now))
+        #expect(snapshot.fiveHour?.utilization == 9)
+        #expect(snapshot.sevenDay?.utilization == 16)
+        #expect(snapshot.status == .ok)
     }
 
     /// A user-installed CLI must win over the copy bundled inside Claude

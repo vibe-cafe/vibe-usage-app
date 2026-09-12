@@ -264,6 +264,17 @@ enum ClaudeUsageProbe {
     /// `--input-format stream-json` is accepted only in print mode by current
     /// Claude Code releases. Keep the process arguments testable so a future
     /// CLI flag change cannot silently turn every probe into `.noResponse`.
+    ///
+    /// `--settings` is process-local additional JSON. It is the only way to
+    /// unset `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` when the user has it in
+    /// `~/.claude/settings.json` `env` — stripping the process environment is
+    /// not enough, because the binary re-applies that file after spawn. Empty
+    /// string, not `"0"`: Claude Code treats any non-empty value as truthy.
+    /// The probe must never write this file (and must not pass `--bare`, which
+    /// skips the keychain the binary needs to fetch usage).
+    static let nonessentialTrafficOverrideSettings =
+        #"{"env":{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":""}}"#
+
     static let processArguments = [
         "--print",
         "--safe-mode",
@@ -274,6 +285,7 @@ enum ClaudeUsageProbe {
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose",
+        "--settings", nonessentialTrafficOverrideSettings,
     ]
 
     private static func run(candidate: Binary, timeout: TimeInterval) async throws -> Data {
@@ -428,7 +440,11 @@ enum ClaudeUsageProbe {
     ///
     /// - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` suppresses the usage fetch
     ///   entirely, so the probe would answer with `rate_limits: null` and we'd
-    ///   silently degrade to cached data forever.
+    ///   silently degrade to cached data forever. Scrubbing the process
+    ///   environment is not sufficient: Claude Code re-injects the same key
+    ///   from `~/.claude/settings.json` `env`. `--settings` with an empty
+    ///   string (see `nonessentialTrafficOverrideSettings`) unsets it for this
+    ///   process only and does not write the file.
     /// - The session markers Claude Code exports into its own child processes
     ///   would make the probe look like a nested session.
     ///
