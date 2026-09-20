@@ -46,6 +46,7 @@ export function verifyPackage(packageRoot, specifier = releasePackage()) {
       VIBE_USAGE_CONFIG_DIR: join(fixtureRoot, 'config'),
       VIBE_USAGE_STATE_DIR: join(fixtureRoot, 'state'),
       VIBE_USAGE_QUOTA_CACHE_DIR: join(fixtureRoot, 'quota-cache'),
+      KIMI_CODE_HOME: join(fixtureRoot, 'kimi-code'),
       KIMI_SHARE_DIR: join(fixtureRoot, 'kimi'),
       GROK_HOME: join(fixtureRoot, 'grok'),
     };
