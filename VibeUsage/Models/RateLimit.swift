@@ -33,6 +33,96 @@ struct RateLimitMeter: Equatable, Identifiable {
     var window: RateLimitWindow
 }
 
+/// Provider-neutral display order shared by every CLI-backed quota card.
+/// Generic time windows lead from shortest to longest; model-specific and
+/// feature meters retain the order in which their provider supplied them.
+enum QuotaMeterLayout {
+    private struct Period {
+        var label: String
+        var seconds: TimeInterval
+        var inferredWindowDuration: TimeInterval?
+    }
+
+    private struct RankedMeter {
+        var meter: RateLimitMeter
+        var periodSeconds: TimeInterval?
+        var originalIndex: Int
+    }
+
+    static func canonicalMeters(_ meters: [RateLimitMeter]) -> [RateLimitMeter] {
+        meters.enumerated().map { index, original in
+            var meter = original
+            let period = period(for: meter)
+            if let period {
+                meter.label = period.label
+                if meter.window.windowDuration == nil,
+                   let duration = period.inferredWindowDuration {
+                    meter.window.windowDuration = duration
+                }
+            }
+            return RankedMeter(
+                meter: meter,
+                periodSeconds: period?.seconds,
+                originalIndex: index
+            )
+        }
+        .sorted { left, right in
+            switch (left.periodSeconds, right.periodSeconds) {
+            case let (lhs?, rhs?) where lhs != rhs:
+                return lhs < rhs
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return left.originalIndex < right.originalIndex
+            }
+        }
+        .map(\.meter)
+    }
+
+    private static func period(for meter: RateLimitMeter) -> Period? {
+        let compact = meter.label
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
+        let day: TimeInterval = 24 * 60 * 60
+        switch compact {
+        case "daily", "day":
+            return Period(label: "1d", seconds: meter.window.windowDuration ?? day,
+                          inferredWindowDuration: day)
+        case "weekly", "week":
+            return Period(label: "7d", seconds: meter.window.windowDuration ?? 7 * day,
+                          inferredWindowDuration: 7 * day)
+        case "monthly", "month":
+            return Period(label: "Month", seconds: meter.window.windowDuration ?? 30 * day,
+                          inferredWindowDuration: nil)
+        default:
+            break
+        }
+
+        guard let suffix = compact.last,
+              "mhdw".contains(suffix),
+              let amount = Double(compact.dropLast()),
+              amount > 0
+        else { return nil }
+        let multiplier: TimeInterval
+        switch suffix {
+        case "m": multiplier = 60
+        case "h": multiplier = 60 * 60
+        case "d": multiplier = day
+        case "w": multiplier = 7 * day
+        default: return nil
+        }
+        let seconds = meter.window.windowDuration ?? amount * multiplier
+        return Period(
+            label: compact == "1w" ? "7d" : compact,
+            seconds: seconds,
+            inferredWindowDuration: seconds
+        )
+    }
+}
+
 /// Pay-as-you-go credits beyond the base subscription quota (Claude only).
 struct ExtraUsage: Equatable {
     var isEnabled: Bool

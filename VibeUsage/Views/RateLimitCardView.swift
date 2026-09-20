@@ -315,7 +315,9 @@ private struct ProviderCard: View {
     /// arbitrary meters through `snapshot.meters`.
     private var allRows: [RowItem] {
         if !snapshot.meters.isEmpty {
-            return snapshot.meters.map { .live(label: $0.label, window: $0.window) }
+            return QuotaMeterLayout.canonicalMeters(snapshot.meters).map {
+                .live(label: $0.label, window: $0.window)
+            }
         }
 
         var out: [RowItem] = []
