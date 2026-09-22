@@ -8,8 +8,8 @@ struct RateLimitCardView: View {
 
     /// Fixed card width. Two cards plus the 8pt gap fill the popover's content
     /// box exactly ((520 − 2×16 padding − 8) / 2), so the familiar two-card row
-    /// is unchanged; a third product scrolls instead of squeezing every card
-    /// narrower than its meters and labels can render.
+    /// is unchanged; a third product starts a new row below instead of
+    /// squeezing every card narrower than its meters and labels can render.
     static let cardWidth: CGFloat = 240
 
     var body: some View {
@@ -23,11 +23,11 @@ struct RateLimitCardView: View {
         }
     }
 
-    /// What the section shows under the header. Cards are one-per-product
-    /// inside a horizontal scroller — an enabled product is never dropped, and
-    /// the section never folds into a single generic line just because every
-    /// card happens to be empty. The notice survives only for "you enabled
-    /// nothing", where it doubles as the hint for the selector beside it.
+    /// What the section shows under the header. Cards are one-per-product in a
+    /// two-column grid — an enabled product is never dropped, and the section
+    /// never folds into a single generic line just because every card happens
+    /// to be empty. The notice survives only for "you enabled nothing", where
+    /// it doubles as the hint for the selector beside it.
     enum SectionContent: Equatable {
         case cards([ProviderRateLimit.Provider])
         case notice
@@ -39,24 +39,28 @@ struct RateLimitCardView: View {
         selected.isEmpty ? .notice : .cards(selected)
     }
 
-    /// One card per selected product, in selection order, inside a horizontal
-    /// scroller. A product the user enabled must always show its own state,
-    /// because a collapsed section reads as "this feature is off" precisely
-    /// when the user wants to know why nothing is shown.
+    /// One card per selected product, in selection order, laid out in two
+    /// fixed columns that grow downward. A product the user enabled must always
+    /// show its own state, because a collapsed section reads as "this feature
+    /// is off" precisely when the user wants to know why nothing is shown.
     private func cards(_ providers: [ProviderRateLimit.Provider]) -> some View {
-        ScrollView(.horizontal, showsIndicators: providers.count > 2) {
-            // Grid, not HStack: one row's cards share the tallest card's
-            // height, so a provider showing fewer meters or an error message
-            // still aligns with its neighbours instead of ending short.
-            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+        // Grid, not LazyVGrid: one row's cards share the tallest card's height,
+        // so a provider showing fewer meters or an error message still aligns
+        // with its neighbours instead of ending short.
+        let rows = stride(from: 0, to: providers.count, by: 2).map { start in
+            Array(providers[start..<min(start + 2, providers.count)])
+        }
+        return Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 8) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 GridRow {
-                    ForEach(providers, id: \.self) { provider in
+                    ForEach(row, id: \.self) { provider in
                         ProviderCard(snapshot: snapshot(for: provider))
                             .frame(width: Self.cardWidth, alignment: .topLeading)
                     }
                 }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var sectionHeader: some View {
@@ -161,8 +165,8 @@ private struct ProviderCard: View {
     /// Which window-label is currently hovered (`"5h"` / `"7d"`). The card owns
     /// only the *state* — the tooltip itself is drawn by the popover's topmost
     /// layer (`QuotaTooltipPreferenceKey`), because the card sits inside the
-    /// horizontal card scroller and the dashboard's vertical `ScrollView`, and
-    /// both clip whatever leaves the card's bounds.
+    /// dashboard's vertical `ScrollView`, which clips whatever leaves the
+    /// card's bounds.
     @State private var hoveredLabel: String? = nil
 
     var body: some View {
@@ -587,11 +591,11 @@ private struct EmptyQuotaRow: View {
 /// row's rect.
 ///
 /// The tooltip is taller than the card and straddles the card's bottom edge, so
-/// nothing between the row and the panel edge can draw it whole — the horizontal
-/// card scroller and the dashboard's vertical `ScrollView` both clip their
-/// content, and every section below the quota row paints after it. Routing the
-/// payload up as a preference lets `PopoverView`'s root overlay (above every
-/// scroller, card, and sibling in the panel) draw it instead.
+/// nothing between the row and the panel edge can draw it whole — the dashboard's
+/// vertical `ScrollView` clips its content, and every section below the quota row
+/// paints after it. Routing the payload up as a preference lets `PopoverView`'s
+/// root overlay (above every scroller, card, and sibling in the panel) draw it
+/// instead.
 struct QuotaTooltipPayload {
     /// Hovered-row identity, so a move between rows animates instead of
     /// snapping.

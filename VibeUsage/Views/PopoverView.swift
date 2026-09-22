@@ -29,10 +29,10 @@ struct PopoverView: View {
         .frame(width: 520)
         .background(Color(white: 0.04))
         // The quota tooltip is drawn here — the panel's topmost layer — because
-        // the card that opens it sits inside the horizontal card scroller and
-        // this popover's vertical `ScrollView`, both of which clip their
-        // content. As a root overlay the tooltip is above every scroller, card
-        // and following section, so nothing can crop or paint over it.
+        // the card that opens it sits inside this popover's vertical
+        // `ScrollView`, which clips its content. As a root overlay the tooltip
+        // is above every scroller, card and following section, so nothing can
+        // crop or paint over it.
         .overlayPreferenceValue(QuotaTooltipPreferenceKey.self) { payload in
             GeometryReader { geo in
                 if let payload {
