@@ -169,18 +169,28 @@ private struct ProviderCard: View {
     /// card's bounds.
     @State private var hoveredLabel: String? = nil
 
+    /// Folded meter rows stay reachable: the footer line expands the card in
+    /// place instead of leaving a provider's extra windows (OpenCode Go's
+    /// monthly window, Claude Max model windows) permanently unreadable.
+    @State private var isMetersExpanded = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
             if snapshot.status == .ok {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
-                    if let note = footerNote(at: context.date) {
-                        Text(note)
-                            .font(.system(size: 9.5))
-                            .foregroundStyle(Color(white: 0.38))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if foldedMeterCount > 0 {
+                            meterDisclosure
+                        }
+                        if let note = footerNote(at: context.date) {
+                            Text(note)
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(Color(white: 0.38))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                 }
             }
@@ -354,10 +364,16 @@ private struct ProviderCard: View {
         return out
     }
 
-    /// Cards remain compact even when a provider exposes model-specific or
-    /// pay-as-you-go meters. The footer states how many details are folded.
-    private var visibleRows: [RowItem] { Array(allRows.prefix(2)) }
-    private var additionalMeterCount: Int { max(0, allRows.count - visibleRows.count) }
+    /// Cards stay compact by default even when a provider exposes model-specific
+    /// or pay-as-you-go meters: the first `compactMeterLimit` windows are shown
+    /// and any remainder folds behind a clickable footer line. Three covers the
+    /// common shapes (Codex 5h/7d, OpenCode Go 5h/Weekly/Monthly); Claude Max's
+    /// per-model windows still fold, but are one click away instead of hidden.
+    static let compactMeterLimit = 3
+    private var visibleRows: [RowItem] {
+        isMetersExpanded ? allRows : Array(allRows.prefix(Self.compactMeterLimit))
+    }
+    private var foldedMeterCount: Int { max(0, allRows.count - Self.compactMeterLimit) }
 
     /// True only for paid Codex plans (Plus / Pro / Business), where Codex
     /// emits both `primary` and `secondary` windows in every `token_count`
@@ -446,17 +462,33 @@ private struct ProviderCard: View {
     private static let staleNoteThreshold: TimeInterval = 5 * 60
 
     /// One quiet tertiary line under the quota rows for stale-data context.
+    /// Folded meter rows get their own clickable line (`meterDisclosure`) so
+    /// this note never doubles as a non-interactive count.
     /// Reset credits live beside the provider title so they never add a row.
     private func footerNote(at now: Date) -> String? {
-        var notes: [String] = []
-        if additionalMeterCount > 0 {
-            notes.append("另有 \(additionalMeterCount) 项")
+        guard let asOf = snapshot.dataAsOf,
+              now.timeIntervalSince(asOf) > Self.staleNoteThreshold else { return nil }
+        return "数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))"
+    }
+
+    /// Expands/collapses the meters that did not fit in the compact card.
+    /// Without this the third window (OpenCode Go's monthly) had no way to be
+    /// seen at all — the footer only stated a count.
+    private var meterDisclosure: some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.12)) { isMetersExpanded.toggle() }
+        } label: {
+            HStack(spacing: 3) {
+                Text(isMetersExpanded ? "收起" : "另有 \(foldedMeterCount) 项")
+                Image(systemName: isMetersExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+            }
+            .font(.system(size: 9.5))
+            .foregroundStyle(Color(white: 0.55))
+            .contentShape(Rectangle())
         }
-        if let asOf = snapshot.dataAsOf,
-           now.timeIntervalSince(asOf) > Self.staleNoteThreshold {
-            notes.append("数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))")
-        }
-        return notes.isEmpty ? nil : notes.joined(separator: " · ")
+        .buttonStyle(.plain)
+        .help(isMetersExpanded ? "收起多余的配额窗口" : "展开全部 \(allRows.count) 个配额窗口")
     }
 
     // MARK: Error states
