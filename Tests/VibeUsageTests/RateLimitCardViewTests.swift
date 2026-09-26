@@ -48,11 +48,18 @@ struct RateLimitCardViewTests {
                 for: emptySnapshot(.codex, reason: .noWindow),
                 isDetected: true
             ),
+            RateLimitCardView.emptyStateText(
+                for: emptySnapshot(.opencode, reason: .notEntitled),
+                isDetected: true
+            ),
             RateLimitCardView.emptyStateText(for: emptySnapshot(.claudeCode), isDetected: true),
             RateLimitCardView.emptyStateText(for: emptySnapshot(.claudeCode), isDetected: false),
         ]
 
         #expect(Set(messages).count == messages.count)
+        // A missing subscription is a fact about the account, not an idle
+        // window, so it names the product instead of guessing.
+        #expect(messages[2] == "未订阅 OpenCode Go")
     }
 
     /// The "used up" line belongs only to a source that actually reported it:

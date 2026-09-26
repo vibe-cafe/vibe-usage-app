@@ -156,6 +156,10 @@ struct QuotaProductTests {
             withIntermediateDirectories: true
         )
         try fileManager.createDirectory(
+            at: home.appendingPathComponent(".local/share/opencode", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
             at: applications.appendingPathComponent("Cursor.app", isDirectory: true),
             withIntermediateDirectories: true
         )
@@ -176,10 +180,35 @@ struct QuotaProductTests {
         #expect(byProvider[.kimiCode]?.isDetected == true)
         #expect(byProvider[.grok]?.isDetected == true)
         #expect(byProvider[.cursor]?.isDetected == true)
+        #expect(byProvider[.opencode]?.isDetected == true)
         #expect(byProvider[.zCode]?.isDetected == false)
         #expect(byProvider[.kimiCode]?.isSelectable == true)
         #expect(byProvider[.grok]?.isSelectable == true)
+        #expect(byProvider[.opencode]?.isSelectable == true)
         #expect(byProvider[.cursor]?.isSelectable == false)
+    }
+
+    /// OpenCode Go detection is the CLI's *data* home (where `auth.json` holds
+    /// the Go key), not the CLI's global install directory — the menu bar app
+    /// must not offer a card it could never read.
+    @Test
+    func openCodeDetectionRequiresTheCLIDataHome() throws {
+        let fileManager = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("QuotaProductTests-\(UUID().uuidString)", isDirectory: true)
+        let home = root.appendingPathComponent("home", isDirectory: true)
+        try fileManager.createDirectory(
+            at: home.appendingPathComponent(".opencode/bin", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        defer { try? fileManager.removeItem(at: root) }
+
+        let discovered = QuotaProductRegistry.discover(
+            fileManager: fileManager,
+            environment: .init(homeDirectory: home, applicationDirectories: [], executableDirectories: [])
+        )
+        let openCode = try #require(discovered.first(where: { $0.provider == .opencode }))
+        #expect(openCode.isDetected == false)
     }
 
     @Test @MainActor

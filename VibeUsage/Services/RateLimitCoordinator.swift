@@ -24,11 +24,14 @@ final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
+    private var lastOpenCodeGoFetchAt: Date?
     private var isPanelVisible = false
     private var codexRefreshTask: Task<Void, Never>?
     private var codexRefreshID: UUID?
     private var claudeRefreshTask: Task<Void, Never>?
     private var claudeRefreshID: UUID?
+    private var openCodeGoRefreshTask: Task<Void, Never>?
+    private var openCodeGoRefreshID: UUID?
     private var cliRefreshTask: Task<Void, Never>?
     private var cliRefreshID: UUID?
     private var activeCLIProviders: Set<ProviderRateLimit.Provider> = []
@@ -39,6 +42,7 @@ final class RateLimitCoordinator {
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
+    private let fetchOpenCodeGoLive: @MainActor () async throws -> ProviderRateLimit
     private let fetchCLIQuotas: @MainActor (
         [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
     ) async throws -> [ProviderRateLimit]
@@ -60,6 +64,9 @@ final class RateLimitCoordinator {
         loadClaudeCache: @escaping @MainActor () async -> ProviderRateLimit? = {
             await RateLimitCoordinator.loadClaudeDiskSnapshot()
         },
+        fetchOpenCodeGoLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
+            try await OpenCodeGoUsageAPI.fetch()
+        },
         fetchCLIQuotas: @escaping @MainActor (
             [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
         ) async throws -> [ProviderRateLimit] = { providers, zCodeAPIKey, zCodeRegion in
@@ -76,6 +83,7 @@ final class RateLimitCoordinator {
         self.readCodexFallback = readCodexFallback
         self.fetchClaudeLive = fetchClaudeLive
         self.loadClaudeCache = loadClaudeCache
+        self.fetchOpenCodeGoLive = fetchOpenCodeGoLive
         self.fetchCLIQuotas = fetchCLIQuotas
     }
 
@@ -288,6 +296,96 @@ final class RateLimitCoordinator {
         await refreshClaude()
     }
 
+    /// Refresh OpenCode Go: one account-wide HTTPS call, no local fallback (the
+    /// subscription windows exist only server-side). Gated on the product
+    /// selection so an unselected provider never reaches the network.
+    func refreshOpenCodeGo() async {
+        guard let appState, appState.isQuotaProviderSelected(.opencode) else { return }
+        if let task = openCodeGoRefreshTask {
+            await task.value
+            return
+        }
+
+        let refreshID = UUID()
+        appState.isOpenCodeGoRateLimitRefreshing = true
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performOpenCodeGoRefresh()
+        }
+        openCodeGoRefreshID = refreshID
+        openCodeGoRefreshTask = task
+        await task.value
+
+        if openCodeGoRefreshID == refreshID {
+            openCodeGoRefreshTask = nil
+            openCodeGoRefreshID = nil
+            appState.isOpenCodeGoRateLimitRefreshing = false
+        }
+    }
+
+    private func performOpenCodeGoRefresh() async {
+        guard let appState, appState.isQuotaProviderSelected(.opencode) else { return }
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaRefreshStarted([.opencode])
+        #endif
+
+        do {
+            let live = try await fetchOpenCodeGoLive()
+            guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencode) else { return }
+            upsert(live)
+        } catch is CancellationError {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaCancelled([.opencode])
+            #endif
+            return
+        } catch {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaFailure([.opencode], error: error)
+            #endif
+            let failure = Self.classify(error)
+            guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencode) else { return }
+            // A live reading already on screen survives a transient blip: its
+            // 「数据截至」 note states the age honestly, which beats replacing a
+            // real reading with an error. Only a cold card commits a status.
+            if currentSnapshot(.opencode)?.status != .ok {
+                switch failure {
+                case .notApplicable:
+                    // 403 EntitlementError: the account has no Go plan. That is
+                    // the endpoint's answer, not a failed read, so the card says
+                    // so once instead of offering a retry that cannot succeed.
+                    debugLog("[rate-limit] opencode go not entitled for this account")
+                    upsert(ProviderRateLimit(provider: .opencode, status: .noData,
+                        fetchedAt: Date(), emptyReason: .notEntitled))
+                case .absent:
+                    upsert(ProviderRateLimit(provider: .opencode, status: .noData,
+                        fetchedAt: Date()))
+                case .unauthorized:
+                    upsert(ProviderRateLimit(provider: .opencode, status: .unauthorized,
+                        fetchedAt: Date()))
+                case .transient:
+                    debugLog("[rate-limit] opencode go fetch failed (\(error))")
+                    upsert(ProviderRateLimit(provider: .opencode, status: .retryableError,
+                        fetchedAt: Date()))
+                }
+            }
+        }
+        guard !Task.isCancelled else { return }
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        if let snapshot = currentSnapshot(.opencode) {
+            TestDiagnosticLog.recordQuotaResult(snapshot)
+        }
+        #endif
+        lastOpenCodeGoFetchAt = Date()
+    }
+
+    /// Refresh OpenCode Go only if the last read was over `maxAge` seconds ago.
+    func refreshOpenCodeGoIfNeeded(maxAge: TimeInterval = 60) async {
+        if let last = lastOpenCodeGoFetchAt, Date().timeIntervalSince(last) < maxAge {
+            return
+        }
+        await refreshOpenCodeGo()
+    }
+
     /// Fetches one versioned CLI envelope for the requested CLI-backed set.
     /// The CLI isolates provider failures, while this boundary also guards the
     /// current selection before starting and again before publishing results.
@@ -423,15 +521,17 @@ final class RateLimitCoordinator {
         await refreshCLIProviders(stale)
     }
 
-    /// Refresh everything currently visible, in parallel — the Codex leg now
-    /// includes a network round-trip, so serializing would double the wait.
+    /// Refresh everything currently visible, in parallel — the Codex and
+    /// OpenCode Go legs each include a network round-trip, so serializing would
+    /// add up the waits.
     func refreshAll() async {
         async let codex: Void = refreshCodex()
         async let claude: Void = refreshClaude()
+        async let openCodeGo: Void = refreshOpenCodeGo()
         async let cli: Void = refreshCLIProviders(
             appState?.selectedQuotaProviders.filter(\.usesQuotaCLI) ?? []
         )
-        _ = await (codex, claude, cli)
+        _ = await (codex, claude, openCodeGo, cli)
     }
 
     /// Popover-open refresh for the selected products only. Keeping the fan-out
@@ -440,10 +540,11 @@ final class RateLimitCoordinator {
     func refreshSelectedIfNeeded() async {
         async let codex: Void = refreshCodexIfNeeded()
         async let claude: Void = refreshClaudeIfNeeded()
+        async let openCodeGo: Void = refreshOpenCodeGoIfNeeded()
         async let cli: Void = refreshCLIProvidersIfNeeded(
             appState?.selectedQuotaProviders.filter(\.usesQuotaCLI) ?? []
         )
-        _ = await (codex, claude, cli)
+        _ = await (codex, claude, openCodeGo, cli)
     }
 
     /// Ensure every enabled provider has a placeholder entry so the card row
@@ -504,6 +605,13 @@ final class RateLimitCoordinator {
         appState?.isClaudeRateLimitRefreshing = false
     }
 
+    func cancelOpenCodeGoRefresh() {
+        openCodeGoRefreshTask?.cancel()
+        openCodeGoRefreshTask = nil
+        openCodeGoRefreshID = nil
+        appState?.isOpenCodeGoRateLimitRefreshing = false
+    }
+
     func cancelRefresh(for provider: ProviderRateLimit.Provider) {
         switch provider {
         case .codex:
@@ -512,6 +620,8 @@ final class RateLimitCoordinator {
             cancelClaudeRefresh()
         case .kimiCode, .zCode, .grok:
             cancelCLIRefresh()
+        case .opencode:
+            cancelOpenCodeGoRefresh()
         case .cursor: break
         }
     }

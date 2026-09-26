@@ -170,6 +170,9 @@ final class AppState {
     /// user-perceivable and needs an indicator.
     var isCodexRateLimitRefreshing: Bool = false
     var isClaudeRateLimitRefreshing: Bool = false
+    /// OpenCode Go fetches over the network like Codex, so it needs the same
+    /// in-flight indicator.
+    var isOpenCodeGoRateLimitRefreshing: Bool = false
     var cliQuotaRefreshingProviders: Set<ProviderRateLimit.Provider> = []
     private(set) var zCodeAPIKeyConfigured = false
     private(set) var zCodeQuotaRegion: ZCodeQuotaRegion = .bigModel
@@ -475,6 +478,7 @@ final class AppState {
         case .codex: return isCodexRateLimitRefreshing
         case .claudeCode: return isClaudeRateLimitRefreshing
         case .kimiCode, .zCode, .grok: return cliQuotaRefreshingProviders.contains(provider)
+        case .opencode: return isOpenCodeGoRateLimitRefreshing
         case .cursor: return false
         }
     }
@@ -567,6 +571,9 @@ final class AppState {
         case .kimiCode, .zCode, .grok:
             guard isQuotaProviderSelected(provider) else { return }
             await rateLimitCoordinator?.refreshCLIProviders([provider])
+        case .opencode:
+            guard isQuotaProviderSelected(provider) else { return }
+            await rateLimitCoordinator?.refreshOpenCodeGo()
         case .cursor: return
         }
     }

@@ -151,7 +151,7 @@ extension ProviderRateLimit.Provider {
     var usesQuotaCLI: Bool {
         switch self {
         case .kimiCode, .zCode, .grok: return true
-        case .codex, .claudeCode, .cursor: return false
+        case .codex, .claudeCode, .cursor, .opencode: return false
         }
     }
 }

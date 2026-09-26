@@ -50,6 +50,10 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case zCode = "zcode"
         case grok = "grok"
         case cursor = "cursor"
+        // The OpenCode *Go* subscription, not the OpenCode CLI as a whole: the
+        // quota endpoint only answers for Go accounts, so the card is named
+        // after the plan users bought.
+        case opencode = "opencode"
 
         var displayName: String {
             switch self {
@@ -59,6 +63,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
             case .zCode: return "ZCode"
             case .grok: return "Grok"
             case .cursor: return "Cursor"
+            case .opencode: return "OpenCode Go"
             }
         }
     }
@@ -117,6 +122,10 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case limitReached
         /// The endpoint answered without enforcing any window.
         case noWindow
+        /// The endpoint answered but the account doesn't own the subscription
+        /// (OpenCode Go returns 403 `EntitlementError` for a Zen/free key).
+        /// A retry cannot change it, so the card must not offer one.
+        case notEntitled
     }
 
     var emptyReason: EmptyReason?

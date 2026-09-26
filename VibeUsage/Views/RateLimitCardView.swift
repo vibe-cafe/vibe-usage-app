@@ -142,6 +142,8 @@ struct RateLimitCardView: View {
             return "本期订阅配额已用满 · 等待额度重置"
         case .noWindow:
             return "当前没有生效的额度窗口"
+        case .notEntitled:
+            return "未订阅 \(snapshot.provider.displayName)"
         case nil:
             return isDetected
                 ? "暂未读取到订阅配额数据"
@@ -253,6 +255,10 @@ private struct ProviderCard: View {
                 // The shared CLI has already attempted Kimi's standard OAuth
                 // refresh before this status reaches the app.
                 messageContent(text: "请重新登录 Kimi Code 后重试", action: "重试")
+            } else if snapshot.provider == .opencode {
+                // The key comes from OpenCode's own auth.json; only OpenCode
+                // can re-issue it, so point there rather than at the card.
+                messageContent(text: "请在 OpenCode 中重新登录后重试", action: "重试")
             } else {
                 messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
             }
@@ -839,6 +845,9 @@ struct ProviderIcon: View {
         case .zCode:      resource = "zcode-icon"
         case .grok:       resource = "grok-icon"
         case .cursor:     resource = "cursor-icon"
+        // No artwork shipped yet: the symbol fallback below renders until an
+        // `opencode-icon` asset joins the bundle.
+        case .opencode:   resource = "opencode-icon"
         }
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
             ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
@@ -890,6 +899,7 @@ private extension ProviderRateLimit.Provider {
         case .zCode: return "z.square"
         case .grok: return "bolt.horizontal.circle"
         case .cursor: return "cursorarrow.rays"
+        case .opencode: return "chevron.left.forwardslash.chevron.right"
         }
     }
 }

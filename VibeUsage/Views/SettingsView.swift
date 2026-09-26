@@ -98,6 +98,7 @@ struct SettingsView: View {
                     Text("检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。")
                     Text("Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取 Cookie、登录 Token 或其他应用 Keychain。")
                     Text("Kimi Code 使用其官方 CLI 登录。")
+                    Text("OpenCode Go 使用 OpenCode CLI 自己的 API Key（只读本机凭据文件，不读取对话内容）；未订阅 Go 的账号只显示未订阅状态。")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
