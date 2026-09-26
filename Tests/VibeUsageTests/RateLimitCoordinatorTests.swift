@@ -608,5 +608,9 @@ struct RateLimitCoordinatorTests {
         await coordinator.refreshClaude()
 
         #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.status == .noData)
+        // The reason travels with it, so the card explains the account instead of
+        // reading like "Claude isn't installed" (issue #39).
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.emptyReason
+            == .sessionWithoutPlanLimits)
     }
 }

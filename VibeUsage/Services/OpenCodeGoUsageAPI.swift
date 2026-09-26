@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 /// Live OpenCode Go subscription quota.
 ///
@@ -46,7 +47,7 @@ enum OpenCodeGoUsageAPI {
         }
     }
 
-    // MARK: - Credentials (~/.local/share/opencode/auth.json)
+    // MARK: - Credentials
 
     /// OpenCode's data home. The CLI resolves the same fixed path (it does not
     /// consult `XDG_DATA_HOME`), so a probe that guessed a different location
@@ -60,7 +61,21 @@ enum OpenCodeGoUsageAPI {
         dataHome.appendingPathComponent("auth.json")
     }
 
-    private static func loadAPIKey() -> String? {
+    static var credentialDatabaseURL: URL {
+        dataHome.appendingPathComponent("opencode.db")
+    }
+
+    /// The Go key lives in two places depending on the OpenCode generation, and
+    /// the probe reads both: the event-sourced `credential` table first, because
+    /// its `opencode-go` row is the Go-*specific* record, then `auth.json`, which
+    /// is where the pre-2.x layout keeps the same key. Only the key is ever
+    /// read; neither source is written back.
+    static func loadAPIKey(dataHome: URL = OpenCodeGoUsageAPI.dataHome) -> String? {
+        loadCredentialTableKey(databaseURL: dataHome.appendingPathComponent("opencode.db"))
+            ?? loadAuthFileKey(authFileURL: dataHome.appendingPathComponent("auth.json"))
+    }
+
+    private static func loadAuthFileKey(authFileURL: URL) -> String? {
         guard let data = try? Data(contentsOf: authFileURL) else { return nil }
         return parseAuthFile(data)
     }
@@ -73,6 +88,51 @@ enum OpenCodeGoUsageAPI {
               let entry = obj["opencode"] as? [String: Any],
               let key = entry["key"] as? String
         else { return nil }
+        return normalizedKey(key)
+    }
+
+    /// The credential-table query: one row, one column. `active` is nullable in
+    /// the store's own schema, so it is coalesced before ordering, and the newest
+    /// row wins among equally active ones — the same row the CLI's adapter picks.
+    static let credentialQuery = """
+        SELECT value FROM credential
+        WHERE integration_id = 'opencode-go'
+        ORDER BY coalesce(active, 1) DESC, time_updated DESC
+        LIMIT 1
+        """
+
+    /// Reads only that row's `value` (`{"type":"key","key":"sk-..."}`) from a
+    /// read-only connection. Any failure — no database, an older schema without
+    /// the table, a lock, a malformed blob — returns nil so the caller falls
+    /// back to `auth.json` instead of reporting a missing login.
+    static func loadCredentialTableKey(
+        databaseURL: URL = credentialDatabaseURL,
+        query: String = credentialQuery
+    ) -> String? {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(databaseURL.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let handle else {
+            if let handle { sqlite3_close(handle) }
+            return nil
+        }
+        defer { sqlite3_close(handle) }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, query, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return nil }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let raw = sqlite3_column_text(statement, 0)
+        else { return nil }
+
+        guard let data = String(cString: raw).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let key = obj["key"] as? String
+        else { return nil }
+        return normalizedKey(key)
+    }
+
+    private static func normalizedKey(_ key: String) -> String? {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -217,7 +277,7 @@ enum OpenCodeGoUsageAPI {
         }
 
         return ProviderRateLimit(
-            provider: .opencode,
+            provider: .opencodeGo,
             meters: meters,
             status: meters.isEmpty ? .noData : .ok,
             fetchedAt: now,

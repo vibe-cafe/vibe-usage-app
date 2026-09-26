@@ -217,6 +217,35 @@ struct ClaudeUsageProbeTests {
         #expect(ClaudeUsageProbe.primarySourceKind(fileManager: fileManager, environment: [:]) == .desktop)
     }
 
+    /// A Claude Code installed by a version manager (nvm / fnm / volta shims) or
+    /// by Anthropic's own installer may exist *only* on the user's PATH.
+    /// `QuotaProductRegistry` already counts that as installed, so the probe has
+    /// to find it too — otherwise Settings says 「已检测」 while the card can
+    /// never load (issue #39).
+    @Test
+    func pathOnlyInstallIsDiscovered() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ClaudeUsageProbeTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shims = root.appendingPathComponent("shims")
+        try FileManager.default.createDirectory(at: shims, withIntermediateDirectories: true)
+        let binary = shims.appendingPathComponent("claude")
+        try Data().write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+
+        let environment = ["PATH": "\(shims.path):/usr/bin:/bin"]
+        let found = ClaudeUsageProbe.discoverBinaries(
+            fileManager: HomeOverridingFileManager(home: root),
+            environment: environment
+        )
+        #expect(found.contains { $0.url.resolvingSymlinksInPath() == binary.resolvingSymlinksInPath() })
+        #expect(found.allSatisfy { $0.kind == .cli })
+        #expect(ClaudeUsageProbe.primarySourceKind(
+            fileManager: HomeOverridingFileManager(home: root),
+            environment: environment
+        ) == .cli)
+    }
+
     @Test
     func explicitOverrideOutranksEverythingElse() throws {
         let binary = FileManager.default.temporaryDirectory

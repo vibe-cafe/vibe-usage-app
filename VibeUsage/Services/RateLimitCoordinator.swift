@@ -263,8 +263,11 @@ final class RateLimitCoordinator {
             if failure == .notApplicable {
                 // API key / Bedrock / Vertex session: this account has no plan
                 // quota at all, so there is nothing to show and nothing to retry.
+                // Carry that as a reason — otherwise the card is indistinguishable
+                // from "Claude isn't installed", which is what issue #39 saw.
                 debugLog("[rate-limit] claude plan limits not applicable for this account")
-                upsert(ProviderRateLimit(provider: .claudeCode, status: .noData, fetchedAt: Date()))
+                upsert(ProviderRateLimit(provider: .claudeCode, status: .noData,
+                    fetchedAt: Date(), emptyReason: .sessionWithoutPlanLimits))
             } else {
                 // No binary, offline, or the binary's own usage fetch failed.
                 // Keep whatever cache painted; with no cache, absence stays
@@ -300,7 +303,7 @@ final class RateLimitCoordinator {
     /// subscription windows exist only server-side). Gated on the product
     /// selection so an unselected provider never reaches the network.
     func refreshOpenCodeGo() async {
-        guard let appState, appState.isQuotaProviderSelected(.opencode) else { return }
+        guard let appState, appState.isQuotaProviderSelected(.opencodeGo) else { return }
         if let task = openCodeGoRefreshTask {
             await task.value
             return
@@ -324,54 +327,54 @@ final class RateLimitCoordinator {
     }
 
     private func performOpenCodeGoRefresh() async {
-        guard let appState, appState.isQuotaProviderSelected(.opencode) else { return }
+        guard let appState, appState.isQuotaProviderSelected(.opencodeGo) else { return }
         #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-        TestDiagnosticLog.recordQuotaRefreshStarted([.opencode])
+        TestDiagnosticLog.recordQuotaRefreshStarted([.opencodeGo])
         #endif
 
         do {
             let live = try await fetchOpenCodeGoLive()
-            guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencode) else { return }
+            guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencodeGo) else { return }
             upsert(live)
         } catch is CancellationError {
             #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-            TestDiagnosticLog.recordQuotaCancelled([.opencode])
+            TestDiagnosticLog.recordQuotaCancelled([.opencodeGo])
             #endif
             return
         } catch {
             #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-            TestDiagnosticLog.recordQuotaFailure([.opencode], error: error)
+            TestDiagnosticLog.recordQuotaFailure([.opencodeGo], error: error)
             #endif
             let failure = Self.classify(error)
-            guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencode) else { return }
+            guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencodeGo) else { return }
             // A live reading already on screen survives a transient blip: its
             // 「数据截至」 note states the age honestly, which beats replacing a
             // real reading with an error. Only a cold card commits a status.
-            if currentSnapshot(.opencode)?.status != .ok {
+            if currentSnapshot(.opencodeGo)?.status != .ok {
                 switch failure {
                 case .notApplicable:
                     // 403 EntitlementError: the account has no Go plan. That is
                     // the endpoint's answer, not a failed read, so the card says
                     // so once instead of offering a retry that cannot succeed.
                     debugLog("[rate-limit] opencode go not entitled for this account")
-                    upsert(ProviderRateLimit(provider: .opencode, status: .noData,
+                    upsert(ProviderRateLimit(provider: .opencodeGo, status: .noData,
                         fetchedAt: Date(), emptyReason: .notEntitled))
                 case .absent:
-                    upsert(ProviderRateLimit(provider: .opencode, status: .noData,
+                    upsert(ProviderRateLimit(provider: .opencodeGo, status: .noData,
                         fetchedAt: Date()))
                 case .unauthorized:
-                    upsert(ProviderRateLimit(provider: .opencode, status: .unauthorized,
+                    upsert(ProviderRateLimit(provider: .opencodeGo, status: .unauthorized,
                         fetchedAt: Date()))
                 case .transient:
                     debugLog("[rate-limit] opencode go fetch failed (\(error))")
-                    upsert(ProviderRateLimit(provider: .opencode, status: .retryableError,
+                    upsert(ProviderRateLimit(provider: .opencodeGo, status: .retryableError,
                         fetchedAt: Date()))
                 }
             }
         }
         guard !Task.isCancelled else { return }
         #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-        if let snapshot = currentSnapshot(.opencode) {
+        if let snapshot = currentSnapshot(.opencodeGo) {
             TestDiagnosticLog.recordQuotaResult(snapshot)
         }
         #endif
@@ -620,7 +623,7 @@ final class RateLimitCoordinator {
             cancelClaudeRefresh()
         case .kimiCode, .zCode, .grok:
             cancelCLIRefresh()
-        case .opencode:
+        case .opencodeGo:
             cancelOpenCodeGoRefresh()
         case .cursor: break
         }

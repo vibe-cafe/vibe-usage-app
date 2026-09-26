@@ -143,7 +143,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
         // The OpenCode *Go* subscription, not the OpenCode CLI as a whole: the
         // quota endpoint only answers for Go accounts, so the card is named
         // after the plan users bought.
-        case opencode = "opencode"
+        case opencodeGo = "opencode-go"
 
         var displayName: String {
             switch self {
@@ -153,7 +153,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
             case .zCode: return "ZCode"
             case .grok: return "Grok"
             case .cursor: return "Cursor"
-            case .opencode: return "OpenCode Go"
+            case .opencodeGo: return "OpenCode Go"
             }
         }
     }
@@ -216,6 +216,11 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// (OpenCode Go returns 403 `EntitlementError` for a Zen/free key).
         /// A retry cannot change it, so the card must not offer one.
         case notEntitled
+        /// Claude Code answered `rate_limits_available: false`: this session is
+        /// authenticated with an API key, Bedrock, or Vertex, where plan windows
+        /// genuinely do not apply. Also a definitive answer — retrying cannot
+        /// produce windows, so the card explains instead of offering one.
+        case sessionWithoutPlanLimits
     }
 
     var emptyReason: EmptyReason?

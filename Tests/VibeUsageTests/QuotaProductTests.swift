@@ -180,11 +180,11 @@ struct QuotaProductTests {
         #expect(byProvider[.kimiCode]?.isDetected == true)
         #expect(byProvider[.grok]?.isDetected == true)
         #expect(byProvider[.cursor]?.isDetected == true)
-        #expect(byProvider[.opencode]?.isDetected == true)
+        #expect(byProvider[.opencodeGo]?.isDetected == true)
         #expect(byProvider[.zCode]?.isDetected == false)
         #expect(byProvider[.kimiCode]?.isSelectable == true)
         #expect(byProvider[.grok]?.isSelectable == true)
-        #expect(byProvider[.opencode]?.isSelectable == true)
+        #expect(byProvider[.opencodeGo]?.isSelectable == true)
         #expect(byProvider[.cursor]?.isSelectable == false)
     }
 
@@ -198,7 +198,7 @@ struct QuotaProductTests {
             .appendingPathComponent("QuotaProductTests-\(UUID().uuidString)", isDirectory: true)
         let home = root.appendingPathComponent("home", isDirectory: true)
         try fileManager.createDirectory(
-            at: home.appendingPathComponent(".opencode/bin", isDirectory: true),
+            at: home.appendingPathComponent(".opencodeGo/bin", isDirectory: true),
             withIntermediateDirectories: true
         )
         defer { try? fileManager.removeItem(at: root) }
@@ -207,7 +207,7 @@ struct QuotaProductTests {
             fileManager: fileManager,
             environment: .init(homeDirectory: home, applicationDirectories: [], executableDirectories: [])
         )
-        let openCode = try #require(discovered.first(where: { $0.provider == .opencode }))
+        let openCode = try #require(discovered.first(where: { $0.provider == .opencodeGo }))
         #expect(openCode.isDetected == false)
     }
 

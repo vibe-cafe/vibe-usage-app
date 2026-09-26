@@ -69,7 +69,7 @@ enum QuotaProductRegistry {
         (.zCode, .ready),
         (.grok, .ready),
         (.cursor, .pendingProtocol),
-        (.opencode, .ready),
+        (.opencodeGo, .ready),
     ]
 
     static func discover(
@@ -126,7 +126,7 @@ enum QuotaProductRegistry {
             relativePaths = [".cursor"]
             appNames = ["Cursor.app"]
             executableNames = ["cursor"]
-        case .opencode:
+        case .opencodeGo:
             // The CLI's own data home; `auth.json` inside it holds the Go key.
             // Detection stays a plain path check — entitlement is only known
             // after the (account-wide) usage call, which discovery must not make.

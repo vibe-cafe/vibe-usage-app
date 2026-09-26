@@ -49,7 +49,11 @@ struct RateLimitCardViewTests {
                 isDetected: true
             ),
             RateLimitCardView.emptyStateText(
-                for: emptySnapshot(.opencode, reason: .notEntitled),
+                for: emptySnapshot(.opencodeGo, reason: .notEntitled),
+                isDetected: true
+            ),
+            RateLimitCardView.emptyStateText(
+                for: emptySnapshot(.claudeCode, reason: .sessionWithoutPlanLimits),
                 isDetected: true
             ),
             RateLimitCardView.emptyStateText(for: emptySnapshot(.claudeCode), isDetected: true),
@@ -60,6 +64,9 @@ struct RateLimitCardViewTests {
         // A missing subscription is a fact about the account, not an idle
         // window, so it names the product instead of guessing.
         #expect(messages[2] == "未订阅 OpenCode Go")
+        // A Claude session without plan limits names its login method, so the
+        // user is not left wondering whether the card is broken.
+        #expect(messages[3] == "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）")
     }
 
     /// The "used up" line belongs only to a source that actually reported it:

@@ -181,6 +181,16 @@ enum ClaudeUsageProbe {
         for path in ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] {
             append(URL(fileURLWithPath: path), .cli, "Claude Code CLI")
         }
+        // Version-manager installs (nvm / fnm / volta / asdf shims) live only on
+        // the user's PATH. `QuotaProductRegistry` already treats a PATH `claude`
+        // as "installed", so skipping it here left Settings reporting 已检测
+        // while the probe could never find the binary — Anthropic's own
+        // installer and Homebrew both go on PATH too.
+        for directory in (environment["PATH"] ?? "")
+            .split(separator: ":", omittingEmptySubsequences: true) {
+            append(URL(fileURLWithPath: String(directory)).appendingPathComponent("claude"),
+                .cli, "Claude Code CLI")
+        }
 
         for bundled in desktopBundledBinaries(fileManager: fileManager, home: home) {
             append(bundled.url, .desktop, bundled.label)
