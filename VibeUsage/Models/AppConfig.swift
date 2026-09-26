@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppConfig {
-    static let version = "0.6.2"
+    static let version = "0.7.0"
 
     #if VIBE_USAGE_EXTERNAL_TEST
     static let displayName = "Vibe Usage Test"
