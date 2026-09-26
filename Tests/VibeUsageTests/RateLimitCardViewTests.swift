@@ -78,4 +78,20 @@ struct RateLimitCardViewTests {
 
         #expect(unexplained != exhausted)
     }
+
+    @Test
+    func genericQuotaWindowsLeadFromShortestToLongest() {
+        let meters = [
+            RateLimitMeter(id: "mcp", label: "MCP", window: RateLimitWindow(utilization: 4, windowDuration: 30 * 86_400)),
+            RateLimitMeter(id: "weekly", label: "Weekly", window: RateLimitWindow(utilization: 30)),
+            RateLimitMeter(id: "sonnet", label: "Sonnet", window: RateLimitWindow(utilization: 40, windowDuration: 7 * 86_400)),
+            RateLimitMeter(id: "five-hour", label: "5h", window: RateLimitWindow(utilization: 10, windowDuration: 5 * 3_600)),
+            RateLimitMeter(id: "extra", label: "额外", window: RateLimitWindow(utilization: 50)),
+        ]
+
+        let ordered = QuotaMeterLayout.canonicalMeters(meters)
+
+        #expect(ordered.map(\.label) == ["5h", "7d", "MCP", "Sonnet", "额外"])
+        #expect(ordered[1].window.windowDuration == TimeInterval(7 * 86_400))
+    }
 }
