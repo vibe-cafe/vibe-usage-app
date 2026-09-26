@@ -24,7 +24,8 @@ macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常�
 - 菜单栏常驻；可选显示在 Dock / Cmd-Tab，切换到 Vibe Usage 时自动打开用量面板
 - 后台每 30 分钟自动同步数据，也可手动「更新数据」
 - 弹出窗口查看费用、总 Token、缓存 Token、趋势图表
-- **订阅配额监控**：自动识别 Codex、Claude、Kimi Code、ZCode、Grok、OpenCode Go 和 Cursor，可按选择顺序为每个已启用产品显示一张卡片（双列向下排列，卡片自动换行）。Codex、Claude 和 Kimi 复用各自本机官方客户端的登录状态；Kimi 的短期 access token 由共享 CLI 通过标准 OAuth 自动、安全轮换。ZCode 支持 BigModel（国内）与 Z.ai（海外），仅使用用户显式输入并按区域分别保存在 Vibe Usage 自有 Keychain 项中的 Coding Plan API Key。Grok 只从官方 CLI 普通日志的结构化 billing 事件读取当前订阅百分比、周期和方案，不联网、不读取凭据，也不保留其他日志字段。OpenCode Go 在 App 内原生读取 OpenCode 自己的 Go key（先看凭据表，再回退到 1.x 的 auth.json），调用官方 usage 接口展示 5 小时 / 每周 / 每月三个窗口；key 只作请求头，不落盘、不缓存、不写日志，未订阅 Go 的账号显示「未订阅 OpenCode Go」。Cursor 可单独选择并显示待接入状态，但在官方稳定配额接口出现前不会读取登录 Token、Cookie、其他应用 Keychain、网络流量或界面。只有选中的可读取产品才会启动读取或联网；单个产品失败不影响另一张卡片- 支持今天 / 24H / 7D / 30D / 90D / 自定义日期，以及终端 / 工具 / 模型 / 项目筛选
+- **订阅配额监控**：自动识别 Codex、Claude、Kimi Code、ZCode、Grok、Cursor 和 OpenCode Go，可按选择顺序为每个已启用产品显示一张卡片（卡片较多时横向滚动）。Codex、Claude 和 Kimi 复用各自本机官方客户端的登录状态；Kimi 的短期 access token 由共享 CLI 通过标准 OAuth 自动、安全轮换。OpenCode Go 在 App 内原生读取 OpenCode 自己的 Go key（先看凭据表，再回退到 1.x 的 auth.json），调用官方 usage 接口展示 5 小时 / 每周 / 每月三个窗口；key 只作请求头，不落盘、不缓存、不写日志，未订阅 Go 的账号显示「未订阅 OpenCode Go」。ZCode 支持 BigModel（国内）与 Z.ai（海外），仅使用用户显式输入并按区域分别保存在 Vibe Usage 自有 Keychain 项中的 Coding Plan API Key。Grok 只从官方 CLI 普通日志的结构化 billing 事件读取当前订阅百分比、周期和方案，不联网、不读取凭据，也不保留其他日志字段。Cursor 可单独选择并显示待接入状态，但在官方稳定配额接口出现前不会读取登录 Token、Cookie、其他应用 Keychain、网络流量或界面。只有选中的可读取产品才会启动读取或联网；单个产品失败不影响另一张卡片
+- 支持今天 / 24H / 7D / 30D / 90D / 自定义日期，以及终端 / 工具 / 模型 / 项目筛选
 - 可在菜单栏显示今日费用和 Token 数；菜单栏显示、开机自启动与 Dock 图标开关集中在「设置 → 常规」
 - 可在订阅配额选择器和设置中选择、排序任意数量的产品；首次运行只自动选择已检测且可用的产品，未选择的产品不显示也不读取
 - 可在设置中为 Codex、Grok、Antigravity / AGY 添加多个 Multica 或其他隔离运行时目录（「设置 → 数据目录（高级）」）；旧版单一 Codex Home 配置和各工具默认目录仍会继续扫描
