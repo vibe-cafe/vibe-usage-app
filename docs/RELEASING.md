@@ -130,3 +130,24 @@ Once all credential checks pass, follow the release sequence documented in
 
 Publish `dist/VibeUsage.dmg`, `dist/VibeUsage.zip`, and `dist/appcast.xml`, then
 verify that all three assets are present on the GitHub release.
+
+**Appcast enclosure URLs must be pinned to `releases/download/<tag>/`, never
+`releases/latest/download/`.** `SUFeedURL` in `Info.plist` fetching the feed
+document itself via the `latest` alias is fine — that document is re-fetched
+fresh every time. But each `<enclosure url>` inside it points at a specific,
+already-signed ZIP; `generate_appcast` reuses and rewrites the existing
+`appcast.xml` in place, so an older item's enclosure URL never gets refreshed.
+If it was ever left pointing at `releases/latest/download/VibeUsage.zip`, the
+next release ships, GitHub repoints `latest` at the new asset, and the old
+item's EdDSA signature (computed over the old ZIP's bytes) no longer matches
+what `latest` now serves — Sparkle then refuses the update with "The update is
+improperly signed and could not be validated." A user hit exactly this on
+2026-09-18 at 17:37, minutes after 0.6.2 shipped. `generate-appcast.sh` now
+passes `--download-url-prefix .../releases/download/v<version>/` and
+post-processes `appcast.xml` to rewrite any remaining legacy `latest` item
+URLs, so this should no longer recur — but if you ever hand-edit
+`appcast.xml` or upload assets with `gh release upload` under a **tag that
+isn't `v<version>`**, the per-tag URL 404s. Every existing release tag follows
+`v<CFBundleShortVersionString>` (`v0.6.2`, `v0.6.1`, `v0.5.10`, ...); keep it
+that way, or set `APPCAST_TAG` when invoking `generate-appcast.sh` if a
+release is ever cut under a different tag.
