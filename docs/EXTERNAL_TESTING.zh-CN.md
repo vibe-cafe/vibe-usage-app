@@ -7,7 +7,7 @@
 
 - macOS 14 或更新版本。
 - 已安装 Node.js 20 或更新版本，并且 `npx` 可用。
-- 需要测试的 Codex、Claude Code、Kimi Code、Grok 或 Cursor 已由测试者本人安装、登录和使用。
+- 需要测试的 Codex、Claude Code、Kimi Code、Grok、Cursor 或 OpenCode Go 已由测试者本人安装、登录和使用。
 
 ## 首次打开
 
@@ -26,6 +26,7 @@
 - Grok 只读取官方 CLI 普通日志中已经写入的结构化配额记录；如未显示，请先打开 Grok CLI 使用一次再重新检测。
 - Cursor 目前只识别安装状态，等待官方稳定配额接口，不读取 Token、Cookie 或数据库。
 - ZCode 只有在测试者主动输入 BigModel 或 Z.ai Coding Plan API Key 后才读取配额；Key 仅保存在外测包独立的本机钥匙串项中。
+- OpenCode Go 读取 OpenCode CLI 本机凭据文件里的 API Key（只读、不落盘、不写日志），显示 5 小时 / 每周 / 每月三个窗口；未订阅 Go 的账号显示「未订阅 OpenCode Go」，如刚订阅请在面板里点一次「重试」。
 
 ## 反馈问题
 
