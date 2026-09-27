@@ -398,6 +398,10 @@ private struct ProviderCard: View {
         switch label {
         case "5h": return "5 小时窗口"
         case "7d": return "7 天窗口"
+        // The canonical monthly label carries no day count on purpose (the
+        // window is a calendar/subscription month, 28–31 days), so the title
+        // spells it out instead of echoing the raw token.
+        case "Month": return "月度窗口"
         default:   return label
         }
     }
