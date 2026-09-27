@@ -293,3 +293,141 @@ struct QuotaProductTests {
         #expect(keyStore.values[.zAI] == "legacy-zai-key")
     }
 }
+
+// MARK: - Tab strip
+
+extension QuotaProductTests {
+    private func catalogProducts() -> [QuotaProduct] {
+        QuotaProductRegistry.catalog.map {
+            QuotaProduct(provider: $0.0, availability: $0.1, isDetected: true)
+        }
+    }
+
+    /// The strip shows the whole catalog, so the stored order must cover every
+    /// product: unknown ids (a product that left the catalog, or one written by
+    /// a newer build) are dropped and new products are appended.
+    @Test
+    func productOrderCoversTheCatalogAndDropsUnknownIds() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["grok", "ghost-product", "codex"], forKey: QuotaSelectionPreferences.orderKey)
+
+        let order = QuotaSelectionPreferences.resolveOrder(
+            defaults: defaults,
+            products: catalogProducts()
+        )
+
+        #expect(order.prefix(2) == [.grok, .codex])
+        #expect(!order.contains(where: { $0.rawValue == "ghost-product" }))
+        #expect(Set(order) == Set(QuotaProductRegistry.catalog.map(\.0)))
+        // Normalized order is written back, so the ghost id does not linger.
+        let stored = defaults.array(forKey: QuotaSelectionPreferences.orderKey) as? [String]
+        #expect(stored?.contains("ghost-product") == false)
+    }
+
+    @Test
+    func selectedTabFallsBackToTheFirstTabWhenItsProductIsGone() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("zcode", forKey: QuotaSelectionPreferences.selectedTabKey)
+        #expect(QuotaSelectionPreferences.resolveSelectedTab(defaults: defaults, order: [.zCode, .grok]) == .zCode)
+
+        defaults.set("ghost-product", forKey: QuotaSelectionPreferences.selectedTabKey)
+        #expect(QuotaSelectionPreferences.resolveSelectedTab(defaults: defaults, order: [.grok, .codex]) == .grok)
+    }
+
+    /// Enabled products come first, disabled ones after, each group in the
+    /// user's persisted order — turning a product off moves its tab to the grey
+    /// group instead of removing it.
+    @Test @MainActor
+    func tabStripPutsEnabledProductsFirstInStoredOrder() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["grok", "codex"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        defaults.set(
+            ["opencode-go", "grok", "cursor", "codex", "claude-code"],
+            forKey: QuotaSelectionPreferences.orderKey
+        )
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.catalogProducts() }
+        )
+        appState.initializeQuotaProducts()
+
+        let order = appState.quotaTabOrder
+        #expect(Array(order.prefix(2)) == [.grok, .codex])
+        #expect(Set(order.dropFirst(2)) == Set([.opencodeGo, .cursor, .claudeCode, .kimiCode, .zCode]))
+        #expect(appState.selectedQuotaTab == .grok)
+    }
+
+    /// Dragging reorders within the strip and persists; because enabled products
+    /// render as their own group, a drop past the last tab means the end of the
+    /// dragged product's group.
+    @Test @MainActor
+    func draggingATabPersistsItsNewOrder() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["codex", "claude-code", "grok"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.catalogProducts() }
+        )
+        appState.initializeQuotaProducts()
+
+        appState.moveQuotaProduct(.grok, before: .codex)
+        #expect(Array(appState.quotaTabOrder.prefix(3)) == [.grok, .codex, .claudeCode])
+
+        appState.moveQuotaProduct(.grok, before: nil)
+        #expect(Array(appState.quotaTabOrder.prefix(3)) == [.codex, .claudeCode, .grok])
+
+        let stored = defaults.array(forKey: QuotaSelectionPreferences.orderKey) as? [String] ?? []
+        #expect(Array(stored.prefix(3)) == ["codex", "claude-code", "grok"])
+    }
+
+    /// A disabled product's drop lands in the grey group: the "enabled first"
+    /// rule outranks a cross-group drag.
+    @Test @MainActor
+    func draggingADisabledTabCannotLiftItAboveEnabledProducts() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["codex"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.catalogProducts() }
+        )
+        appState.initializeQuotaProducts()
+
+        appState.moveQuotaProduct(.grok, before: .codex)
+
+        #expect(appState.quotaTabOrder.first == .codex)
+        #expect(appState.quotaTabOrder.dropFirst().first == .grok)
+    }
+
+    @Test @MainActor
+    func selectingATabPersistsAndNeverChangesMonitoring() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["codex"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.catalogProducts() }
+        )
+        appState.initializeQuotaProducts()
+
+        appState.selectQuotaTab(.opencodeGo)
+
+        #expect(appState.selectedQuotaTab == .opencodeGo)
+        #expect(defaults.string(forKey: QuotaSelectionPreferences.selectedTabKey) == "opencode-go")
+        // Looking at a product is not opting into it.
+        #expect(appState.isQuotaProviderSelected(.opencodeGo) == false)
+        #expect(appState.selectedQuotaProviders == [.codex])
+    }
+}

@@ -168,6 +168,56 @@ enum QuotaProductRegistry {
 enum QuotaSelectionPreferences {
     static let initializedKey = "quotaSelectionInitialized"
     static let selectedIDsKey = "selectedQuotaProductIds"
+    /// Display order of every catalog product, enabled or not (tab strip).
+    static let orderKey = "quotaProductOrder"
+    /// The tab the user last looked at.
+    static let selectedTabKey = "quotaSelectedTabId"
+
+    /// Stored order for the whole catalog: unknown ids (a product removed from
+    /// the catalog, or written by a newer build) are dropped, and products the
+    /// stored order does not know about are appended in catalog order.
+    static func resolveOrder(
+        defaults: UserDefaults,
+        products: [QuotaProduct]
+    ) -> [ProviderRateLimit.Provider] {
+        let catalog = products.map(\.provider)
+        var order = storedOrder(defaults: defaults).filter { catalog.contains($0) }
+        for provider in catalog where !order.contains(provider) { order.append(provider) }
+        persistOrder(order, defaults: defaults)
+        return order
+    }
+
+    static func persistOrder(
+        _ order: [ProviderRateLimit.Provider],
+        defaults: UserDefaults
+    ) {
+        defaults.set(normalized(order).map(\.rawValue), forKey: orderKey)
+    }
+
+    /// The stored tab when it is still in the strip; otherwise the first tab.
+    static func resolveSelectedTab(
+        defaults: UserDefaults,
+        order: [ProviderRateLimit.Provider]
+    ) -> ProviderRateLimit.Provider {
+        let stored = (defaults.string(forKey: selectedTabKey))
+            .flatMap { ProviderRateLimit.Provider(rawValue: $0) }
+        if let stored, order.contains(stored) { return stored }
+        return order.first ?? .codex
+    }
+
+    static func persistSelectedTab(
+        _ provider: ProviderRateLimit.Provider,
+        defaults: UserDefaults
+    ) {
+        defaults.set(provider.rawValue, forKey: selectedTabKey)
+    }
+
+    private static func storedOrder(
+        defaults: UserDefaults
+    ) -> [ProviderRateLimit.Provider] {
+        (defaults.array(forKey: orderKey) as? [String] ?? [])
+            .compactMap { ProviderRateLimit.Provider(rawValue: $0) }
+    }
 
     static func resolve(
         defaults: UserDefaults,

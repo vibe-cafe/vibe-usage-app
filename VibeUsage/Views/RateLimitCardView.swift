@@ -1,135 +1,37 @@
 import SwiftUI
 import AppKit
 
-/// Subscription quota section with local discovery, a product selector, and
-/// provider-neutral cards. Selection order is card order.
+/// Subscription quota section: a product tab strip (icons, draggable, settings
+/// pinned to its trailing edge) over the selected product's card.
+///
+/// The strip lists the whole catalog — enabled products first in their brand
+/// colors, disabled ones after them desaturated — so switching products never
+/// requires a menu and nothing disappears when a toggle flips. Only the
+/// selected product's card is on screen, which is what lets a single card use
+/// the full width instead of living in a 240pt column of a scroller.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
-    /// Fixed card width. Two cards plus the 8pt gap fill the popover's content
-    /// box exactly ((520 − 2×16 padding − 8) / 2), so the familiar two-card row
-    /// is unchanged; a third product scrolls instead of squeezing every card
-    /// narrower than its meters and labels can render.
-    static let cardWidth: CGFloat = 240
-
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader
-
-            switch Self.sectionContent(selected: appState.selectedQuotaProviders) {
-            case let .cards(providers): cards(providers)
-            case .notice: noticeBar
-            }
+            QuotaTabStripView()
+            ProviderCard(snapshot: snapshot(for: appState.selectedQuotaTab))
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    /// What the section shows under the header. Cards are one-per-product
-    /// inside a horizontal scroller — an enabled product is never dropped, and
-    /// the section never folds into a single generic line just because every
-    /// card happens to be empty. The notice survives only for "you enabled
-    /// nothing", where it doubles as the hint for the selector beside it.
-    enum SectionContent: Equatable {
-        case cards([ProviderRateLimit.Provider])
-        case notice
-    }
-
-    static func sectionContent(
-        selected: [ProviderRateLimit.Provider]
-    ) -> SectionContent {
-        selected.isEmpty ? .notice : .cards(selected)
-    }
-
-    /// One card per selected product, in selection order, inside a horizontal
-    /// scroller. A product the user enabled must always show its own state,
-    /// because a collapsed section reads as "this feature is off" precisely
-    /// when the user wants to know why nothing is shown.
-    private func cards(_ providers: [ProviderRateLimit.Provider]) -> some View {
-        ScrollView(.horizontal, showsIndicators: providers.count > 2) {
-            // Grid, not HStack: one row's cards share the tallest card's
-            // height, so a provider showing fewer meters or an error message
-            // still aligns with its neighbours instead of ending short.
-            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
-                GridRow {
-                    ForEach(providers, id: \.self) { provider in
-                        ProviderCard(snapshot: snapshot(for: provider))
-                            .frame(width: Self.cardWidth, alignment: .topLeading)
-                    }
-                }
-            }
-        }
-    }
-
-    private var sectionHeader: some View {
-        HStack(spacing: 8) {
-            Text("订阅配额")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(white: 0.72))
-            Spacer()
-            productSelector
-        }
-    }
-
-    private var productSelector: some View {
-        Menu {
-            ForEach(appState.quotaProducts) { product in
-                let selected = appState.isQuotaProviderSelected(product.provider)
-                Button {
-                    Task {
-                        await appState.setQuotaProductSelected(
-                            product.provider,
-                            selected: !selected
-                        )
-                    }
-                } label: {
-                    Label(
-                        "\(product.displayName) · \(appState.quotaProductStatusText(product))",
-                        systemImage: selected ? "checkmark" : "circle"
-                    )
-                }
-                .disabled(!selected && !appState.canSelectQuotaProvider(product.provider))
-            }
-
-            Divider()
-            Button("重新检测本机产品") {
-                appState.rediscoverQuotaProducts()
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text("选择 \(appState.selectedQuotaProviders.count)")
-                    .font(.system(size: 10.5, weight: .medium))
-            }
-            .foregroundStyle(Color(white: 0.72))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color(white: 0.11))
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(white: 0.2), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("选择要显示订阅配额的产品")
-    }
-
+    /// The card for the tab on screen. A product whose monitoring is off gets a
+    /// `.disabled` snapshot instead of whatever stale numbers might still be
+    /// cached for it, so the card can offer 「启用」 without showing data the
+    /// user is not currently tracking.
     private func snapshot(for provider: ProviderRateLimit.Provider) -> ProviderRateLimit {
-        appState.rateLimits.first(where: { $0.provider == provider })
+        guard appState.isQuotaProviderSelected(provider) else {
+            return ProviderRateLimit(provider: provider, status: .disabled)
+        }
+        return appState.rateLimits.first(where: { $0.provider == provider })
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    /// Shown only while the user has selected nothing at all — the selector
-    /// stays reachable so a product can be added back.
-    private var noticeBar: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "info.circle")
-                .font(.system(size: 10))
-            Text("自动识别本机产品；请选择要显示的产品")
-                .font(.system(size: 11))
-        }
-        .foregroundStyle(Color(white: 0.4))
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
     /// Status line for an enabled product whose card has no meters to draw.
     /// Only ever states what the data channel actually reported: the live
@@ -163,8 +65,8 @@ private struct ProviderCard: View {
     /// Which window-label is currently hovered (`"5h"` / `"7d"`). The card owns
     /// only the *state* — the tooltip itself is drawn by the popover's topmost
     /// layer (`QuotaTooltipPreferenceKey`), because the card sits inside the
-    /// horizontal card scroller and the dashboard's vertical `ScrollView`, and
-    /// both clip whatever leaves the card's bounds.
+    /// dashboard's vertical `ScrollView`, which clips whatever leaves the
+    /// card's bounds.
     @State private var hoveredLabel: String? = nil
 
     /// Folded meter rows stay reachable: the footer line expands the card in
@@ -253,10 +155,11 @@ private struct ProviderCard: View {
         switch snapshot.status {
         case .ok:           quotaRows
         case .disabled:
-            // No provider reaches this state any more: Claude used to sit here
-            // until the user installed the statusline hook. Kept as a graceful
-            // landing for a snapshot persisted by an older build.
-            messageContent(text: "订阅配额未启用", action: "重试")
+            // Reached for a product whose tab is greyed out: the strip shows
+            // every product, so the card is where monitoring gets turned on.
+            messageContent(text: "订阅配额未启用", action: "启用") {
+                await enableProvider()
+            }
         case .unauthorized:
             if snapshot.provider == .zCode {
                 messageContent(
@@ -491,7 +394,11 @@ private struct ProviderCard: View {
 
     // MARK: Error states
 
-    private func messageContent(text: String, action: String) -> some View {
+    private func messageContent(
+        text: String,
+        action: String,
+        perform: (() async -> Void)? = nil
+    ) -> some View {
         HStack(spacing: 8) {
             Text(text)
                 .font(.system(size: 11))
@@ -500,7 +407,7 @@ private struct ProviderCard: View {
                 .truncationMode(.tail)
             Spacer(minLength: 0)
             Button {
-                Task { await retryProvider() }
+                Task { await (perform ?? retryProvider)() }
             } label: {
                 Text(action)
                     .font(.system(size: 11))
@@ -519,6 +426,13 @@ private struct ProviderCard: View {
     /// should not issue an unrelated Codex network request.
     private func retryProvider() async {
         await appState.refreshRateLimit(for: snapshot.provider)
+    }
+
+    /// Turn monitoring on for the tab on screen; `setQuotaProductSelected`
+    /// seeds the card and starts the first refresh, so the user sees the
+    /// spinner immediately instead of a dead card.
+    private func enableProvider() async {
+        await appState.setQuotaProductSelected(snapshot.provider, selected: true)
     }
 }
 
@@ -621,11 +535,11 @@ private struct EmptyQuotaRow: View {
 /// row's rect.
 ///
 /// The tooltip is taller than the card and straddles the card's bottom edge, so
-/// nothing between the row and the panel edge can draw it whole — the horizontal
-/// card scroller and the dashboard's vertical `ScrollView` both clip their
+/// nothing between the row and the panel edge can draw it whole — the
+/// dashboard's vertical `ScrollView` clips its
 /// content, and every section below the quota row paints after it. Routing the
 /// payload up as a preference lets `PopoverView`'s root overlay (above every
-/// scroller, card, and sibling in the panel) draw it instead.
+/// card, and sibling in the panel) draw it instead.
 struct QuotaTooltipPayload {
     /// Hovered-row identity, so a move between rows animates instead of
     /// snapping.

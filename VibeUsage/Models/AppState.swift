@@ -162,6 +162,13 @@ final class AppState {
         QuotaProduct(provider: $0.0, availability: $0.1, isDetected: false)
     }
     private(set) var selectedQuotaProviders: [ProviderRateLimit.Provider] = [.codex, .claudeCode]
+    /// Persisted display order of every catalog product, enabled or not. The
+    /// strip renders enabled products first, so this order decides the sequence
+    /// *within* each of those two groups.
+    private(set) var quotaProductOrder: [ProviderRateLimit.Provider] = []
+    /// The tab whose card is on screen. Falls back to the first tab when the
+    /// stored product is gone.
+    private(set) var selectedQuotaTab: ProviderRateLimit.Provider = .codex
     var rateLimits: [ProviderRateLimit] = []
 
     /// True while the corresponding provider's refresh is in flight — the card
@@ -334,6 +341,18 @@ final class AppState {
             defaults: quotaDefaults,
             products: initiallySelectableProducts
         )
+        // The tab strip remembers both the display order of every product and
+        // which tab the user last looked at. Order is stored for the whole
+        // catalog (enabled or not), because disabled tabs stay visible — they
+        // are simply rendered after the enabled ones and greyed out.
+        self.quotaProductOrder = QuotaSelectionPreferences.resolveOrder(
+            defaults: quotaDefaults,
+            products: quotaProducts
+        )
+        self.selectedQuotaTab = QuotaSelectionPreferences.resolveSelectedTab(
+            defaults: quotaDefaults,
+            order: quotaTabOrder
+        )
         #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         TestDiagnosticLog.recordQuotaSelectionInitialized(selectedQuotaProviders)
         #endif
@@ -471,6 +490,59 @@ final class AppState {
 
     func isQuotaProviderSelected(_ provider: ProviderRateLimit.Provider) -> Bool {
         selectedQuotaProviders.contains(provider)
+    }
+
+    /// Tab strip order: products whose monitoring is on, then the rest — each
+    /// group in the user's persisted order. A product the user turns off keeps
+    /// its tab (greyed, after the enabled ones) instead of vanishing, so the
+    /// strip never reflows just because a toggle changed.
+    var quotaTabOrder: [ProviderRateLimit.Provider] {
+        let order = quotaProductOrder.isEmpty ? quotaProducts.map(\.provider) : quotaProductOrder
+        let known = Set(quotaProducts.map(\.provider))
+        let catalog = order.filter { known.contains($0) }
+            + quotaProducts.map(\.provider).filter { !order.contains($0) }
+        return catalog.filter { isQuotaProviderSelected($0) }
+            + catalog.filter { !isQuotaProviderSelected($0) }
+    }
+
+    /// Switch the visible card. Selecting a tab never changes a product's
+    /// monitoring state — enabling stays an explicit action (`启用` on the card
+    /// or the toggle in Settings).
+    func selectQuotaTab(_ provider: ProviderRateLimit.Provider) {
+        guard quotaTabOrder.contains(provider), provider != selectedQuotaTab else { return }
+        selectedQuotaTab = provider
+        QuotaSelectionPreferences.persistSelectedTab(provider, defaults: quotaDefaults)
+    }
+
+    /// Drag-and-drop reorder. `target == nil` means "dropped past the last
+    /// tab", which lands at the end of the dragged product's *own* group.
+    /// The persisted array is kept in render order (enabled products first), so
+    /// a cross-group drop normalizes back into the dragged product's group —
+    /// the "enabled first" rule wins over the drop, and reading the stored
+    /// order back always reproduces the strip.
+    func moveQuotaProduct(
+        _ provider: ProviderRateLimit.Provider,
+        before target: ProviderRateLimit.Provider?
+    ) {
+        guard provider != target else { return }
+        var order = quotaTabOrder
+        guard let from = order.firstIndex(of: provider) else { return }
+        order.remove(at: from)
+
+        let destination: Int
+        if let target, let to = order.firstIndex(of: target) {
+            destination = to
+        } else {
+            let isEnabled = isQuotaProviderSelected(provider)
+            destination = order.firstIndex { isQuotaProviderSelected($0) != isEnabled } ?? order.count
+        }
+        order.insert(provider, at: destination)
+        applyQuotaProductOrder(order)
+    }
+
+    private func applyQuotaProductOrder(_ order: [ProviderRateLimit.Provider]) {
+        quotaProductOrder = order
+        QuotaSelectionPreferences.persistOrder(order, defaults: quotaDefaults)
     }
 
     func isRateLimitRefreshing(_ provider: ProviderRateLimit.Provider) -> Bool {
