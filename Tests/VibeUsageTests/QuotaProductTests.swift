@@ -431,3 +431,74 @@ extension QuotaProductTests {
         #expect(appState.selectedQuotaProviders == [.codex])
     }
 }
+
+// MARK: - Cards and warnings
+
+extension QuotaProductTests {
+    @MainActor
+    private func makeAppState(
+        defaults: UserDefaults,
+        selected: [String],
+        order: [String] = []
+    ) -> AppState {
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(selected, forKey: QuotaSelectionPreferences.selectedIDsKey)
+        if !order.isEmpty { defaults.set(order, forKey: QuotaSelectionPreferences.orderKey) }
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.catalogProducts() }
+        )
+        appState.initializeQuotaProducts()
+        return appState
+    }
+
+    /// Only enabled products own a card: turning one off removes its card (its
+    /// grey tab leads to Settings instead), and an all-off selection leaves the
+    /// section at the icon row with nothing under it.
+    @Test @MainActor
+    func cardsExistOnlyForEnabledProducts() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appState = makeAppState(
+            defaults: defaults,
+            selected: ["grok", "codex"],
+            order: ["cursor", "grok", "opencode-go", "codex"]
+        )
+        #expect(appState.quotaCardProviders == [.grok, .codex])
+
+        let (emptyDefaults, emptySuite) = self.defaults()
+        defer { emptyDefaults.removePersistentDomain(forName: emptySuite) }
+        let empty = makeAppState(defaults: emptyDefaults, selected: [])
+        #expect(empty.quotaCardProviders.isEmpty)
+        // The strip still lists the whole catalog, so nothing is unreachable.
+        #expect(empty.quotaTabOrder.count == QuotaProductRegistry.catalog.count)
+    }
+
+    /// The amber dot means "enabled, but this product is not producing quota":
+    /// a settled non-`ok` snapshot. A refresh in flight, a healthy product, a
+    /// disabled product and a product with no snapshot yet all stay plain.
+    @Test @MainActor
+    func tabsWarnOnlyForEnabledProductsWithoutUsableData() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appState = makeAppState(defaults: defaults, selected: ["codex", "opencode-go"])
+
+        appState.rateLimits = [
+            ProviderRateLimit(provider: .codex, status: .ok),
+            ProviderRateLimit(provider: .opencodeGo, status: .noData, emptyReason: .notEntitled),
+        ]
+        #expect(appState.quotaTabShowsWarning(.opencodeGo))
+        #expect(appState.quotaTabShowsWarning(.codex) == false)
+        // Not enabled: no card, no dot — its tab is grey instead.
+        #expect(appState.quotaTabShowsWarning(.grok) == false)
+
+        // A fetch in flight is not a problem — the card shows its spinner.
+        appState.isOpenCodeGoRateLimitRefreshing = true
+        #expect(appState.quotaTabShowsWarning(.opencodeGo) == false)
+
+        appState.isOpenCodeGoRateLimitRefreshing = false
+        appState.rateLimits = []
+        #expect(appState.quotaTabShowsWarning(.codex) == false)
+    }
+}

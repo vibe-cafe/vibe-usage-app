@@ -46,42 +46,41 @@ struct RateLimitCardView: View {
         }
     }
 
-    /// One card per product, in strip order, two per screen inside a horizontal
-    /// scroller. Grid, not HStack: one row's cards share the tallest card's
-    /// height, so a provider showing fewer meters or an error message still
-    /// aligns with its neighbours instead of ending short.
+    /// One card per *enabled* product, in strip order, two per screen inside a
+    /// horizontal scroller. Products whose monitoring is off have no card at all
+    /// — their tab is grey and leads to Settings — so a user who turned
+    /// everything off is left with the icon row alone instead of a row of
+    /// "not enabled" placeholders. Grid, not HStack: one row's cards share the
+    /// tallest card's height, so a provider showing fewer meters or an error
+    /// message still aligns with its neighbours instead of ending short.
+    @ViewBuilder
     private var cardRow: some View {
-        let providers = appState.quotaTabOrder
-        return ScrollView(.horizontal, showsIndicators: providers.count > 2) {
-            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
-                GridRow {
-                    ForEach(providers, id: \.self) { provider in
-                        ProviderCard(snapshot: snapshot(for: provider))
-                            .frame(width: Self.cardWidth, alignment: .topLeading)
-                            .background(
-                                GeometryReader { geometry in
-                                    Color.clear.preference(
-                                        key: QuotaCardOffsetPreferenceKey.self,
-                                        value: [provider: geometry
-                                            .frame(in: .named(Self.cardSpace)).minX]
-                                    )
-                                }
-                            )
+        let providers = appState.quotaCardProviders
+        if !providers.isEmpty {
+            ScrollView(.horizontal, showsIndicators: providers.count > 2) {
+                Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                    GridRow {
+                        ForEach(providers, id: \.self) { provider in
+                            ProviderCard(snapshot: snapshot(for: provider))
+                                .frame(width: Self.cardWidth, alignment: .topLeading)
+                                .background(
+                                    GeometryReader { geometry in
+                                        Color.clear.preference(
+                                            key: QuotaCardOffsetPreferenceKey.self,
+                                            value: [provider: geometry
+                                                .frame(in: .named(Self.cardSpace)).minX]
+                                        )
+                                    }
+                                )
+                        }
                     }
                 }
             }
         }
     }
 
-    /// The card for the tab on screen. A product whose monitoring is off gets a
-    /// `.disabled` snapshot instead of whatever stale numbers might still be
-    /// cached for it, so the card can offer 「启用」 without showing data the
-    /// user is not currently tracking.
     private func snapshot(for provider: ProviderRateLimit.Provider) -> ProviderRateLimit {
-        guard appState.isQuotaProviderSelected(provider) else {
-            return ProviderRateLimit(provider: provider, status: .disabled)
-        }
-        return appState.rateLimits.first(where: { $0.provider == provider })
+        appState.rateLimits.first(where: { $0.provider == provider })
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
@@ -208,11 +207,10 @@ private struct ProviderCard: View {
         switch snapshot.status {
         case .ok:           quotaRows
         case .disabled:
-            // Reached for a product whose tab is greyed out: the strip shows
-            // every product, so the card is where monitoring gets turned on.
-            messageContent(text: "订阅配额未启用", action: "启用") {
-                await enableProvider()
-            }
+            // No enabled product reaches this state any more: a product whose
+            // monitoring is off has no card, and the grey tab leads to Settings.
+            // Kept as a graceful landing for a snapshot written by an older build.
+            messageContent(text: "订阅配额未启用", action: "重试")
         case .unauthorized:
             if snapshot.provider == .zCode {
                 messageContent(
@@ -485,12 +483,6 @@ private struct ProviderCard: View {
         await appState.refreshRateLimit(for: snapshot.provider)
     }
 
-    /// Turn monitoring on for the tab on screen; `setQuotaProductSelected`
-    /// seeds the card and starts the first refresh, so the user sees the
-    /// spinner immediately instead of a dead card.
-    private func enableProvider() async {
-        await appState.setQuotaProductSelected(snapshot.provider, selected: true)
-    }
 }
 
 // MARK: - Quota row
@@ -826,10 +818,23 @@ private struct ProgressBar: View {
     }
 
     static func color(for utilization: Double) -> Color {
+        QuotaUtilizationPalette.color(for: utilization)
+    }
+}
+
+/// The quota surfaces' shared palette: progress bars pick a color by
+/// utilization, and the tab strip's warning dot uses the same amber so "this
+/// product has a problem" reads like "this window is nearly full".
+enum QuotaUtilizationPalette {
+    static let normal = Color(white: 0.85)
+    static let warning = Color(red: 0.96, green: 0.62, blue: 0.04)
+    static let critical = Color(red: 0.94, green: 0.27, blue: 0.27)
+
+    static func color(for utilization: Double) -> Color {
         switch utilization {
-        case ..<70:    return Color(white: 0.85)
-        case 70..<90:  return Color(red: 0.96, green: 0.62, blue: 0.04)
-        default:       return Color(red: 0.94, green: 0.27, blue: 0.27)
+        case ..<70:    return normal
+        case 70..<90:  return warning
+        default:       return critical
         }
     }
 }

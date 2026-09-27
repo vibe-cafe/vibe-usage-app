@@ -505,6 +505,26 @@ final class AppState {
             + catalog.filter { !isQuotaProviderSelected($0) }
     }
 
+    /// Products that own a card: the enabled ones, in strip order. A product
+    /// whose monitoring is off has no card at all — its grey tab leads to
+    /// Settings instead — so an all-off selection leaves the section at the
+    /// icon row.
+    var quotaCardProviders: [ProviderRateLimit.Provider] {
+        quotaTabOrder.filter { isQuotaProviderSelected($0) }
+    }
+
+    /// "Enabled, but not producing quota data" — the amber dot on a tab. True
+    /// only for a product the user opted into, whose last read settled on
+    /// something other than `.ok`, and which is not mid-refresh (a spinner is
+    /// not a problem). A product with no snapshot yet says nothing.
+    func quotaTabShowsWarning(_ provider: ProviderRateLimit.Provider) -> Bool {
+        guard isQuotaProviderSelected(provider),
+              !isRateLimitRefreshing(provider),
+              let snapshot = rateLimits.first(where: { $0.provider == provider })
+        else { return false }
+        return snapshot.status != .ok
+    }
+
     /// Switch the visible card. Selecting a tab never changes a product's
     /// monitoring state — enabling stays an explicit action (`启用` on the card
     /// or the toggle in Settings).

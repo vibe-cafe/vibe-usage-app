@@ -47,8 +47,15 @@ struct QuotaTabStripView: View {
     private func tab(_ provider: ProviderRateLimit.Provider) -> some View {
         let isActive = activeProvider == provider
         let isEnabled = appState.isQuotaProviderSelected(provider)
+        let showsWarning = appState.quotaTabShowsWarning(provider)
         return Button {
-            onSelect(provider)
+            // A grey tab has no card to jump to: monitoring is off, so the
+            // useful destination is the place that turns it on.
+            if isEnabled {
+                onSelect(provider)
+            } else {
+                SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
+            }
         } label: {
             ProviderIcon(provider: provider)
                 .frame(width: 20, height: 20)
@@ -64,9 +71,19 @@ struct QuotaTabStripView: View {
                 // user can look at (and enable) rather than one that is gone.
                 .saturation(isEnabled ? 1 : 0)
                 .opacity(isEnabled ? 1 : 0.45)
+                // On, but its last read produced no quota: the dot points at the
+                // card that explains why (retry, re-login, not subscribed, …).
+                .overlay(alignment: .topTrailing) {
+                    if showsWarning {
+                        Circle()
+                            .fill(QuotaUtilizationPalette.warning)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 1, y: -1)
+                    }
+                }
         }
         .buttonStyle(.plain)
-        .help(tabHelp(provider, isEnabled: isEnabled))
+        .help(tabHelp(provider, isEnabled: isEnabled, showsWarning: showsWarning))
         .accessibilityLabel(provider.displayName)
         .draggable(provider.rawValue) {
             ProviderIcon(provider: provider)
@@ -78,12 +95,17 @@ struct QuotaTabStripView: View {
         }
     }
 
-    private func tabHelp(_ provider: ProviderRateLimit.Provider, isEnabled: Bool) -> String {
+    private func tabHelp(
+        _ provider: ProviderRateLimit.Provider,
+        isEnabled: Bool,
+        showsWarning: Bool
+    ) -> String {
         let status = appState.quotaProductStatusText(
             appState.quotaProducts.first { $0.provider == provider }
                 ?? QuotaProduct(provider: provider, availability: .ready, isDetected: false)
         )
-        return isEnabled ? "\(provider.displayName) · \(status)" : "\(provider.displayName) · \(status) · 未启用"
+        guard isEnabled else { return "\(provider.displayName) · \(status) · 未启用" }
+        return showsWarning ? "\(provider.displayName) · \(status) · 数据异常" : "\(provider.displayName) · \(status)"
     }
 
     // MARK: - Reorder
