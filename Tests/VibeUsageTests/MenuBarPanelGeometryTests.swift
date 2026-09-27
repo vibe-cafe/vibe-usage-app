@@ -42,3 +42,28 @@ struct MenuBarPanelGeometryTests {
         #expect(point.y == 700)
     }
 }
+
+// MARK: - Popover dismissal trigger
+
+extension MenuBarPanelGeometryTests {
+    /// The popover closes when focus lands on another application. Our own
+    /// activation is the "user came back" direction, and an unknown bundle id
+    /// is not evidence of a switch — the regression this pins: the app used to
+    /// dismiss on `applicationWillResignActive`, which also fires when our own
+    /// Settings window closes and flips the activation policy.
+    @Test
+    func popoverDismissesOnlyForAnotherApplication() {
+        #expect(MenuBarController.shouldDismissPopover(
+            forActivatedBundleID: "com.apple.finder",
+            ownBundleID: "ai.vibecafe.vibe-usage"
+        ))
+        #expect(MenuBarController.shouldDismissPopover(
+            forActivatedBundleID: "ai.vibecafe.vibe-usage",
+            ownBundleID: "ai.vibecafe.vibe-usage"
+        ) == false)
+        #expect(MenuBarController.shouldDismissPopover(
+            forActivatedBundleID: nil,
+            ownBundleID: "ai.vibecafe.vibe-usage"
+        ) == false)
+    }
+}

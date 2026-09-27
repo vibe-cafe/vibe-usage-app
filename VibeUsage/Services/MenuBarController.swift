@@ -160,7 +160,28 @@ final class MenuBarController: NSObject {
         // com.apple.ScreenSaver.Engine is unrelated but cheap to ignore here.
         if bundleID == "com.apple.screencaptureui" {
             closePanel()
+            return
         }
+        // Focus moving to *another* app is the "user switched away" case the
+        // popover must close for. Our own app activating, or the app merely
+        // resigning active because its own window arrangement changed (closing
+        // the Settings window flips the activation policy back when the Dock
+        // icon is hidden, which deactivates the app), must not close it — those
+        // internal transitions used to take the popover down with Settings.
+        if Self.shouldDismissPopover(forActivatedBundleID: bundleID, ownBundleID: Bundle.main.bundleIdentifier) {
+            dismissPanelForAppDeactivation()
+        }
+    }
+
+    /// Whether the popover should close because focus landed on `activated`.
+    /// Only a *different* application counts; our own activation is the
+    /// "user came back" direction.
+    nonisolated static func shouldDismissPopover(
+        forActivatedBundleID activated: String?,
+        ownBundleID: String?
+    ) -> Bool {
+        guard let activated else { return false }
+        return activated != ownBundleID
     }
 
     // MARK: - Status item
@@ -265,6 +286,10 @@ final class MenuBarController: NSObject {
         presentPanel()
     }
 
+    /// Close the popover because focus left the app for another one. Called
+    /// from the `NSWorkspace` activation observer — never from
+    /// `applicationWillResignActive`, which also fires for our own window and
+    /// policy transitions (closing Settings, for one).
     func dismissPanelForAppDeactivation() {
         guard ActivationCoordinator.shared.canDismissDashboardForAppDeactivation else { return }
         closePanel()
