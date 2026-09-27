@@ -1,22 +1,26 @@
 import SwiftUI
 
-/// The 订阅配额 tab strip: one icon per product, the settings shortcut pinned
-/// to the trailing edge.
+/// The 订阅配额 tab strip: one icon per product, the settings icon pinned to the
+/// trailing edge.
 ///
-/// Products whose monitoring is on come first and keep their brand color;
-/// products that are off stay visible after them, desaturated — the strip is
-/// the product catalog, not a summary of the current selection, so nothing
-/// disappears when a toggle flips. Tabs are draggable: the order is persisted
-/// (`QuotaSelectionPreferences.orderKey`), and because enabled products render
-/// as their own group, a cross-group drop lands inside the dragged product's
-/// group instead of breaking the "enabled first" rule.
-///
-/// Selecting a tab only switches which card is shown; it never changes
-/// monitoring state. Enabling stays an explicit action on the card (`启用`) or
-/// the toggle in Settings, reachable from the pinned gear.
+/// The strip is an index into the card row: clicking a tab asks the row to
+/// scroll to that product (`onSelect`), and the highlighted tab follows the row
+/// as it scrolls (`activeProvider`) — so the strip never claims a product is on
+/// screen when it is not. Products whose monitoring is on come first and keep
+/// their brand color; products that are off stay visible after them, desaturated
+/// (the strip is the product catalog, not a summary of the selection). Tabs are
+/// draggable: the order is persisted (`QuotaSelectionPreferences.orderKey`), and
+/// because enabled products render as their own group, a cross-group drop lands
+/// inside the dragged product's group instead of breaking the "enabled first"
+/// rule.
 struct QuotaTabStripView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
+
+    /// The product whose card currently leads the row.
+    let activeProvider: ProviderRateLimit.Provider
+    /// Jump the card row to this product.
+    let onSelect: (ProviderRateLimit.Provider) -> Void
 
     private static let tabSize: CGFloat = 30
     private static let tabSpacing: CGFloat = 6
@@ -33,7 +37,7 @@ struct QuotaTabStripView: View {
                 .dropDestination(for: String.self) { items, _ in
                     move(items, before: nil)
                 }
-            settingsButton
+            settingsIcon
         }
         .frame(height: Self.tabSize)
     }
@@ -41,18 +45,18 @@ struct QuotaTabStripView: View {
     // MARK: - Tabs
 
     private func tab(_ provider: ProviderRateLimit.Provider) -> some View {
-        let isSelected = appState.selectedQuotaTab == provider
+        let isActive = activeProvider == provider
         let isEnabled = appState.isQuotaProviderSelected(provider)
         return Button {
-            appState.selectQuotaTab(provider)
+            onSelect(provider)
         } label: {
             ProviderIcon(provider: provider)
                 .frame(width: 20, height: 20)
                 .padding(5)
-                .background(isSelected ? Color(white: 0.17) : Color.clear)
+                .background(isActive ? Color(white: 0.17) : Color.clear)
                 .overlay(
                     RoundedRectangle(cornerRadius: 7)
-                        .stroke(isSelected ? Color(white: 0.34) : Color.clear, lineWidth: 1)
+                        .stroke(isActive ? Color(white: 0.34) : Color.clear, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 7))
                 // Off products keep their slot but lose their color: the icon
@@ -63,7 +67,7 @@ struct QuotaTabStripView: View {
         }
         .buttonStyle(.plain)
         .help(tabHelp(provider, isEnabled: isEnabled))
-        .accessibilityLabel(ProviderRateLimit.Provider.accessibilityTabLabel(for: provider))
+        .accessibilityLabel(provider.displayName)
         .draggable(provider.rawValue) {
             ProviderIcon(provider: provider)
                 .frame(width: 20, height: 20)
@@ -94,29 +98,20 @@ struct QuotaTabStripView: View {
 
     // MARK: - Settings
 
-    /// Pinned to the trailing edge and never part of the drag order: it is the
-    /// way out to the full 订阅配额 settings (toggles, per-product status,
-    /// 「重新检测本机产品」).
-    private var settingsButton: some View {
+    /// A bare icon at the trailing edge, outside the drag order: the way to the
+    /// full 订阅配额 settings (toggles, per-product status, 「重新检测本机产品」).
+    private var settingsIcon: some View {
         Button {
             SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
         } label: {
             Image(systemName: "gearshape")
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundStyle(Color(white: 0.62))
                 .frame(width: Self.tabSize, height: Self.tabSize)
-                .background(Color(white: 0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help("打开订阅配额设置")
         .accessibilityLabel("订阅配额设置")
-    }
-}
-
-extension ProviderRateLimit.Provider {
-    /// VoiceOver label for a strip tab. The icon alone is not a name.
-    static func accessibilityTabLabel(for provider: ProviderRateLimit.Provider) -> String {
-        provider.displayName
     }
 }

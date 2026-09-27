@@ -1,22 +1,75 @@
 import SwiftUI
 import AppKit
 
-/// Subscription quota section: a product tab strip (icons, draggable, settings
-/// pinned to its trailing edge) over the selected product's card.
+/// Subscription quota section: a product tab strip over a horizontal row of
+/// 240pt cards (two per screen).
 ///
-/// The strip lists the whole catalog — enabled products first in their brand
-/// colors, disabled ones after them desaturated — so switching products never
-/// requires a menu and nothing disappears when a toggle flips. Only the
-/// selected product's card is on screen, which is what lets a single card use
-/// the full width instead of living in a 240pt column of a scroller.
+/// The strip is the row's index in both directions — clicking a tab scrolls the
+/// row to that product, and scrolling the row activates the tab of the card
+/// that reached the leading edge. The strip lists the whole catalog (enabled
+/// products first in their brand colors, monitoring-off ones after them
+/// desaturated, then the settings icon), and the row renders exactly that list
+/// in that order, so every tab has somewhere to jump to.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
+    /// Fixed card width. Two cards plus the 8pt gap fill the popover's content
+    /// box exactly ((520 − 2×16 padding − 8) / 2); the rest scroll sideways.
+    static let cardWidth: CGFloat = 240
+
+    /// Scroll coordinate space for the leading-edge check.
+    private static let cardSpace = "quota-card-row"
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            QuotaTabStripView()
-            ProviderCard(snapshot: snapshot(for: appState.selectedQuotaTab))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollViewReader { proxy in
+            VStack(alignment: .leading, spacing: 8) {
+                QuotaTabStripView(activeProvider: appState.selectedQuotaTab) { provider in
+                    appState.selectQuotaTab(provider)
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo(provider, anchor: .leading)
+                    }
+                }
+                cardRow
+                    .coordinateSpace(name: Self.cardSpace)
+            }
+            // Restore the last-viewed product as the leading card.
+            .onAppear {
+                guard appState.quotaTabOrder.contains(appState.selectedQuotaTab) else { return }
+                proxy.scrollTo(appState.selectedQuotaTab, anchor: .leading)
+            }
+            .onPreferenceChange(QuotaCardOffsetPreferenceKey.self) { offsets in
+                guard let leading = offsets.min(by: { abs($0.value) < abs($1.value) })?.key else {
+                    return
+                }
+                Task { @MainActor in appState.selectQuotaTab(leading) }
+            }
+        }
+    }
+
+    /// One card per product, in strip order, two per screen inside a horizontal
+    /// scroller. Grid, not HStack: one row's cards share the tallest card's
+    /// height, so a provider showing fewer meters or an error message still
+    /// aligns with its neighbours instead of ending short.
+    private var cardRow: some View {
+        let providers = appState.quotaTabOrder
+        return ScrollView(.horizontal, showsIndicators: providers.count > 2) {
+            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(providers, id: \.self) { provider in
+                        ProviderCard(snapshot: snapshot(for: provider))
+                            .frame(width: Self.cardWidth, alignment: .topLeading)
+                            .background(
+                                GeometryReader { geometry in
+                                    Color.clear.preference(
+                                        key: QuotaCardOffsetPreferenceKey.self,
+                                        value: [provider: geometry
+                                            .frame(in: .named(Self.cardSpace)).minX]
+                                    )
+                                }
+                            )
+                    }
+                }
+            }
         }
     }
 
@@ -551,6 +604,21 @@ struct QuotaTooltipPayload {
     let remainingText: String?
     /// The hovered row's rect, resolved by the layer that draws the tooltip.
     let anchor: Anchor<CGRect>
+}
+
+/// Each card publishes its leading edge in the row's coordinate space; the one
+/// closest to zero is the card the row is showing, which is what activates the
+/// matching tab. A dictionary (not a single value) because every card is alive
+/// at once — a single-value key would report whichever card laid out last.
+struct QuotaCardOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: [ProviderRateLimit.Provider: CGFloat] { [:] }
+
+    static func reduce(
+        value: inout [ProviderRateLimit.Provider: CGFloat],
+        nextValue: () -> [ProviderRateLimit.Provider: CGFloat]
+    ) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
 }
 
 /// Carries the hovered row's payload to the panel root. Only the hovered row
