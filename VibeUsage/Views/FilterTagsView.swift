@@ -381,6 +381,9 @@ struct FilterTagsView: View {
                                 .foregroundStyle(Color(white: 0.38))
                                 .rotationEffect(.degrees(isExpanded ? 180 : 0))
                                 .frame(width: 28, height: 28)
+                                // Plain buttons only hit-test drawn pixels; without this
+                                // just the 9pt glyph is clickable, not the 28×28 cell.
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
