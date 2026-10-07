@@ -4,15 +4,19 @@ enum Formatters {
     private static let iso8601WithFractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601 = Date.ISO8601FormatStyle()
 
-    /// Format large numbers with compact notation: 1234 → "1,234", 45200 → "45.2K"
+    /// Format large numbers with compact notation: 1234 → "1,234", 45200 → "45.2K",
+    /// 4_710_200_000 → "4.7B"
     static func formatNumber(_ n: Int) -> String {
-        if n >= 1_000_000 {
-            let value = Double(n) / 1_000_000.0
-            return String(format: "%.1fM", value)
+        // Switch unit where the one-decimal value would round up to 1000,
+        // so 999_960_000 reads "1.0B" rather than "1000.0M".
+        if n >= 999_950_000 {
+            return String(format: "%.1fB", Double(n) / 1_000_000_000.0)
+        }
+        if n >= 999_950 {
+            return String(format: "%.1fM", Double(n) / 1_000_000.0)
         }
         if n >= 10_000 {
-            let value = Double(n) / 1_000.0
-            return String(format: "%.1fK", value)
+            return String(format: "%.1fK", Double(n) / 1_000.0)
         }
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
