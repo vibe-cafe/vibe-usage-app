@@ -27,7 +27,10 @@ struct ModelGroup {
     let models: [String]
 }
 
-func groupModelsByFamily(_ models: [String]) -> [ModelGroup] {
+/// `familyID` maps an entry to the raw model id its family is judged by.
+/// Display names drop vendor prefixes ("Nano Banana", "Seed 2.0 Pro"), so
+/// callers grouping display names pass their raw ids here.
+func groupModelsByFamily(_ models: [String], familyID: (String) -> String = { $0 }) -> [ModelGroup] {
     var familyMap: [String: [String]] = [:]
     var others: [String] = []
 
@@ -36,7 +39,7 @@ func groupModelsByFamily(_ models: [String]) -> [ModelGroup] {
     }
 
     for model in models {
-        let lower = model.lowercased()
+        let lower = familyID(model).lowercased()
         // Handle provider prefixes like "anthropic/claude-opus-4-20250514"
         let base: String
         if let slashIndex = lower.firstIndex(of: "/") {
