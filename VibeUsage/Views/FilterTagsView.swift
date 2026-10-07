@@ -45,12 +45,15 @@ struct FilterTagsView: View {
     }
 
     /// Display name → one raw id behind it, used to pick the family group.
+    ///
+    /// A label may merge several raw ids and the family rules judge the raw id,
+    /// so `preferredFamilyRepresentative` decides which one to keep — see its
+    /// comment for why the lexicographically smallest is not always right.
     private var modelRawIDs: [String: String] {
         var map: [String: String] = [:]
         for raw in Set(appState.buckets.map(\.model)) {
             let label = DisplayNames.model(raw)
-            if let existing = map[label], existing <= raw { continue }
-            map[label] = raw
+            map[label] = map[label].map { preferredFamilyRepresentative($0, raw) } ?? raw
         }
         return map
     }

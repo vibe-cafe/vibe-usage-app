@@ -14,7 +14,12 @@ enum DisplayNames {
 
     // MARK: - Tools
 
-    /// Official product names, from the CLI's supported-tools table.
+    /// Official product names. This table mirrors `USAGE_SOURCES` in the web
+    /// repo (`vibe-cafe/apps/web/src/lib/usage-sources.ts`), which is the
+    /// registry the ingest endpoint validates against — not the CLI's own
+    /// tools table, which additionally lists tools the backend has not
+    /// registered (and spells a few differently). Keep the two in step: an id
+    /// missing here renders as its raw lowercase id.
     static let toolNames: [String: String] = [
         "alma": "Alma",
         "amp": "Amp",
@@ -35,6 +40,7 @@ enum DisplayNames {
         "gemini-cli": "Gemini CLI",
         "grok": "Grok",
         "hermes": "Hermes",
+        "kiki": "Kiki",
         "kimi-code": "Kimi Code",
         "kiro": "Kiro",
         "mcode": "MiniMax Code",

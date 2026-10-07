@@ -281,6 +281,7 @@ Display names (`DisplayNames`):
 - Models resolve to one official name per underlying model, so reasoning-effort, router-prefix and context-size variants (`gemini-3.8-flash-high`, `kimi-code/k3-256k`) merge. The model filter and the model distribution chart group by this display name.
 - A suffix is stripped only when what remains is a known model (`qwen3-max` keeps its name). Ids the catalog and override tables cannot resolve are shown exactly as reported — never guessed.
 - Names come from `ModelCatalog.generated.swift`; local exceptions live in `DisplayNames.modelOverrides` / `modelAliases`.
+- Tool names (`DisplayNames.toolNames`) mirror the web registry `USAGE_SOURCES` in `vibe-cafe/apps/web/src/lib/usage-sources.ts` — the list the ingest endpoint validates. A newly registered source renders as its raw lowercase id until it is added here too; the CLI's own tools table is **not** the reference (it also lists tools the backend has not registered, and spells a few differently), so keep this table in step with the web registry.
 
 ## Styling Conventions
 

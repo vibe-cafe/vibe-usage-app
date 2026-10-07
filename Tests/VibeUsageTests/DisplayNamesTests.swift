@@ -105,4 +105,40 @@ struct DisplayNamesTests {
         #expect(gemini?.models == ["Nano Banana Pro"])
         #expect(!groups.contains { $0.family == nil })
     }
+
+    @Test
+    func representativePrefersTheAliasItsFamilyRecognises() {
+        // "k3" and "kimi-k3-256k" render as one label, but only the longer id
+        // matches the Kimi family rule. Picking the smaller one dropped the
+        // merged row out of Kimi and into 其他.
+        #expect(DisplayNames.model("k3") == DisplayNames.model("kimi-k3-256k"))
+        #expect(preferredFamilyRepresentative("k3", "kimi-k3-256k") == "kimi-k3-256k")
+        #expect(preferredFamilyRepresentative("kimi-k3-256k", "k3") == "kimi-k3-256k")
+    }
+
+    @Test
+    func representativeIsTheSmallerIdWhenNoAliasHasAFamily() {
+        #expect(preferredFamilyRepresentative("zzz-alias", "aaa-alias") == "aaa-alias")
+        #expect(preferredFamilyRepresentative("aaa-alias", "zzz-alias") == "aaa-alias")
+    }
+
+    @Test
+    func mergedLabelStaysInTheFamilyItsRepresentativeMatches() {
+        let raw = ["k3", "kimi-k3-256k"]
+        let label = DisplayNames.model("k3")
+        let representative = raw.reduce(String?.none) { current, candidate in
+            current.map { preferredFamilyRepresentative($0, candidate) } ?? candidate
+        }
+        #expect(representative == "kimi-k3-256k")
+        let groups = groupModelsByFamily([label]) { _ in representative ?? label }
+        #expect(groups.first { $0.family?.key == "kimi" }?.models == [label])
+    }
+
+    @Test
+    func toolNamesCoverEveryRegisteredSourceId() {
+        // The table mirrors the web registry; an id missing here renders raw.
+        #expect(DisplayNames.tool("kiki") == "Kiki")
+        #expect(DisplayNames.tool("hermes") == "Hermes")
+        #expect(DisplayNames.tool("codearts-agent") == "CodeArts Agent")
+    }
 }
