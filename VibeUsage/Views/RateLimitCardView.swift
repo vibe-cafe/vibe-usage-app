@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// Subscription quota section: a product tab strip over a horizontal row of
-/// 240pt cards (two per screen).
+/// 240pt cards (two per screen), a single card widening to fill the row.
 ///
 /// The strip is the row's index in both directions — clicking a tab scrolls the
 /// row to that product, and scrolling the row activates the tab of the card
@@ -17,16 +17,53 @@ struct RateLimitCardView: View {
     /// box exactly ((520 − 2×16 padding − 8) / 2); the rest scroll sideways.
     static let cardWidth: CGFloat = 240
 
+    private static let cardGap: CGFloat = 8
+
+    /// A lone card spans the whole content box rather than hugging its half.
+    /// One 240pt card in a 488pt row reads as a layout error — the user turned
+    /// off the other products, so there is nothing it is making room for.
+    static let loneCardWidth: CGFloat = cardWidth * 2 + cardGap
+
+    /// The width one card takes in a row of `providerCount` enabled products.
+    /// Two fill the content box exactly; past that each keeps its column and the
+    /// row scrolls, so widening them would just hide a card off-screen.
+    static func width(forProviderCount providerCount: Int) -> CGFloat {
+        providerCount == 1 ? loneCardWidth : cardWidth
+    }
+
     /// Scroll coordinate space for the leading-edge check.
     private static let cardSpace = "quota-card-row"
+
+    /// Scroll-target id for a card.
+    ///
+    /// Namespaced on purpose: the tab strip's `ForEach` already gives every tab
+    /// the provider's own identity, so a card carrying `provider` too makes
+    /// `scrollTo(provider)` ambiguous. The tab comes first in the view tree and
+    /// is not inside the horizontal scroller, so the jump resolved to it — the
+    /// tab was already on screen, and the card row never moved.
+    static func cardID(_ provider: ProviderRateLimit.Provider) -> String {
+        "quota-card-\(provider.rawValue)"
+    }
+
+    /// True while a tab click is scrolling the row.
+    ///
+    /// The leading-edge sync below writes whichever card sits nearest the edge
+    /// into `selectedQuotaTab`. During the click's own animation that is an
+    /// intermediate card, so it re-rendered the strip mid-flight and the row
+    /// looked like it had not travelled to the product that was clicked. The
+    /// reverse direction must not fight the click that caused the scroll.
+    @State private var isTabScrollInFlight = false
 
     var body: some View {
         ScrollViewReader { proxy in
             VStack(alignment: .leading, spacing: 8) {
                 QuotaTabStripView(activeProvider: appState.selectedQuotaTab) { provider in
                     appState.selectQuotaTab(provider)
+                    isTabScrollInFlight = true
                     withAnimation(.easeInOut(duration: 0.18)) {
-                        proxy.scrollTo(provider, anchor: .leading)
+                        proxy.scrollTo(Self.cardID(provider), anchor: .leading)
+                    } completion: {
+                        isTabScrollInFlight = false
                     }
                 }
                 cardRow
@@ -35,9 +72,10 @@ struct RateLimitCardView: View {
             // Restore the last-viewed product as the leading card.
             .onAppear {
                 guard appState.quotaTabOrder.contains(appState.selectedQuotaTab) else { return }
-                proxy.scrollTo(appState.selectedQuotaTab, anchor: .leading)
+                proxy.scrollTo(Self.cardID(appState.selectedQuotaTab), anchor: .leading)
             }
             .onPreferenceChange(QuotaCardOffsetPreferenceKey.self) { offsets in
+                guard !isTabScrollInFlight else { return }
                 guard let leading = offsets.min(by: { abs($0.value) < abs($1.value) })?.key else {
                     return
                 }
@@ -57,12 +95,17 @@ struct RateLimitCardView: View {
     private var cardRow: some View {
         let providers = appState.quotaCardProviders
         if !providers.isEmpty {
+            let cardWidth = Self.width(forProviderCount: providers.count)
             ScrollView(.horizontal, showsIndicators: providers.count > 2) {
-                Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                Grid(alignment: .topLeading, horizontalSpacing: Self.cardGap, verticalSpacing: 0) {
                     GridRow {
                         ForEach(providers, id: \.self) { provider in
                             ProviderCard(snapshot: snapshot(for: provider))
-                                .frame(width: Self.cardWidth, alignment: .topLeading)
+                                .frame(width: cardWidth, alignment: .topLeading)
+                                // Explicit, namespaced scroll target: `scrollTo`
+                                // resolves by view id, and a bare `provider` here
+                                // collides with the identically-identified tab.
+                                .id(Self.cardID(provider))
                                 .background(
                                     GeometryReader { geometry in
                                         Color.clear.preference(
@@ -83,7 +126,6 @@ struct RateLimitCardView: View {
         appState.rateLimits.first(where: { $0.provider == provider })
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
-
 
     /// Status line for an enabled product whose card has no meters to draw.
     /// Only ever states what the data channel actually reported: the live

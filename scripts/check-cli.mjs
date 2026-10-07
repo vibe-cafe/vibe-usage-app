@@ -88,8 +88,13 @@ export function checkCLI(localSource) {
     } catch {
       throw new Error(`无法获取 ${source}。正式打包前必须先发布并验证 CLI（${specifier}）及其配额协议。`);
     }
-    assert.equal(packed.length, 1, 'Expected one CLI package');
-    const filename = packed[0].filename;
+    // `npm pack --json` returns an array of entries, or — for a single package
+    // on npm 12 — an object keyed by package name. Accept both: a local npm
+    // upgrade must not fail the packaging preflight for a reason that has
+    // nothing to do with the CLI contract.
+    const packedEntries = Array.isArray(packed) ? packed : Object.values(packed);
+    assert.equal(packedEntries.length, 1, 'Expected one CLI package');
+    const filename = packedEntries[0].filename;
     assert.ok(filename && !filename.includes('/') && !filename.includes('\\'));
     run('tar', ['-xzf', join(packRoot, filename), '-C', packRoot]);
     verifyPackage(join(packRoot, 'package'), specifier);

@@ -79,4 +79,39 @@ struct RateLimitCardViewTests {
         #expect(ordered.map(\.label) == ["5h", "7d", "MCP", "Sonnet", "额外"])
         #expect(ordered[1].window.windowDuration == TimeInterval(7 * 86_400))
     }
+
+    /// A lone enabled product fills the row. Its 240pt column leaves half the
+    /// popover empty, which the user reported reading as a layout error: they
+    /// turned the other products off, so nothing is being made room for. Two
+    /// cards already fill the row exactly, and widening beyond that would only
+    /// push a card off-screen.
+    @Test
+    func aLoneCardFillsTheRowWhileTwoOrMoreKeepTheirColumn() {
+        #expect(RateLimitCardView.width(forProviderCount: 1) == RateLimitCardView.loneCardWidth)
+        #expect(RateLimitCardView.width(forProviderCount: 2) == RateLimitCardView.cardWidth)
+        #expect(RateLimitCardView.width(forProviderCount: 5) == RateLimitCardView.cardWidth)
+        // The lone width is the popover's whole content box — 520 minus 2×16
+        // side padding minus the 8pt gap — so the card ends flush with the
+        // sections below it. Pinned literally because the arithmetic lives in a
+        // comment: a padding or card-width change that is not mirrored here
+        // would put the card back to a half-empty row.
+        #expect(RateLimitCardView.loneCardWidth == 488)
+    }
+
+    /// The card's scroll target must not collide with the tab strip's identity.
+    ///
+    /// Both used to carry the provider itself (`ForEach(..., id: \.self)` on
+    /// each side), so `scrollTo(provider)` could resolve to the tab — which sits
+    /// outside the horizontal scroller and is already on screen — and a click on
+    /// an enabled tab moved the card row nowhere. Pinned so the two identities
+    /// cannot silently converge again.
+    @Test
+    func cardScrollTargetsAreNamespacedAndUnique() {
+        let providers = ProviderRateLimit.Provider.allCases
+        #expect(Set(providers.map(RateLimitCardView.cardID)).count == providers.count)
+        for provider in providers {
+            #expect(RateLimitCardView.cardID(provider) != provider.rawValue)
+        }
+        #expect(RateLimitCardView.cardID(.codex) == "quota-card-codex")
+    }
 }
