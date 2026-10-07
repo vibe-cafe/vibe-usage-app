@@ -3,6 +3,21 @@ import Testing
 @testable import VibeUsage
 
 struct FormattersTests {
+    @Test(arguments: [
+        (1_234, "1,234"),
+        (45_200, "45.2K"),
+        (999_949, "999.9K"),
+        (999_950, "1.0M"),
+        (812_100_000, "812.1M"),
+        (999_949_999, "999.9M"),
+        (999_950_000, "1.0B"),
+        (1_725_100_000, "1.7B"),
+        (4_710_200_000, "4.7B"),
+    ])
+    func compactNumbersSwitchUnitBeforeReaching1000(n: Int, expected: String) {
+        #expect(Formatters.formatNumber(n) == expected)
+    }
+
     @Test
     func relativeTimeUsesTimelineDateInsteadOfWallClock() {
         let producedAt = Date(timeIntervalSince1970: 1_000)
