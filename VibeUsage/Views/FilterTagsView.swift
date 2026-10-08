@@ -34,33 +34,12 @@ struct FilterTagsView: View {
     private let dropdownWidth: CGFloat = 240
     private let dropdownMaxHeight: CGFloat = 260
 
+    /// Filter *values* stay the raw source ids, because that is what a bucket
+    /// carries; the row shows the product name the server supplied. Sorting by
+    /// the label keeps the list alphabetical to a reader, not to a machine.
     private var uniqueSources: [String] {
-        Array(Set(appState.buckets.map(\.source))).sorted()
-    }
-
-    /// Display names, not raw ids: variants of one model are a single option,
-    /// and `filters.models` stores these labels.
-    private var uniqueModels: [String] {
-        modelRawIDs.keys.sorted()
-    }
-
-    /// Display name → one raw id behind it, used to pick the family group.
-    ///
-    /// A label may merge several raw ids and the family rules judge the raw id,
-    /// so `preferredFamilyRepresentative` decides which one to keep — see its
-    /// comment for why the lexicographically smallest is not always right.
-    private var modelRawIDs: [String: String] {
-        var map: [String: String] = [:]
-        for raw in Set(appState.buckets.map(\.model)) {
-            let label = DisplayNames.model(raw)
-            map[label] = map[label].map { preferredFamilyRepresentative($0, raw) } ?? raw
-        }
-        return map
-    }
-
-    private var modelGroups: [ModelGroup] {
-        let rawIDs = modelRawIDs
-        return groupModelsByFamily(rawIDs.keys.sorted()) { rawIDs[$0] ?? $0 }
+        Array(Set(appState.buckets.map(\.source)))
+            .sorted { appState.toolName($0) < appState.toolName($1) }
     }
 
     private var uniqueProjects: [String] {
@@ -317,10 +296,9 @@ struct FilterTagsView: View {
             return max(uniqueProjects.count, 1)
         case .model:
             var count = 0
-            for group in modelGroups {
-                let familyKey = group.family?.key ?? "other"
+            for group in appState.modelFilterGroups {
                 count += 1
-                if expandedModelFamilies.contains(familyKey) {
+                if expandedModelFamilies.contains(group.key) {
                     count += group.models.count
                 }
             }
@@ -336,7 +314,11 @@ struct FilterTagsView: View {
                 toggle(value, in: &appState.filters.hostnames)
             }
         case .source:
-            optionFlow(values: uniqueSources, selected: appState.filters.sources, title: DisplayNames.tool) { value in
+            optionFlow(
+                values: uniqueSources,
+                selected: appState.filters.sources,
+                label: { appState.toolName($0) }
+            ) { value in
                 toggle(value, in: &appState.filters.sources)
             }
         case .model:
@@ -351,12 +333,12 @@ struct FilterTagsView: View {
     private func optionFlow(
         values: [String],
         selected: Set<String>,
-        title: @escaping (String) -> String = { $0 },
+        label: @escaping (String) -> String = { $0 },
         toggle: @escaping (String) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(values, id: \.self) { value in
-                optionRow(title: value.isEmpty ? "未知" : title(value), isSelected: selected.contains(value)) {
+                optionRow(title: value.isEmpty ? "未知" : label(value), isSelected: selected.contains(value)) {
                     toggle(value)
                 }
             }
@@ -365,9 +347,9 @@ struct FilterTagsView: View {
 
     private var modelOptions: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(modelGroups.enumerated()), id: \.offset) { _, group in
-                let familyKey = group.family?.key ?? "other"
-                let familyLabel = group.family?.label ?? "其他"
+            ForEach(appState.modelFilterGroups) { group in
+                let familyKey = group.key
+                let familyLabel = group.label
                 let familyModels = Set(group.models)
                 let selectedInFamily = familyModels.intersection(appState.filters.models)
                 let allSelected = selectedInFamily.count == familyModels.count && !familyModels.isEmpty
@@ -476,7 +458,7 @@ struct FilterTagsView: View {
         switch dimension {
         case .hostname: !uniqueHostnames.isEmpty
         case .source: !uniqueSources.isEmpty
-        case .model: !uniqueModels.isEmpty
+        case .model: !appState.modelFilterGroups.isEmpty
         case .project: !uniqueProjects.isEmpty
         }
     }

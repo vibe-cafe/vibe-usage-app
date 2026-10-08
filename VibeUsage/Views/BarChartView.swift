@@ -65,12 +65,7 @@ struct BarChartView: View {
         let cutoff = appState.timeRange.startCutoff
         return appState.buckets.filter { bucket in
             if let cutoff, let date = bucket.date, date < cutoff { return false }
-            let f = appState.filters
-            if !f.sources.isEmpty && !f.sources.contains(bucket.source) { return false }
-            if !f.models.isEmpty && !f.models.contains(DisplayNames.model(bucket.model)) { return false }
-            if !f.projects.isEmpty && !f.projects.contains(bucket.project) { return false }
-            if !f.hostnames.isEmpty && !f.hostnames.contains(bucket.hostname) { return false }
-            return true
+            return appState.matchesFilters(bucket)
         }
     }
 

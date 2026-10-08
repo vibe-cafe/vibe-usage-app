@@ -7,12 +7,7 @@ struct DistributionChartsView: View {
         let cutoff = appState.timeRange.startCutoff
         return appState.buckets.filter { bucket in
             if let cutoff, let date = bucket.date, date < cutoff { return false }
-            let f = appState.filters
-            if !f.sources.isEmpty && !f.sources.contains(bucket.source) { return false }
-            if !f.models.isEmpty && !f.models.contains(DisplayNames.model(bucket.model)) { return false }
-            if !f.projects.isEmpty && !f.projects.contains(bucket.project) { return false }
-            if !f.hostnames.isEmpty && !f.hostnames.contains(bucket.hostname) { return false }
-            return true
+            return appState.matchesFilters(bucket)
         }
     }
 
@@ -22,46 +17,42 @@ struct DistributionChartsView: View {
             DonutCardView(
                 title: "终端分布",
                 icon: "desktopcomputer",
-                slices: aggregate(data, by: \.hostname)
+                slices: aggregate(data) { $0.hostname }
             )
             DonutCardView(
                 title: "工具分布",
                 icon: "terminal",
-                slices: aggregate(data, by: \.source, label: DisplayNames.tool)
+                // Product name from the server, so the donut reads "Claude Code"
+                // instead of the raw source id.
+                slices: aggregate(data) { appState.toolName($0.source) }
             )
             DonutCardView(
                 title: "模型分布",
                 icon: "cpu",
-                slices: aggregate(data, by: \.model, label: DisplayNames.model)
+                // By display name: one model reported under several ids (router
+                // prefixes, effort markers, context sizes) is one row, which is
+                // the whole point of the server resolving the names.
+                slices: aggregate(data) { appState.modelName($0.model) }
             )
             DonutCardView(
                 title: "项目分布",
                 icon: "folder",
-                slices: aggregate(data, by: \.project)
+                slices: aggregate(data) { $0.project }
             )
         }
         .animation(.easeInOut(duration: 0.28), value: data.count)
     }
 
-    /// Groups by `label(raw)`, so raw ids sharing a display name (reasoning
-    /// effort or router-prefix variants of one model) merge into one slice.
-    private func aggregate(
-        _ buckets: [UsageBucket],
-        by keyPath: KeyPath<UsageBucket, String>,
-        label: (String) -> String = { $0 }
-    ) -> [SliceData] {
+    private func aggregate(_ buckets: [UsageBucket], key: (UsageBucket) -> String) -> [SliceData] {
         var map: [String: (tokens: Int, cost: Double)] = [:]
-        var rawTokens: [String: [String: Int]] = [:]
         for b in buckets {
-            let raw = b[keyPath: keyPath]
-            let name = label(raw)
-            let key = name.isEmpty ? "未知" : name
-            let existing = map[key] ?? (tokens: 0, cost: 0)
-            map[key] = (
+            let raw = key(b)
+            let value = raw.isEmpty ? "未知" : raw
+            let existing = map[value] ?? (tokens: 0, cost: 0)
+            map[value] = (
                 tokens: existing.tokens + b.computedTotal,
                 cost: existing.cost + (b.estimatedCost ?? 0)
             )
-            rawTokens[key, default: [:]][raw, default: 0] += b.computedTotal
         }
 
         let sorted = map.sorted { $0.value.tokens > $1.value.tokens }
@@ -85,8 +76,7 @@ struct DistributionChartsView: View {
                     label: entry.key,
                     tokens: entry.value.tokens,
                     cost: entry.value.cost,
-                    color: colors[i % colors.count],
-                    detail: mergedDetail(label: entry.key, raw: rawTokens[entry.key] ?? [:])
+                    color: colors[i % colors.count]
                 ))
             } else {
                 otherTokens += entry.value.tokens
@@ -100,14 +90,6 @@ struct DistributionChartsView: View {
 
         return slices
     }
-
-    /// Hover text listing the raw ids merged into one label.
-    private func mergedDetail(label: String, raw: [String: Int]) -> String? {
-        guard raw.count > 1 else { return nil }
-        let lines = raw.sorted { $0.value > $1.value }
-            .map { "\($0.key.isEmpty ? "未知" : $0.key)  \(Formatters.formatNumber($0.value))" }
-        return ([label] + lines).joined(separator: "\n")
-    }
 }
 
 // MARK: - Data
@@ -117,8 +99,6 @@ struct SliceData: Identifiable {
     let tokens: Int
     let cost: Double
     let color: Color
-    /// Hover text; defaults to the label.
-    var detail: String? = nil
 
     var id: String { label }
 }
@@ -193,7 +173,7 @@ private struct DonutCardView: View {
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                                     .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                                    .help(slice.detail ?? slice.label)
+                                    .help(slice.label)
                                 Spacer(minLength: 4)
                                 Text(valueText(slice))
                                     .font(.system(size: 11, design: .monospaced))

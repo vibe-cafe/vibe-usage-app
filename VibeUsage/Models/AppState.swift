@@ -106,6 +106,87 @@ final class AppState {
     var chartMode: ChartMode = .token
     var filters: FilterState = .init()
 
+    /// Display names and family rows the server sent with the current usage.
+    /// `nil` until the first successful fetch, or when an older server answers —
+    /// every lookup below then falls back to the raw id, which is the same
+    /// "cannot resolve" behaviour the app has always had.
+    private(set) var usageNames: UsageNames?
+
+    /// Product name for an upload source, or the source id as reported.
+    func toolName(_ source: String) -> String {
+        usageNames?.sources[source] ?? source
+    }
+
+    /// Official model name, or the raw id as reported. This is the single place
+    /// the app turns a reported model id into something a human reads; the
+    /// rules behind it live in the server, not here.
+    func modelName(_ model: String) -> String {
+        usageNames?.models[model] ?? model
+    }
+
+    /// Family rows to group the model filter by, in the server's order.
+    var modelFamilies: [UsageFamily] { usageNames?.families ?? [] }
+
+    /// The family a reported model id belongs to, or nil when the server could
+    /// not place it (it then shows under 其他).
+    func familyKey(forModel model: String) -> String? {
+        usageNames?.modelFamilies[model]
+    }
+
+    /// Display name → family key, resolved through the raw ids behind each name.
+    ///
+    /// `modelFamilies` is keyed by raw id because that is what a tool reports,
+    /// while the filter lists one option per display name (one name merges
+    /// several ids). Single pass over the buckets rather than a scan per name.
+    var familyKeyByDisplayName: [String: String] {
+        var map: [String: String] = [:]
+        for bucket in buckets where map[modelName(bucket.model)] == nil {
+            if let key = usageNames?.modelFamilies[bucket.model] {
+                map[modelName(bucket.model)] = key
+            }
+        }
+        return map
+    }
+
+    /// The model filter's options, grouped by the family the server placed each
+    /// display name in.
+    ///
+    /// Built entirely from the server's `families` / `modelFamilies`, in the
+    /// server's order, so the app carries no family table of its own — the
+    /// macOS and Windows apps used to keep two hand-synced copies of one.
+    var modelFilterGroups: [ModelFilterGroup] {
+        let familyByDisplayName = familyKeyByDisplayName
+        var members: [String: [String]] = [:]
+        var unplaced: [String] = []
+        for name in Set(buckets.map { modelName($0.model) }).sorted() {
+            if let key = familyByDisplayName[name] {
+                members[key, default: []].append(name)
+            } else {
+                unplaced.append(name)
+            }
+        }
+        var groups = modelFamilies.compactMap { family -> ModelFilterGroup? in
+            guard let names = members[family.key], !names.isEmpty else { return nil }
+            return ModelFilterGroup(key: family.key, label: family.label, models: names)
+        }
+        if !unplaced.isEmpty {
+            groups.append(ModelFilterGroup(key: "other", label: "其他", models: unplaced))
+        }
+        return groups
+    }
+
+    /// The one filter predicate. Every view that narrows its data by the filter
+    /// bar asks here, so a change to how a dimension matches — models now match
+    /// on the *display name*, because one name merges several reported ids —
+    /// cannot be applied in one view and forgotten in the next three.
+    func matchesFilters(_ bucket: UsageBucket) -> Bool {
+        if !filters.sources.isEmpty && !filters.sources.contains(bucket.source) { return false }
+        if !filters.models.isEmpty && !filters.models.contains(modelName(bucket.model)) { return false }
+        if !filters.projects.isEmpty && !filters.projects.contains(bucket.project) { return false }
+        if !filters.hostnames.isEmpty && !filters.hostnames.contains(bucket.hostname) { return false }
+        return true
+    }
+
     var currentQueryRange: UsageQueryRange {
         switch timeRange {
         case .today:
@@ -426,6 +507,7 @@ final class AppState {
                 buckets = response.buckets
                 sessions = response.sessions ?? []
                 hasAnyData = response.hasAnyData
+                usageNames = response.names
             }
         } catch {
             guard generation == usageFetchGeneration else { return }

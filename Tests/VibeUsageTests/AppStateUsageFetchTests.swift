@@ -51,7 +51,7 @@ struct AppStateUsageFetchTests {
 
         await stub.resolveRequest(
             at: 0,
-            with: UsageResponse(buckets: [], sessions: nil, hasAnyData: false)
+            with: UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil)
         )
         await launchRequest.value
     }
@@ -80,7 +80,7 @@ struct AppStateUsageFetchTests {
         let newestBucket = bucket(source: "newest")
         await stub.resolveRequest(
             at: 1,
-            with: UsageResponse(buckets: [newestBucket], sessions: nil, hasAnyData: true)
+            with: UsageResponse(buckets: [newestBucket], sessions: nil, hasAnyData: true, names: nil)
         )
         await newerRequest.value
 
@@ -90,7 +90,7 @@ struct AppStateUsageFetchTests {
         let staleBucket = bucket(source: "stale")
         await stub.resolveRequest(
             at: 0,
-            with: UsageResponse(buckets: [staleBucket], sessions: nil, hasAnyData: true)
+            with: UsageResponse(buckets: [staleBucket], sessions: nil, hasAnyData: true, names: nil)
         )
         await olderRequest.value
 
@@ -121,7 +121,7 @@ struct AppStateUsageFetchTests {
 
         await stub.resolveRequest(
             at: 0,
-            with: UsageResponse(buckets: [bucket(source: "stale")], sessions: nil, hasAnyData: true)
+            with: UsageResponse(buckets: [bucket(source: "stale")], sessions: nil, hasAnyData: true, names: nil)
         )
         await olderRequest.value
 
@@ -131,7 +131,7 @@ struct AppStateUsageFetchTests {
         let newestBucket = bucket(source: "newest")
         await stub.resolveRequest(
             at: 1,
-            with: UsageResponse(buckets: [newestBucket], sessions: nil, hasAnyData: true)
+            with: UsageResponse(buckets: [newestBucket], sessions: nil, hasAnyData: true, names: nil)
         )
         await newerRequest.value
 
