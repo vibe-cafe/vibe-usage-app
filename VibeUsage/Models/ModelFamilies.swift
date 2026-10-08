@@ -27,7 +27,36 @@ struct ModelGroup {
     let models: [String]
 }
 
-func groupModelsByFamily(_ models: [String]) -> [ModelGroup] {
+/// The family a raw model id belongs to, ignoring a provider prefix
+/// ("anthropic/claude-opus-4-20250514" is Claude). Display names drop those
+/// prefixes, so callers that hold only a display name judge its family from
+/// the raw id behind it — and a merged label can have several, so the choice
+/// of which one to judge matters (see `FilterTagsView.modelRawIDs`).
+func modelFamily(of rawID: String) -> ModelFamily? {
+    let lower = rawID.lowercased()
+    let base = lower.firstIndex(of: "/").map { String(lower[lower.index(after: $0)...]) } ?? lower
+    return MODEL_FAMILIES.first { $0.matches(base) }
+}
+
+/// Picks which raw id represents a display name when several raw ids merge into
+/// it and the family rules have to judge one of them.
+///
+/// The choice is not cosmetic: `k3` and `kimi-k3-256k` both render as
+/// "Kimi K3", but `k3` matches no family, so taking the lexicographically
+/// smallest alias dropped the merged row into 其他 even though that same model
+/// was listed under Kimi before the merge. Prefer a recognised family, then the
+/// smaller id so the pick stays deterministic.
+func preferredFamilyRepresentative(_ current: String, _ candidate: String) -> String {
+    let currentKnown = modelFamily(of: current) != nil
+    let candidateKnown = modelFamily(of: candidate) != nil
+    if currentKnown != candidateKnown { return candidateKnown ? candidate : current }
+    return candidate < current ? candidate : current
+}
+
+/// `familyID` maps an entry to the raw model id its family is judged by.
+/// Display names drop vendor prefixes ("Nano Banana", "Seed 2.0 Pro"), so
+/// callers grouping display names pass their raw ids here.
+func groupModelsByFamily(_ models: [String], familyID: (String) -> String = { $0 }) -> [ModelGroup] {
     var familyMap: [String: [String]] = [:]
     var others: [String] = []
 
@@ -36,16 +65,7 @@ func groupModelsByFamily(_ models: [String]) -> [ModelGroup] {
     }
 
     for model in models {
-        let lower = model.lowercased()
-        // Handle provider prefixes like "anthropic/claude-opus-4-20250514"
-        let base: String
-        if let slashIndex = lower.firstIndex(of: "/") {
-            base = String(lower[lower.index(after: slashIndex)...])
-        } else {
-            base = lower
-        }
-
-        if let family = MODEL_FAMILIES.first(where: { $0.matches(base) }) {
+        if let family = modelFamily(of: familyID(model)) {
             familyMap[family.key]?.append(model)
         } else {
             others.append(model)

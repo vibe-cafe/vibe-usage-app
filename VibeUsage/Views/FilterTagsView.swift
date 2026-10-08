@@ -38,8 +38,29 @@ struct FilterTagsView: View {
         Array(Set(appState.buckets.map(\.source))).sorted()
     }
 
+    /// Display names, not raw ids: variants of one model are a single option,
+    /// and `filters.models` stores these labels.
     private var uniqueModels: [String] {
-        Array(Set(appState.buckets.map(\.model))).sorted()
+        modelRawIDs.keys.sorted()
+    }
+
+    /// Display name → one raw id behind it, used to pick the family group.
+    ///
+    /// A label may merge several raw ids and the family rules judge the raw id,
+    /// so `preferredFamilyRepresentative` decides which one to keep — see its
+    /// comment for why the lexicographically smallest is not always right.
+    private var modelRawIDs: [String: String] {
+        var map: [String: String] = [:]
+        for raw in Set(appState.buckets.map(\.model)) {
+            let label = DisplayNames.model(raw)
+            map[label] = map[label].map { preferredFamilyRepresentative($0, raw) } ?? raw
+        }
+        return map
+    }
+
+    private var modelGroups: [ModelGroup] {
+        let rawIDs = modelRawIDs
+        return groupModelsByFamily(rawIDs.keys.sorted()) { rawIDs[$0] ?? $0 }
     }
 
     private var uniqueProjects: [String] {
@@ -296,7 +317,7 @@ struct FilterTagsView: View {
             return max(uniqueProjects.count, 1)
         case .model:
             var count = 0
-            for group in groupModelsByFamily(uniqueModels) {
+            for group in modelGroups {
                 let familyKey = group.family?.key ?? "other"
                 count += 1
                 if expandedModelFamilies.contains(familyKey) {
@@ -315,7 +336,7 @@ struct FilterTagsView: View {
                 toggle(value, in: &appState.filters.hostnames)
             }
         case .source:
-            optionFlow(values: uniqueSources, selected: appState.filters.sources) { value in
+            optionFlow(values: uniqueSources, selected: appState.filters.sources, title: DisplayNames.tool) { value in
                 toggle(value, in: &appState.filters.sources)
             }
         case .model:
@@ -327,10 +348,15 @@ struct FilterTagsView: View {
         }
     }
 
-    private func optionFlow(values: [String], selected: Set<String>, toggle: @escaping (String) -> Void) -> some View {
+    private func optionFlow(
+        values: [String],
+        selected: Set<String>,
+        title: @escaping (String) -> String = { $0 },
+        toggle: @escaping (String) -> Void
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(values, id: \.self) { value in
-                optionRow(title: value.isEmpty ? "未知" : value, isSelected: selected.contains(value)) {
+                optionRow(title: value.isEmpty ? "未知" : title(value), isSelected: selected.contains(value)) {
                     toggle(value)
                 }
             }
@@ -339,7 +365,7 @@ struct FilterTagsView: View {
 
     private var modelOptions: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(groupModelsByFamily(uniqueModels).enumerated()), id: \.offset) { _, group in
+            ForEach(Array(modelGroups.enumerated()), id: \.offset) { _, group in
                 let familyKey = group.family?.key ?? "other"
                 let familyLabel = group.family?.label ?? "其他"
                 let familyModels = Set(group.models)

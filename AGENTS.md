@@ -16,6 +16,8 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── AppState.swift         # @Observable central state (buckets, filters, timeRange, sync)
 │   │   ├── AppConfig.swift        # Version string, API URL, debug/release config
 │   │   ├── UsageBucket.swift      # Codable data model (source, model, project, hostname, tokens, cost)
+│   │   ├── DisplayNames.swift     # Raw tool/model id → official display name; unresolved ids stay raw
+│   │   ├── ModelCatalog.generated.swift  # models.dev snapshot (names + provider aliases); regenerate, never hand-edit
 │   │   └── Config.swift           # Shared ~/.vibe-usage config; app-owned fields + unknown CLI-field-preserving writes
 │   ├── Views/
 │   │   ├── PopoverView.swift      # Main dashboard container (520px wide popover)
@@ -52,6 +54,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 ├── scripts/
 │   ├── build-app.sh               # Build + sign + notarize pipeline; supports --universal / --arch
 │   ├── check-version.sh           # Guards AppConfig/Info.plist version sync + monotonic CFBundleVersion
+│   ├── generate-model-catalog.py  # Regenerates ModelCatalog.generated.swift from models.dev
 │   └── generate-appcast.sh        # Generate Sparkle appcast.xml
 └── dist/                          # Build output (gitignored)
     ├── Vibe Usage.app
@@ -70,6 +73,7 @@ swift build -c release                   # Release build
 ./scripts/build-app.sh --universal       # Build universal (arm64 + x86_64) .app
 ./scripts/build-app.sh --universal --notarize  # Release pipeline: universal + sign + notarize + DMG
 ./scripts/generate-appcast.sh            # Generate appcast.xml from dist/VibeUsage.zip
+python3 scripts/generate-model-catalog.py  # Refresh the model-name snapshot from models.dev
 ```
 
 ## Architecture Approval Gate
@@ -272,6 +276,13 @@ Token aggregation conventions (aligned with the web Vibe Usage page):
 - Menu-bar token line → `computedTotal`
 - `estimatedCost` already accounts for cache reads (server-side, at `cacheReadMtok` rate)
 
+Display names (`DisplayNames`):
+- Raw `source` / `model` ids stay the source of truth for API, uploads and tool/project/host filters; only the dashboard labels change.
+- Models resolve to one official name per underlying model, so reasoning-effort, router-prefix and context-size variants (`gemini-3.8-flash-high`, `kimi-code/k3-256k`) merge. The model filter and the model distribution chart group by this display name.
+- A suffix is stripped only when what remains is a known model (`qwen3-max` keeps its name). Ids the catalog and override tables cannot resolve are shown exactly as reported — never guessed.
+- Names come from `ModelCatalog.generated.swift`; local exceptions live in `DisplayNames.modelOverrides` / `modelAliases`.
+- Tool names (`DisplayNames.toolNames`) mirror the web registry `USAGE_SOURCES` in `vibe-cafe/apps/web/src/lib/usage-sources.ts` — the list the ingest endpoint validates. A newly registered source renders as its raw lowercase id until it is added here too; the CLI's own tools table is **not** the reference (it also lists tools the backend has not registered, and spells a few differently), so keep this table in step with the web registry.
+
 ## Styling Conventions
 
 | Element | Color |
@@ -308,7 +319,14 @@ Token aggregation conventions (aligned with the web Vibe Usage page):
 - `CFBundleVersion` is a plain integer
 - `CFBundleVersion` strictly increased vs. the previous `v*` git tag
 
-### 2. Commit and Push
+### 2. Refresh Model Names, Commit and Push
+
+```bash
+python3 scripts/generate-model-catalog.py
+git diff VibeUsage/Models/ModelCatalog.generated.swift   # review what models.dev changed
+```
+
+A stale snapshot is safe — models released after it are shown by their raw id — so a failed fetch never blocks a release; just ship the previous snapshot.
 
 ```bash
 git add -A && git commit -m "bump version to X.Y.Z" && git push
