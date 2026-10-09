@@ -635,8 +635,14 @@ final class AppState {
         if let target, let to = order.firstIndex(of: target) {
             destination = to
         } else {
+            // "Past the last tab" means the end of the dragged product's own
+            // group — the slot right after that group's last member. Searching
+            // for the *first* member of the other group instead would insert a
+            // grey product at the start of the grey group, the opposite of
+            // dropping it last.
             let isEnabled = isQuotaProviderSelected(provider)
-            destination = order.firstIndex { isQuotaProviderSelected($0) != isEnabled } ?? order.count
+            let lastSameGroup = order.lastIndex { isQuotaProviderSelected($0) == isEnabled }
+            destination = lastSameGroup.map { $0 + 1 } ?? order.count
         }
         order.insert(provider, at: destination)
         applyQuotaProductOrder(order)

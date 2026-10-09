@@ -502,3 +502,26 @@ extension QuotaProductTests {
         #expect(appState.quotaTabShowsWarning(.codex) == false)
     }
 }
+
+extension QuotaProductTests {
+    /// Dropping a grey (monitoring-off) tab past the last tab puts it at the end
+    /// of the grey group, not at its start.
+    @Test @MainActor
+    func draggingADisabledTabToTheEndKeepsItLastWithinItsGroup() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["codex", "claude-code"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.catalogProducts() }
+        )
+        appState.initializeQuotaProducts()
+
+        appState.moveQuotaProduct(.grok, before: nil)
+
+        #expect(Array(appState.quotaTabOrder.prefix(2)) == [.codex, .claudeCode])
+        #expect(appState.quotaTabOrder.last == .grok)
+    }
+}
