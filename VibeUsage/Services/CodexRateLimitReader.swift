@@ -57,6 +57,21 @@ enum CodexRateLimitReader {
 
     // MARK: - File walk
 
+    /// Tail chunk for the backwards rollout walk. A rollout grows for as long
+    /// as its Codex session lives; the biggest one on this machine is 469 MB,
+    /// so it is read in bounded pieces instead of whole. Peak memory is one
+    /// chunk plus the longest single line (tool output tops out around 9 MB in
+    /// real rollouts) rather than 2× the file. Internal so tests can place a
+    /// line boundary on a chunk edge.
+    static let scanChunkBytes = 256 * 1024
+
+    private static let newlineByte: UInt8 = 0x0A
+
+    /// Pre-filter for `JSONSerialization`: every line that can produce a
+    /// snapshot contains this key, and rejecting the rest by byte search keeps
+    /// a chunk of tool output from being parsed.
+    private static let rateLimitsKey = Data("\"rate_limits\"".utf8)
+
     private struct Snapshot {
         var fiveHour: RateLimitWindow?
         var sevenDay: RateLimitWindow?
@@ -139,38 +154,102 @@ enum CodexRateLimitReader {
     }
 
     /// Parse one rollout JSONL file, return the most recent `rate_limits` block
-    /// (if any). We read the whole file then iterate lines in reverse — Codex
-    /// writes monotonically and the latest event has the freshest data.
+    /// (if any). Codex appends monotonically, so the newest event sits at the
+    /// tail: we walk the file backwards in fixed chunks and stop at the first
+    /// match. That is the same line the whole-file read returned — newest line
+    /// first is preserved — but the file never has to exist in memory. Real
+    /// rollouts reach hundreds of megabytes (a long session keeps appending),
+    /// and `String(contentsOf:)` + `split` cost ~2× the file size *and* left
+    /// the pages resident in the malloc arena until macOS reclaimed them under
+    /// pressure, which is what inflated the app's footprint in Force Quit.
     private static func scan(file: URL, fallbackTimestamp: Date, now: Date) -> Snapshot? {
-        guard let raw = try? String(contentsOf: file, encoding: .utf8) else { return nil }
-        let lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
+        // POSIX rather than FileHandle: `read(upToCount:)` allocates per call
+        // and the process footprint tracks everything it read — a deep walk
+        // over a 469 MB rollout cost ~950 MB that way. One reusable buffer
+        // plus `pread` keeps the walk flat (~2 MB) at any file size.
+        let descriptor = file.withUnsafeFileSystemRepresentation { path -> Int32 in
+            guard let path else { return -1 }
+            return open(path, O_RDONLY | O_CLOEXEC)
+        }
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
 
-        for line in lines.reversed() {
-            guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let payload = obj["payload"] as? [String: Any],
-                  (payload["type"] as? String) == "token_count",
-                  let rateLimits = payload["rate_limits"] as? [String: Any]
-            else { continue }
+        let size = lseek(descriptor, 0, SEEK_END)
+        guard size > 0 else { return nil }
 
-            // The "primary" / "secondary" slots don't have fixed semantics — `window_minutes`
-            // identifies which subscription window each one represents. Plan tiers vary:
-            // free plans only carry the 7d window in primary; Plus/Pro return both.
-            var snapshot = Snapshot(
-                recordedAt: parseTimestamp(obj["timestamp"]) ?? fallbackTimestamp
-            )
-            snapshot.planLabel = formatPlanLabel(rateLimits["plan_type"] as? String)
-            for slot in ["primary", "secondary"] {
-                guard let win = parseWindow(rateLimits[slot], now: now) else { continue }
-                switch win.windowMinutes {
-                case 300:    snapshot.fiveHour = win.window
-                case 10080:  snapshot.sevenDay = win.window
-                default:     continue
-                }
+        var buffer = [UInt8](repeating: 0, count: scanChunkBytes)
+        var offset = size
+        // Head of the chunk just read: a line that continues into the older
+        // bytes still unread. The next iteration completes it.
+        var carry = Data()
+
+        while offset > 0 {
+            let count = Int(min(Int64(scanChunkBytes), offset))
+            offset -= Int64(count)
+            let read = buffer.withUnsafeMutableBytes { raw in
+                pread(descriptor, raw.baseAddress, count, off_t(offset))
             }
-            return snapshot
+            guard read == count else { return nil }
+
+            var window = Data(buffer[0..<read])
+            window.append(carry)
+
+            // Everything before the first newline is only completed by the
+            // older chunk, so it waits in `carry`; the rest is whole lines. A
+            // single line longer than the chunk keeps accumulating instead.
+            let searchable: Data
+            if offset > 0, let firstBreak = window.firstIndex(of: newlineByte) {
+                carry = window[window.startIndex..<firstBreak]
+                searchable = window[firstBreak...]
+            } else if offset > 0 {
+                carry = window
+                continue
+            } else {
+                carry = Data()
+                searchable = window
+            }
+
+            let lines = searchable.split(separator: newlineByte, omittingEmptySubsequences: true)
+            for line in lines.reversed() {
+                // Cheap reject first: only a line carrying the key can yield a
+                // snapshot, and most lines in a rollout are tool output.
+                guard line.range(of: rateLimitsKey) != nil,
+                      let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                      let payload = obj["payload"] as? [String: Any],
+                      (payload["type"] as? String) == "token_count",
+                      let rateLimits = payload["rate_limits"] as? [String: Any]
+                else { continue }
+
+                return snapshot(
+                    recordedAt: parseTimestamp(obj["timestamp"]) ?? fallbackTimestamp,
+                    rateLimits: rateLimits,
+                    now: now
+                )
+            }
         }
         return nil
+    }
+
+    /// Project one `rate_limits` block onto the windows the card renders.
+    private static func snapshot(
+        recordedAt: Date,
+        rateLimits: [String: Any],
+        now: Date
+    ) -> Snapshot {
+        // The "primary" / "secondary" slots don't have fixed semantics — `window_minutes`
+        // identifies which subscription window each one represents. Plan tiers vary:
+        // free plans only carry the 7d window in primary; Plus/Pro return both.
+        var snapshot = Snapshot(recordedAt: recordedAt)
+        snapshot.planLabel = formatPlanLabel(rateLimits["plan_type"] as? String)
+        for slot in ["primary", "secondary"] {
+            guard let win = parseWindow(rateLimits[slot], now: now) else { continue }
+            switch win.windowMinutes {
+            case 300:    snapshot.fiveHour = win.window
+            case 10080:  snapshot.sevenDay = win.window
+            default:     continue
+            }
+        }
+        return snapshot
     }
 
     private static func parseTimestamp(_ raw: Any?) -> Date? {
