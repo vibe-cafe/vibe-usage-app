@@ -63,18 +63,36 @@ enum RuntimeDetector {
     }
 
     /// Search common paths where node/bun might be installed
-    private static let searchPaths: [String] = {
+    private static let searchPaths: [String] = candidatePaths(
+        home: FileManager.default.homeDirectoryForCurrentUser.path,
+        environmentPath: ProcessInfo.processInfo.environment["PATH"] ?? ""
+    )
+
+    /// Directories probed for a JS runtime, in priority order.
+    ///
+    /// Split out of `searchPaths` so the candidate list itself is testable —
+    /// `searchPaths` is resolved once per process and probed against the
+    /// filesystem, so a test cannot assert on it directly.
+    static func candidatePaths(home: String, environmentPath: String) -> [String] {
         // Start with PATH from environment
-        var paths = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        var paths = environmentPath
             .split(separator: ":")
             .map(String.init)
 
         // Add common install locations that might not be in PATH
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
         paths.append(contentsOf: [
             "\(home)/.bun/bin",
             "\(home)/.volta/bin",
             "\(home)/.fnm/current/bin",
+            // The nodejs.org installer puts the runtime in ~/.local/node and
+            // links node/npm/npx into ~/.local/bin. Neither directory is on
+            // the PATH a Finder-launched GUI app inherits (launchd hands GUI
+            // apps /usr/bin:/bin:/usr/sbin:/sbin), so a menu-bar app that
+            // shells out to node misses a runtime the user can run in a
+            // terminal. This is also where Claude Code's native installer
+            // places its own node.
+            "\(home)/.local/bin",
+            "\(home)/.local/node/bin",
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "/opt/local/bin",
@@ -84,7 +102,7 @@ enum RuntimeDetector {
         paths.append(contentsOf: resolveNvmPaths(home: home))
 
         return paths
-    }()
+    }
 
     /// Resolve nvm node bin paths by reading ~/.nvm/alias/default or scanning versions directory.
     private static func resolveNvmPaths(home: String) -> [String] {
