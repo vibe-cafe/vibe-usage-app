@@ -546,6 +546,31 @@ struct RateLimitCoordinatorTests {
         #expect(appState.rateLimits.first { $0.provider == .claudeCode } == cached)
     }
 
+    @Test @MainActor
+    func claudeRefreshReadsNewerDiskDataAfterInitialCachePaint() async {
+        let (appState, defaults, suite) = selectedAppState([.claudeCode])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var cached = claudeSnapshot(utilization: 10, dataAsOf: Date(timeIntervalSince1970: 100))
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.limitsUnavailable },
+            loadClaudeCache: { cached }
+        )
+        await coordinator.refreshClaude()
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.fiveHour?.utilization == 10)
+
+        // Claude Code updated its own cache while the app stayed open.
+        cached = claudeSnapshot(utilization: 29, dataAsOf: Date(timeIntervalSince1970: 200))
+        await coordinator.refreshClaude()
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.fiveHour?.utilization == 29)
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.dataAsOf == cached.dataAsOf)
+
+        // An older fallback must never move the reading backwards.
+        cached = claudeSnapshot(utilization: 5, dataAsOf: Date(timeIntervalSince1970: 50))
+        await coordinator.refreshClaude()
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.fiveHour?.utilization == 29)
+    }
+
     /// A genuine endpoint failure with no usable fallback must remain visible
     /// with a retry affordance; reporting it as plain `.noData` would hide the
     /// failure behind an ordinary "nothing to show" card.
