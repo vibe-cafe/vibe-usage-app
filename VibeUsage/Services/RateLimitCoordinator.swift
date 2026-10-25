@@ -235,14 +235,13 @@ final class RateLimitCoordinator {
         #endif
 
         // Instant paint from disk, for the same reason Codex does it: the live
-        // reading costs a ~2.5s subprocess round trip, and an empty card for
-        // that long reads as "broken". Skipped once real data is on screen.
-        if currentSnapshot(.claudeCode)?.status != .ok,
-           let cached = await loadClaudeCache(),
+        // reading costs a ~2.5s subprocess round trip. Re-read on every refresh:
+        // Claude may update its disk cache even when our live probe fails.
+        // Only newer data may replace an already populated card.
+        if let cached = await loadClaudeCache(),
            !Task.isCancelled,
-           appState.claudeRateLimitEnabled,
-           currentSnapshot(.claudeCode)?.status != .ok {
-            upsert(cached)
+           appState.claudeRateLimitEnabled {
+            upsertIfNewer(cached)
         }
 
         do {
