@@ -31,6 +31,14 @@ struct RateLimitMeter: Equatable, Identifiable {
     var id: String
     var label: String
     var window: RateLimitWindow
+    /// Optional split of this meter's allowance (Cursor's own vs third-party
+    /// models). It explains the row and only appears in its tooltip.
+    var breakdown: [Part] = []
+
+    struct Part: Equatable {
+        var label: String
+        var utilization: Double
+    }
 }
 
 /// Provider-neutral display order shared by every CLI-backed quota card.
@@ -140,6 +148,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case zCode = "zcode"
         case grok = "grok"
         case cursor = "cursor"
+        case antigravity = "antigravity"
         // The OpenCode *Go* subscription, not the OpenCode CLI as a whole: the
         // quota endpoint only answers for Go accounts, so the card is named
         // after the plan users bought.
@@ -153,6 +162,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
             case .zCode: return "ZCode"
             case .grok: return "Grok"
             case .cursor: return "Cursor"
+            case .antigravity: return "Antigravity / AGY"
             case .opencodeGo: return "OpenCode Go"
             }
         }

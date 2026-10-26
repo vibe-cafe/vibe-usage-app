@@ -3,6 +3,38 @@ import Testing
 @testable import VibeUsage
 
 struct QuotaCLIBridgeTests {
+    @Test
+    func cursorAndAntigravityPreserveAllQuotaWindowsAndResets() throws {
+        for id in ["cursor", "antigravity"] {
+            let envelope = try QuotaCLIBridge.decode(payload.replacingOccurrences(of: "kimi-code", with: id))
+            let snapshot = try #require(QuotaCLIBridge.snapshots(from: envelope).first)
+            #expect(snapshot.provider.rawValue == id)
+            #expect(snapshot.status == .ok)
+            #expect(snapshot.meters.first?.window.utilization == 42.5)
+            #expect(snapshot.meters.first?.window.resetsAt != nil)
+            #expect(snapshot.provider.usesQuotaCLI)
+        }
+    }
+
+    @Test
+    func cursorMonthCarriesItsSplitAndOnDemandReadsLikeClaudeExtra() throws {
+        let envelope = try QuotaCLIBridge.decode("""
+        {"schemaVersion":1,"products":[{"id":"cursor","status":"ok","fetchedAt":"2026-10-23T00:00:00Z","source":"live",
+          "meters":[
+            {"id":"plan","label":"Month","utilization":48,"resetsAt":"2026-11-01T00:00:00Z","windowSeconds":2678400,
+             "breakdown":[{"id":"auto","label":"Cursor models","utilization":4},{"id":"api","label":"Third-party models","utilization":88}]},
+            {"id":"on-demand","label":"On-demand","utilization":25}]}]}
+        """)
+        let snapshot = try #require(QuotaCLIBridge.snapshots(from: envelope).first)
+        #expect(snapshot.meters.map(\.label) == ["Month", "额外"])
+        #expect(snapshot.meters[0].window.windowDuration == 2_678_400)
+        #expect(snapshot.meters[0].breakdown == [
+            RateLimitMeter.Part(label: "Cursor 模型", utilization: 4),
+            RateLimitMeter.Part(label: "第三方模型", utilization: 88),
+        ])
+        #expect(snapshot.meters[1].breakdown.isEmpty)
+    }
+
     private let payload = """
     {
       "schemaVersion": 1,

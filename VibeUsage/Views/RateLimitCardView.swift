@@ -172,21 +172,8 @@ private struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
-            if snapshot.status == .ok {
-                TimelineView(.periodic(from: .now, by: 60)) { context in
-                    VStack(alignment: .leading, spacing: 4) {
-                        if foldedMeterCount > 0 {
-                            meterDisclosure
-                        }
-                        if let note = footerNote(at: context.date) {
-                            Text(note)
-                                .font(.system(size: 9.5))
-                                .foregroundStyle(Color(white: 0.38))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                    }
-                }
+            if snapshot.status == .ok, foldedMeterCount > 0 {
+                meterDisclosure
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -263,6 +250,10 @@ private struct ProviderCard: View {
                 // The shared CLI has already attempted Kimi's standard OAuth
                 // refresh before this status reaches the app.
                 messageContent(text: "请重新登录 Kimi Code 后重试", action: "重试")
+            } else if snapshot.provider == .cursor {
+                messageContent(text: "请在 Cursor 中重新登录后重试", action: "重试")
+            } else if snapshot.provider == .antigravity {
+                messageContent(text: "请安装 agy 并登录后重试", action: "重试")
             } else if snapshot.provider == .opencodeGo {
                 // The key comes from OpenCode's own auth.json; only OpenCode
                 // can re-issue it, so point there rather than at the card.
@@ -276,8 +267,6 @@ private struct ProviderCard: View {
         case .noData:
             if isRefreshing {
                 messageText("正在读取订阅配额…")
-            } else if snapshot.provider == .cursor {
-                messageText(cursorPendingText)
             } else {
                 messageText(RateLimitCardView.emptyStateText(for: snapshot, isDetected: isProductDetected))
             }
@@ -288,12 +277,6 @@ private struct ProviderCard: View {
     /// separates "installed but nothing to show yet" from "not on this Mac".
     private var isProductDetected: Bool {
         appState.quotaProducts.first(where: { $0.provider == snapshot.provider })?.isDetected == true
-    }
-
-    private var cursorPendingText: String {
-        isProductDetected
-            ? "已识别 Cursor · 等待官方配额接口"
-            : "未检测到 Cursor · 等待官方配额接口"
     }
 
     /// Quiet single-line status text for the non-meter card states.
@@ -308,19 +291,24 @@ private struct ProviderCard: View {
     /// for a window the plan covers but has no current data for. The case
     /// matters for the tooltip overlay — only `.live` rows have a hover key.
     private enum RowItem {
-        case live(label: String, window: RateLimitWindow)
+        case live(label: String, window: RateLimitWindow, breakdown: [RateLimitMeter.Part] = [])
         case placeholder(label: String, message: String)
 
         var hoverLabel: String {
             switch self {
-            case let .live(label, _): return label
+            case let .live(label, _, _): return label
             case let .placeholder(label, _): return label
             }
         }
 
         var liveWindow: RateLimitWindow? {
-            if case let .live(_, window) = self { return window }
+            if case let .live(_, window, _) = self { return window }
             return nil
+        }
+
+        var breakdown: [RateLimitMeter.Part] {
+            if case let .live(_, _, breakdown) = self { return breakdown }
+            return []
         }
     }
 
@@ -330,7 +318,7 @@ private struct ProviderCard: View {
     private var allRows: [RowItem] {
         if !snapshot.meters.isEmpty {
             return QuotaMeterLayout.canonicalMeters(snapshot.meters).map {
-                .live(label: $0.label, window: $0.window)
+                .live(label: $0.label, window: $0.window, breakdown: $0.breakdown)
             }
         }
 
@@ -338,12 +326,13 @@ private struct ProviderCard: View {
         if let w = snapshot.fiveHour {
             out.append(.live(label: "5h", window: w))
         } else if expectsFiveHourWindow {
-            // Two different truths behind a missing 5h window: the live
-            // endpoint asserts the limit is switched off provider-side, while
-            // a JSONL snapshot can only mean "no event carried it recently".
+            // The live endpoint asserting the limit is off, or a Pro plan
+            // (OpenAI keeps 5h off for Pro since 2026-07-12), reads as 不限额;
+            // otherwise a JSONL snapshot only means no recent event carried it.
+            let unlimited = snapshot.fiveHourNotEnforced || isProPlan
             out.append(.placeholder(
                 label: "5h",
-                message: snapshot.fiveHourNotEnforced ? "官方当前未启用" : "近 5 小时无活动"
+                message: unlimited ? "不限额" : "近 5 小时无活动"
             ))
         }
         if let w = snapshot.sevenDay { out.append(.live(label: "7d", window: w)) }
@@ -373,6 +362,11 @@ private struct ProviderCard: View {
     /// emits both `primary` and `secondary` windows in every `token_count`
     /// payload. Free-tier and Claude payloads don't carry a 5h window, so
     /// reserving the slot would just confuse users on those plans.
+    private var isProPlan: Bool {
+        let plan = snapshot.planLabel?.lowercased()
+        return plan == "pro" || plan == "prolite"
+    }
+
     private var expectsFiveHourWindow: Bool {
         guard snapshot.provider == .codex,
               let plan = snapshot.planLabel?.lowercased() else { return false }
@@ -405,6 +399,7 @@ private struct ProviderCard: View {
                             tokenColor: ProgressBar.color(for: win.utilization),
                             elapsedPercentText: win.elapsedPercentText,
                             remainingText: win.remainingText,
+                            breakdown: row.breakdown,
                             anchor: anchor
                         )
                     }
@@ -421,7 +416,7 @@ private struct ProviderCard: View {
     @ViewBuilder
     private func rowView(_ row: RowItem) -> some View {
         switch row {
-        case let .live(label, window):
+        case let .live(label, window, _):
             QuotaRow(label: label, window: window) { hovering in
                 hoveredLabel = hovering ? label : (hoveredLabel == label ? nil : hoveredLabel)
             }
@@ -450,23 +445,6 @@ private struct ProviderCard: View {
 
     private var isRefreshing: Bool {
         appState.isRateLimitRefreshing(snapshot.provider)
-    }
-
-    /// Data older than this gets a 「数据截至」 note. Claude captures age
-    /// whenever Claude Code is idle and JSONL fallbacks age with Codex — both
-    /// are normal, so the threshold is generous enough not to nag about a
-    /// snapshot from a coffee break, while a live fetch (dataAsOf ≈ now)
-    /// never shows the note.
-    private static let staleNoteThreshold: TimeInterval = 5 * 60
-
-    /// One quiet tertiary line under the quota rows for stale-data context.
-    /// Folded meter rows get their own clickable line (`meterDisclosure`) so
-    /// this note never doubles as a non-interactive count.
-    /// Reset credits live beside the provider title so they never add a row.
-    private func footerNote(at now: Date) -> String? {
-        guard let asOf = snapshot.dataAsOf,
-              now.timeIntervalSince(asOf) > Self.staleNoteThreshold else { return nil }
-        return "数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))"
     }
 
     /// Expands/collapses the meters that did not fit in the compact card.
@@ -640,6 +618,7 @@ struct QuotaTooltipPayload {
     let tokenColor: Color
     let elapsedPercentText: String?
     let remainingText: String?
+    var breakdown: [RateLimitMeter.Part] = []
     /// The hovered row's rect, resolved by the layer that draws the tooltip.
     let anchor: Anchor<CGRect>
 }
@@ -753,7 +732,8 @@ struct QuotaTooltipOverlay: View {
                 tokenPercentText: payload.tokenPercentText,
                 tokenColor: payload.tokenColor,
                 elapsedPercentText: payload.elapsedPercentText,
-                remainingText: payload.remainingText
+                remainingText: payload.remainingText,
+                breakdown: payload.breakdown
             )
             .fixedSize()
         }
@@ -771,6 +751,7 @@ private struct TooltipView: View {
     let tokenColor: Color
     let elapsedPercentText: String?
     let remainingText: String?
+    let breakdown: [RateLimitMeter.Part]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -811,6 +792,17 @@ private struct TooltipView: View {
                     label: "时间",
                     value: "未知",
                     valueColor: Color(white: 0.5),
+                    valueWeight: .regular
+                )
+            }
+
+            ForEach(Array(breakdown.enumerated()), id: \.offset) { _, part in
+                let window = RateLimitWindow(utilization: part.utilization)
+                row(
+                    dotColor: Color(white: 0.3),
+                    label: part.label,
+                    value: window.percentText,
+                    valueColor: Color(white: 0.82),
                     valueWeight: .regular
                 )
             }
@@ -914,6 +906,7 @@ struct ProviderIcon: View {
         case .zCode:      resource = "zcode-icon"
         case .grok:       resource = "grok-icon"
         case .cursor:     resource = "cursor-icon"
+        case .antigravity: return nil
         // No artwork shipped yet: the symbol fallback below renders until an
         // `opencode-icon` asset joins the bundle.
         case .opencodeGo:   resource = "opencode-icon"
@@ -968,6 +961,7 @@ private extension ProviderRateLimit.Provider {
         case .zCode: return "z.square"
         case .grok: return "bolt.horizontal.circle"
         case .cursor: return "cursorarrow.rays"
+        case .antigravity: return "sparkles"
         case .opencodeGo: return "chevron.left.forwardslash.chevron.right"
         }
     }

@@ -3,6 +3,23 @@ import Testing
 @testable import VibeUsage
 
 struct RateLimitCoordinatorTests {
+    @Test @MainActor
+    func cursorAndAntigravityDoNotReviveUnscopedOldAccountDataAfterFailure() async {
+        for provider in [ProviderRateLimit.Provider.cursor, .antigravity] {
+            let (appState, defaults, suite) = selectedAppState([provider])
+            defer { defaults.removePersistentDomain(forName: suite) }
+            appState.rateLimits = [ProviderRateLimit(provider: provider,
+                meters: [RateLimitMeter(id: "old-account", label: "7d", window: RateLimitWindow(utilization: 80))],
+                status: .ok, fetchedAt: Date())]
+            let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in
+                [ProviderRateLimit(provider: provider, status: .retryableError, fetchedAt: Date())]
+            })
+            await coordinator.refreshCLIProviders([provider])
+            #expect(appState.rateLimits.first(where: { $0.provider == provider })?.status == .retryableError)
+            #expect(appState.rateLimits.first(where: { $0.provider == provider })?.meters.isEmpty == true)
+        }
+    }
+
     private final class MemoryZCodeKeyStore: ZCodeAPIKeyStoring {
         var values: [ZCodeQuotaRegion: String] = [:]
         var loadCount = 0
@@ -287,8 +304,8 @@ struct RateLimitCoordinatorTests {
     }
 
     @Test @MainActor
-    func selectedGrokUsesCLIWhileCursorNeverStartsIt() async {
-        let (appState, defaults, suite) = selectedAppState([.grok, .cursor])
+    func selectedGrokCursorAndAntigravityUseTheSharedCLI() async {
+        let (appState, defaults, suite) = selectedAppState([.grok, .cursor, .antigravity])
         defer { defaults.removePersistentDomain(forName: suite) }
         var calls: [[ProviderRateLimit.Provider]] = []
         let grok = ProviderRateLimit(
@@ -312,11 +329,12 @@ struct RateLimitCoordinatorTests {
             }
         )
 
-        await coordinator.refreshCLIProviders([.grok, .cursor])
+        await coordinator.refreshCLIProviders([.grok, .cursor, .antigravity])
 
-        #expect(calls == [[.grok]])
+        #expect(calls == [[.grok, .cursor, .antigravity]])
         #expect(appState.rateLimits.first(where: { $0.provider == .grok }) == grok)
-        #expect(appState.rateLimits.allSatisfy { $0.provider != .cursor })
+        #expect(appState.rateLimits.first(where: { $0.provider == .cursor })?.status == .retryableError)
+        #expect(appState.rateLimits.first(where: { $0.provider == .antigravity })?.status == .retryableError)
     }
 
     @Test @MainActor

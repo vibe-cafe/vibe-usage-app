@@ -68,8 +68,9 @@ enum QuotaProductRegistry {
         (.kimiCode, .ready),
         (.zCode, .ready),
         (.grok, .ready),
-        (.cursor, .pendingProtocol),
+        (.cursor, .ready),
         (.opencodeGo, .ready),
+        (.antigravity, .ready),
     ]
 
     static func discover(
@@ -126,6 +127,10 @@ enum QuotaProductRegistry {
             relativePaths = [".cursor"]
             appNames = ["Cursor.app"]
             executableNames = ["cursor"]
+        case .antigravity:
+            relativePaths = [".gemini/antigravity-cli", ".gemini/antigravity"]
+            appNames = ["Antigravity.app"]
+            executableNames = ["agy"]
         case .opencodeGo:
             // The CLI's own data home; `auth.json` inside it holds the Go key.
             // Detection stays a plain path check — entitlement is only known

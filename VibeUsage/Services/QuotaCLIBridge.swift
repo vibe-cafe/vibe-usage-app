@@ -18,6 +18,7 @@ enum QuotaCLIBridge {
         var dataAsOf: Date?
         var source: String
         var message: String?
+        var emptyReason: String?
     }
 
     struct Meter: Decodable, Equatable {
@@ -26,6 +27,13 @@ enum QuotaCLIBridge {
         var utilization: Double
         var resetsAt: Date?
         var windowSeconds: Double?
+        var breakdown: [Part]?
+
+        struct Part: Decodable, Equatable {
+            var id: String
+            var label: String
+            var utilization: Double
+        }
     }
 
     enum ProtocolError: LocalizedError {
@@ -127,31 +135,49 @@ enum QuotaCLIBridge {
                 meters: product.meters.map { meter in
                     RateLimitMeter(
                         id: meter.id,
-                        label: meter.label,
+                        label: displayLabel(meterID: meter.id, label: meter.label, provider: provider),
                         window: RateLimitWindow(
                             utilization: meter.utilization,
                             resetsAt: meter.resetsAt,
                             windowDuration: meter.windowSeconds
-                        )
+                        ),
+                        breakdown: (meter.breakdown ?? []).map {
+                            RateLimitMeter.Part(
+                                label: displayLabel(meterID: $0.id, label: $0.label, provider: provider),
+                                utilization: $0.utilization
+                            )
+                        }
                     )
                 },
                 planLabel: product.planLabel,
                 status: status,
                 fetchedAt: product.fetchedAt,
-                dataAsOf: product.dataAsOf
+                dataAsOf: product.dataAsOf,
+                emptyReason: product.emptyReason == "noWindow" ? .noWindow : nil
             )
+        }
+    }
+
+    /// The CLI speaks English labels; the cards are Chinese. Only ids this app
+    /// knows are renamed, so a new CLI meter still renders as reported.
+    static func displayLabel(meterID: String, label: String, provider: ProviderRateLimit.Provider) -> String {
+        guard provider == .cursor else { return label }
+        switch meterID {
+        // Same row name as Claude's pay-as-you-go spend.
+        case "on-demand": return "额外"
+        case "auto": return "Cursor 模型"
+        case "api": return "第三方模型"
+        default: return label
         }
     }
 }
 
 extension ProviderRateLimit.Provider {
     /// Providers implemented by the shared, schema-versioned CLI boundary.
-    /// Cursor deliberately stays outside until it has an official stable
-    /// quota protocol; selecting it must never start a subprocess or request.
     var usesQuotaCLI: Bool {
         switch self {
-        case .kimiCode, .zCode, .grok: return true
-        case .codex, .claudeCode, .cursor, .opencodeGo: return false
+        case .kimiCode, .zCode, .grok, .cursor, .antigravity: return true
+        case .codex, .claudeCode, .opencodeGo: return false
         }
     }
 }

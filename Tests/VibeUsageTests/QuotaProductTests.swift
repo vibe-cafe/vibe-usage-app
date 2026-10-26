@@ -30,8 +30,7 @@ struct QuotaProductTests {
 
     /// A fresh install selects every locally detected product that has a
     /// working adapter — there is no display cap any more, so a machine with
-    /// four of them gets four cards. Cursor stays out: it has no stable quota
-    /// protocol yet.
+    /// four of them gets four cards, including Cursor and Antigravity.
     @Test
     func firstLaunchSelectsEveryDetectedReadyProduct() {
         let (defaults, suite) = defaults()
@@ -39,10 +38,10 @@ struct QuotaProductTests {
 
         let selection = QuotaSelectionPreferences.resolve(
             defaults: defaults,
-            products: products(detected: [.codex, .claudeCode, .kimiCode, .grok, .cursor])
+            products: products(detected: [.codex, .claudeCode, .kimiCode, .grok, .cursor, .antigravity])
         )
 
-        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok])
+        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok, .cursor, .antigravity])
         #expect(defaults.bool(forKey: QuotaSelectionPreferences.initializedKey))
     }
 
@@ -185,7 +184,7 @@ struct QuotaProductTests {
         #expect(byProvider[.kimiCode]?.isSelectable == true)
         #expect(byProvider[.grok]?.isSelectable == true)
         #expect(byProvider[.opencodeGo]?.isSelectable == true)
-        #expect(byProvider[.cursor]?.isSelectable == false)
+        #expect(byProvider[.cursor]?.isSelectable == true)
     }
 
     /// OpenCode Go detection is the CLI's *data* home (where `auth.json` holds
@@ -212,8 +211,10 @@ struct QuotaProductTests {
     }
 
     @Test @MainActor
-    func detectedCursorCanBeChosenManuallyButIsNotAutoSelected() async {
+    func detectedCursorCanBeChosenManuallyWithExistingEmptySelection() async {
         let (defaults, suite) = defaults()
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set([], forKey: QuotaSelectionPreferences.selectedIDsKey)
         defer { defaults.removePersistentDomain(forName: suite) }
         let appState = AppState(
             quotaDefaults: defaults,
@@ -225,9 +226,10 @@ struct QuotaProductTests {
         #expect(appState.selectedQuotaProviders.isEmpty)
         #expect(appState.canSelectQuotaProvider(.cursor))
 
-        await appState.setQuotaProductSelected(.cursor, selected: true)
-        #expect(appState.selectedQuotaProviders == [.cursor])
-        #expect(appState.rateLimits.first(where: { $0.provider == .cursor })?.status == .noData)
+        let selected = QuotaSelectionPreferences.updating(
+            appState.selectedQuotaProviders, provider: .cursor, selected: true
+        )
+        #expect(selected == [.cursor])
     }
 
     @Test @MainActor
@@ -358,7 +360,7 @@ extension QuotaProductTests {
 
         let order = appState.quotaTabOrder
         #expect(Array(order.prefix(2)) == [.grok, .codex])
-        #expect(Set(order.dropFirst(2)) == Set([.opencodeGo, .cursor, .claudeCode, .kimiCode, .zCode]))
+        #expect(Set(order.dropFirst(2)) == Set([.opencodeGo, .cursor, .claudeCode, .kimiCode, .zCode, .antigravity]))
         #expect(appState.selectedQuotaTab == .grok)
     }
 
