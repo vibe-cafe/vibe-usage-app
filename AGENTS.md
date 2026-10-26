@@ -394,7 +394,7 @@ gh release upload vX.Y.Z dist/<missing-file> --clobber
 
 ## Code Signing
 
-All three release credentials (Sparkle Ed25519 private key, Developer ID certificate, notarization profile) live on Yin Ming's release Mac only. On any other machine `generate_keys -p` reports "No existing signing key found" — that machine can develop and push to main, but must **not** attempt a release or generate a new key; coordinate with Yin Ming instead.
+Multiple authorized Macs can retain release capability at the same time; provisioning a second Mac does not disable the first. Readiness depends on the three credentials below, not the machine owner's name. Verify them on the actual release machine before each release. A missing or mismatched credential blocks production release on that machine; coordinate provisioning with the credential holder instead of generating a replacement Sparkle key. See `docs/RELEASING.md` for adding a release Mac while preserving the existing signing identity (clarified 2026-10-26 after a support investigation).
 
 - **Identity**: `Developer ID Application: Yin Ming (D33463FWDZ)`
 - **Notarization profile**: `VibeUsage` (stored in Keychain via `notarytool store-credentials`)
