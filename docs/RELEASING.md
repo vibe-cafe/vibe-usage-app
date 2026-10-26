@@ -2,6 +2,11 @@
 
 ## Release-machine credentials
 
+Multiple authorized Macs may hold the same signing identity and Sparkle key.
+Adding a release Mac does not revoke or disable the original Mac; each machine
+must independently pass the checks below. A historical report that credentials
+exist only on one Mac is an inventory snapshot, not a one-device restriction.
+
 Each Mac used for a production release must have all three of these items:
 
 1. A valid `Developer ID Application: Yin Ming (D33463FWDZ)` identity, including its private key.
@@ -73,7 +78,24 @@ available, omit `--notarize` to create an ad-hoc signed
 `dist/VibeUsage-Test.zip`; testers must use macOS Control-click → Open. The
 signed/notarized path remains the preferred wider-distribution artifact.
 
-## Moving releases to another Mac
+## Adding another release Mac
+
+Keep the original machine configured. Obtain the existing Developer ID
+certificate **and its private key** from the authorized credential holder
+(for example, a password-protected PKCS#12 export), import them into the new
+Mac's Keychain, and configure a working `VibeUsage` notarization profile there.
+Then import and verify the existing Sparkle key as described below. A public
+certificate alone cannot sign an app. No credential transfer or key rotation
+is implied by a request to document these steps.
+
+Changing to a different Apple Developer signing identity is a separate change:
+update the build configuration and validate the installed-app upgrade path.
+Sparkle's regular-app key rotation supports changing the Apple signing
+certificate or the EdDSA key in an update, but not both at once. Merely adding
+a release machine needs neither rotation nor a new signing identity.
+
+References: [Apple signing-identity export](https://developer.apple.com/documentation/xcode/sharing-your-teams-signing-certificates)
+and [Sparkle key transfer and rotation](https://sparkle-project.org/documentation/).
 
 The Sparkle key was rotated for `v0.5.4`. Every later release must use the
 private key matching the current `SUPublicEDKey` in `VibeUsage/Info.plist`.
