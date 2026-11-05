@@ -122,10 +122,14 @@ final class RateLimitCoordinator {
         TestDiagnosticLog.recordQuotaRefreshStarted([.codex])
         #endif
 
-        // Paint the live cache immediately, then check for a newer local
-        // event before waiting on the network. Otherwise a slow request that
-        // is cancelled on panel close can keep an old percentage on screen
-        // forever without ever reaching the session fallback.
+        // Instant paint: if nothing usable is on screen yet, surface the last
+        // *live* snapshot (single small file, negligible read) so the card
+        // doesn't sit empty for the ~1s the network round-trip takes. That
+        // cache beats the session JSONL as a paint source on both axes: it is
+        // at most as old as the previous successful refresh (the JSONL only
+        // updates while Codex is running) and it never walks the sessions
+        // tree (which can be hundreds of MB). Expired windows are filtered on
+        // load; the live result replaces the paint right after.
         if currentSnapshot(.codex)?.status != .ok,
            let cached = await loadCodexCache(),
            !Task.isCancelled,
@@ -133,10 +137,6 @@ final class RateLimitCoordinator {
            currentSnapshot(.codex)?.status != .ok {
             upsert(cached)
         }
-
-        let local = await readCodexFallback()
-        guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
-        upsertIfNewer(local)
 
         do {
             let live = try await fetchCodexLive()
