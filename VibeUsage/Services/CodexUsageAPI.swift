@@ -275,7 +275,7 @@ enum CodexUsageAPI {
             provider: .codex,
             fiveHour: fiveHour,
             sevenDay: sevenDay,
-            planLabel: formatPlanLabel(obj["plan_type"] as? String),
+            planLabel: CodexRateLimitReader.formatPlanLabel(obj["plan_type"] as? String),
             status: (fiveHour == nil && sevenDay == nil) ? .noData : .ok,
             fetchedAt: now,
             dataAsOf: now,
@@ -323,12 +323,6 @@ enum CodexUsageAPI {
             ),
             seconds: seconds
         )
-    }
-
-    /// Same customer-facing capitalization as `CodexRateLimitReader`.
-    private static func formatPlanLabel(_ raw: String?) -> String? {
-        guard let raw, !raw.isEmpty else { return nil }
-        return raw.prefix(1).uppercased() + raw.dropFirst()
     }
 
     // MARK: - Snapshot cache (~/.vibe-usage/codex-rate-limits.json)
@@ -482,7 +476,7 @@ enum CodexUsageAPI {
             provider: .codex,
             fiveHour: fiveHour,
             sevenDay: sevenDay,
-            planLabel: cached.planLabel,
+            planLabel: CodexRateLimitReader.formatPlanLabel(cached.planLabel),
             status: .ok,
             fetchedAt: now,
             dataAsOf: cached.fetchedAt,

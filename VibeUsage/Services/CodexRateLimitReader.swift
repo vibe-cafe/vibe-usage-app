@@ -261,10 +261,11 @@ enum CodexRateLimitReader {
         return formatter.date(from: raw)
     }
 
-    /// Codex emits plan_type lowercase ("free", "plus", "pro", "prolite", "business").
-    /// Render the customer-facing capitalized form.
-    private static func formatPlanLabel(_ raw: String?) -> String? {
+    /// Shared by live, cached, and session reads so internal plan ids never
+    /// become different badges depending on which source answered first.
+    static func formatPlanLabel(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
+        if raw.lowercased() == "self_serve_business_prolite" { return "Business ProLite" }
         return raw.prefix(1).uppercased() + raw.dropFirst()
     }
 

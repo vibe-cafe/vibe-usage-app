@@ -4,6 +4,20 @@ import Testing
 
 struct CodexRateLimitReaderTests {
     @Test
+    func businessProLitePlanIsReadableFromSessionFallback() throws {
+        let fixture = try SessionFixture()
+        defer { fixture.remove() }
+        let line = try fixture.eventLine(eventTimestamp: "2026-07-10T03:45:00Z", primaryUsed: 12)
+            .replacingOccurrences(of: "\"prolite\"", with: "\"self_serve_business_prolite\"")
+        let now = try #require(parseFixtureDate("2026-07-10T04:00:00Z"))
+        try fixture.writeRawRollout(named: "rollout-business.jsonl", lines: [line], modifiedAt: now)
+
+        let snapshot = CodexRateLimitReader.read(sessionsDir: fixture.sessionsDir, now: now)
+        #expect(snapshot.planLabel == "Business ProLite")
+        #expect(snapshot.fiveHour?.utilization == 12)
+    }
+
+    @Test
     func choosesLatestEventAcrossOverlappingMainAndGuardianRollouts() throws {
         let fixture = try SessionFixture()
         defer { fixture.remove() }
