@@ -165,6 +165,34 @@ struct RateLimitCoordinatorTests {
         #expect(!appState.isCodexRateLimitRefreshing)
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func latestCodexSessionPaintsBeforeSlowLiveRequestAndSurvivesPanelClose(alreadyPopulated: Bool) async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cached = snapshot(utilization: 0, dataAsOf: Date(timeIntervalSince1970: 100))
+        let local = snapshot(utilization: 2, dataAsOf: Date(timeIntervalSince1970: 200))
+        if alreadyPopulated { appState.rateLimits = [cached] }
+        var requestStarted = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                requestStarted = true
+                try await Task.sleep(for: .seconds(30))
+                return self.snapshot(utilization: 99, dataAsOf: Date(timeIntervalSince1970: 300))
+            },
+            loadCodexCache: { cached },
+            readCodexFallback: { local }
+        )
+        let refresh = Task { @MainActor in await coordinator.refreshCodex() }
+        while !requestStarted { await Task.yield() }
+
+        #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == local)
+        coordinator.panelVisibilityChanged(visible: false)
+        await refresh.value
+        #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == local)
+        #expect(!appState.isCodexRateLimitRefreshing)
+    }
+
     @Test @MainActor
     func closingPanelCancelsCodexRefreshWithoutPublishingLateData() async {
         let appState = AppState()
