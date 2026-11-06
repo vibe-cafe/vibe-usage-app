@@ -121,6 +121,41 @@ struct ClaudeUsageCacheTests {
         #expect(snapshot.fiveHour?.windowDuration == nil)
     }
 
+    /// Verified Ultra accounts have no 5h window, so Claude Code caches
+    /// `five_hour: null`. The weekly window must still paint the card.
+    @Test
+    func configCacheWithoutAFiveHourWindowKeepsTheWeeklyWindow() throws {
+        var file = configFile(fetchedAt: now.addingTimeInterval(-60))
+        var cached = try #require(file["cachedUsageUtilization"] as? [String: Any])
+        var utilization = try #require(cached["utilization"] as? [String: Any])
+        utilization["five_hour"] = NSNull()
+        cached["utilization"] = utilization
+        file["cachedUsageUtilization"] = cached
+        let url = try write(file)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let snapshot = try #require(ClaudeUsageCache.configSnapshot(from: url, now: now))
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.fiveHour == nil)
+        #expect(snapshot.sevenDay?.utilization == 10)
+    }
+
+    @Test
+    func desktopHistoryWithANullFiveHourValueKeepsTheWeeklyWindow() throws {
+        let usage: [String: Any] = ["fh": NSNull(), "sd": 23]
+        let sample: [String: Any] = [
+            "t": now.addingTimeInterval(-60).timeIntervalSince1970 * 1000,
+            "org": "org-1",
+            "u": usage,
+        ]
+        let url = try write(["version": 2, "samples": [sample]])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let snapshot = try #require(ClaudeUsageCache.desktopHistorySnapshot(from: url, now: now))
+        #expect(snapshot.fiveHour == nil)
+        #expect(snapshot.sevenDay?.utilization == 23)
+    }
+
     /// Without a reset timestamp, staleness can only be bounded by window
     /// length: a 5h percentage sampled over 5 hours ago may belong to a window
     /// that has since rolled over.

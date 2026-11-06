@@ -45,6 +45,65 @@ struct ClaudeUsageProbeTests {
         #expect(object.count == 1)
     }
 
+    /// Issue #57: without `skip_behaviors`, Claude Code scans the last seven
+    /// days of local transcripts before it answers `get_usage`. On heavy
+    /// accounts that scan alone outlasted the per-candidate budget, so every
+    /// probe timed out and the card stayed on the cache without a plan badge.
+    @Test
+    func usageRequestSkipsTheTranscriptScan() throws {
+        let request = ClaudeUsageProbe.usageRequest
+        #expect(Set(request.keys) == ["subtype", "skip_behaviors"])
+        #expect(request["subtype"] as? String == "get_usage")
+        #expect(request["skip_behaviors"] as? Bool == true)
+
+        // Claude Code rejects a non-boolean value, so it must serialize as a
+        // JSON `true`, not `1`.
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        #expect(String(decoding: data, as: UTF8.self) == #"{"skip_behaviors":true,"subtype":"get_usage"}"#)
+    }
+
+    /// With `skip_behaviors` the reply carries `behaviors: null`; the quota
+    /// windows and the plan come from the same fields as before.
+    @Test
+    func replyWithoutBehaviorsKeepsWindowsAndPlan() throws {
+        var live = payload(subscriptionType: "max")
+        live["behaviors"] = NSNull()
+
+        let snapshot = try #require(ClaudeUsageProbe.parse(live, now: now))
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.fiveHour?.utilization == 33)
+        #expect(snapshot.sevenDay?.utilization == 16)
+        #expect(snapshot.planLabel == "Max")
+    }
+
+    /// Verified Ultra accounts (Max 20x was renamed on 2026-10-30) have no 5h
+    /// window: `five_hour` is null and only the weekly window is left. That is
+    /// an ordinary subscription answer, not "plan limits don't apply", and
+    /// Claude Code still reports `subscription_type: "max"` for those accounts.
+    @Test
+    func weeklyOnlyPlanParsesWithoutAFiveHourWindow() throws {
+        var live = payload(subscriptionType: "max")
+        var limits = try #require(live["rate_limits"] as? [String: Any])
+        limits["five_hour"] = NSNull()
+        live["rate_limits"] = limits
+
+        #expect(!ClaudeUsageProbe.limitsAreNotApplicable(live))
+        let snapshot = try #require(ClaudeUsageProbe.parse(live, now: now))
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.fiveHour == nil)
+        #expect(snapshot.sevenDay?.utilization == 16)
+        #expect(snapshot.sevenDay?.windowDuration == ClaudeUsageProbe.sevenDayDuration)
+        #expect(snapshot.planLabel == "Max")
+    }
+
+    @Test
+    func planLabelsUseBillingPageCapitalization() throws {
+        for (raw, label) in [("pro", "Pro"), ("max", "Max"), ("ultra", "Ultra"), ("team", "Team")] {
+            let snapshot = try #require(ClaudeUsageProbe.parse(payload(subscriptionType: raw), now: now))
+            #expect(snapshot.planLabel == label)
+        }
+    }
+
     /// Verbatim shape of a real `get_usage` control response (trimmed to the
     /// fields we read), so schema drift in the binary shows up as a test failure
     /// rather than a silently empty card.

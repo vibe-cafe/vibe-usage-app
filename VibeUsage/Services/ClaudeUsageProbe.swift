@@ -298,6 +298,21 @@ enum ClaudeUsageProbe {
         "--settings", nonessentialTrafficOverrideSettings,
     ]
 
+    /// Body of the `get_usage` control request. `skip_behaviors` is
+    /// load-bearing: without it Claude Code first scans every local transcript
+    /// touched in the last seven days to build the `/usage` "what's
+    /// contributing" analysis (`behaviors`) and answers only once that scan is
+    /// done. The card never reads `behaviors`, and Claude Code documents the
+    /// flag for exactly this caller (a usage meter); the quota fields come from
+    /// the same code path either way. Claude Code 2.1.299–2.1.311 kept growing
+    /// that analysis; on heavy accounts the scan alone can outlast
+    /// `candidateTimeout`, which leaves every probe timing out and the card on
+    /// the disk cache: stale numbers and no plan badge (issue #57). Computed
+    /// rather than stored because `[String: Any]` is not `Sendable`.
+    static var usageRequest: [String: Any] {
+        ["subtype": "get_usage", "skip_behaviors": true]
+    }
+
     private static func run(candidate: Binary, timeout: TimeInterval) async throws -> Data {
         let process = Process()
         process.executableURL = candidate.url
@@ -390,7 +405,7 @@ enum ClaudeUsageProbe {
                 try send([
                     "type": "control_request",
                     "request_id": "vibe-usage",
-                    "request": ["subtype": "get_usage"],
+                    "request": usageRequest,
                 ])
             case "vibe-usage":
                 // Close stdin so the binary shuts down on its own (exit 0)
@@ -579,11 +594,20 @@ enum ClaudeUsageProbe {
 
     /// `"pro"` / `"max"` / `"team"` → the capitalization users see on the
     /// billing page, matching how Codex plan labels are formatted.
+    ///
+    /// Anthropic renamed Max 20x to Ultra on 2026-10-30, but Claude Code (as of
+    /// 2.1.316) still reports `"max"` for those accounts and labels them
+    /// "Claude Max" itself; the tier lives only in `rateLimitTier`, which
+    /// `get_usage` does not return. The badge follows Claude Code's answer and
+    /// never infers Ultra from the window shape (verified Ultra accounts have no
+    /// 5h window, but unverified ones still do). `"ultra"` is listed so the
+    /// mapping stays explicit once Claude Code reports it.
     private static func planLabel(_ raw: String?) -> String? {
         guard let raw, !raw.isEmpty else { return nil }
         switch raw.lowercased() {
         case "pro": return "Pro"
         case "max": return "Max"
+        case "ultra": return "Ultra"
         case "team": return "Team"
         case "enterprise": return "Enterprise"
         case "free": return "Free"
