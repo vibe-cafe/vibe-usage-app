@@ -65,12 +65,16 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 ```bash
 swift build                              # Debug build
 swift build -c release                   # Release build
+swift test                               # Unit tests (opt-in acceptance tests skip by default)
+node --test scripts/check-cli.test.mjs    # Offline CLI contract-gate tests
 ./scripts/check-version.sh               # Validate version sync across AppConfig + Info.plist
 ./scripts/build-app.sh                   # Build + codesign .app for host arch (runs check-version.sh first)
 ./scripts/build-app.sh --universal       # Build universal (arm64 + x86_64) .app
 ./scripts/build-app.sh --universal --notarize  # Release pipeline: universal + sign + notarize + DMG
 ./scripts/generate-appcast.sh            # Generate appcast.xml from dist/VibeUsage.zip
 ```
+
+CI (`.github/workflows/ci.yml`) runs `check-version.sh`, `check-cli.test.mjs`, debug/release `swift build`, and `swift test` on `macos-26` with Xcode 26.6 for every PR and push to `main`. Opt-in acceptance tests remain skipped in CI; CI does not sign or release the app.
 
 ## Architecture Approval Gate
 

@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    # GA arm64 image with Swift 6 and the Testing module; pin Xcode to avoid
+    # image-default drift. Update runs-on and DEVELOPER_DIR when the image retires.
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      # Keep the default shallow checkout without tags: check-version.sh's
+      # build-number comparison with the last v* tag is a release guardrail.
+      # Between releases main can equal that tag's build number, so fetching
+      # tags would fail PRs without a version bump. With no tags, the script
+      # skips that comparison and checks version consistency and integer builds.
+      - uses: actions/checkout@v7
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Cache SPM dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            .build/repositories
+            .build/checkouts
+            .build/artifacts
+          key: ${{ runner.os }}-xcode-26.6-spm-${{ hashFiles('Package.resolved') }}
+
+      - name: Check versions
+        run: ./scripts/check-version.sh
+
+      - name: Test CLI contract gate (offline)
+        run: node --test scripts/check-cli.test.mjs
+
+      - name: Build debug
+        run: swift build
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Run tests
+        run: swift test
