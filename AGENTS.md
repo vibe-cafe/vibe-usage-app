@@ -6,6 +6,7 @@ AI agent guidance for the vibe-usage-app repository.
 
 ```
 vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, macOS 14+)
+├── .github/workflows/ci.yml       # CI: version check, offline CLI gate test, debug/release build, swift test (no signing)
 ├── Package.swift                  # SPM manifest (Sparkle dependency)
 ├── VibeUsage/
 │   ├── Info.plist                 # Bundle metadata (versions, Sparkle SUFeedURL, SUPublicEDKey)
@@ -65,12 +66,16 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 ```bash
 swift build                              # Debug build
 swift build -c release                   # Release build
+swift test                               # Unit tests (opt-in acceptance tests skip by default)
+node --test scripts/check-cli.test.mjs   # Offline CLI contract-gate tests
 ./scripts/check-version.sh               # Validate version sync across AppConfig + Info.plist
 ./scripts/build-app.sh                   # Build + codesign .app for host arch (runs check-version.sh first)
 ./scripts/build-app.sh --universal       # Build universal (arm64 + x86_64) .app
 ./scripts/build-app.sh --universal --notarize  # Release pipeline: universal + sign + notarize + DMG
 ./scripts/generate-appcast.sh            # Generate appcast.xml from dist/VibeUsage.zip
 ```
+
+CI (`.github/workflows/ci.yml`) runs `check-version.sh`, `check-cli.test.mjs`, debug/release `swift build`, and `swift test` on `macos-26` with Xcode 26.6 for every PR and push to `main`; opt-in acceptance tests remain skipped, with no signing or release. Its shallow checkout has no tags, so `check-version.sh` only checks AppConfig/Info.plist version consistency and an integer build number; comparison against the previous `v*` tag is left to the release machine.
 
 ## Architecture Approval Gate
 
