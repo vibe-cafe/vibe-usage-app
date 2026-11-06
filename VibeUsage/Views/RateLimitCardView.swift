@@ -234,6 +234,9 @@ private struct ProviderCard: View {
                 Text(label)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color(white: 0.55))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(label)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(Color(white: 0.16))
@@ -377,6 +380,7 @@ private struct ProviderCard: View {
         guard snapshot.provider == .codex,
               let plan = snapshot.planLabel?.lowercased() else { return false }
         return plan == "plus" || plan == "pro" || plan == "prolite" || plan == "business"
+            || plan == "business prolite"
     }
 
     @ViewBuilder

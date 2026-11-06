@@ -166,6 +166,79 @@ struct RateLimitCoordinatorTests {
     }
 
     @Test @MainActor
+    func rejectedScopedCacheDoesNotPaintUnscopedSessionWhileLiveRequestIsPending() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var requestStarted = false
+        var sessionReads = 0
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                requestStarted = true
+                try await Task.sleep(for: .seconds(30))
+                return self.snapshot(utilization: 2, dataAsOf: Date(timeIntervalSince1970: 300))
+            },
+            // Account/endpoint switches reject the old cache at this seam.
+            loadCodexCache: { nil },
+            readCodexFallback: {
+                sessionReads += 1
+                return self.snapshot(utilization: 99, dataAsOf: Date(timeIntervalSince1970: 200))
+            }
+        )
+        let refresh = Task { @MainActor in await coordinator.refreshCodex() }
+        while !requestStarted { await Task.yield() }
+        #expect(appState.rateLimits.isEmpty)
+        #expect(sessionReads == 0)
+        coordinator.panelVisibilityChanged(visible: false)
+        await refresh.value
+        #expect(appState.rateLimits.isEmpty)
+    }
+
+    @Test @MainActor
+    func successfulCodexRefreshDoesNotScanSessions() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var sessionReads = 0
+        let live = snapshot(utilization: 2, dataAsOf: Date(timeIntervalSince1970: 300))
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: { live },
+            loadCodexCache: { nil },
+            readCodexFallback: {
+                sessionReads += 1
+                return self.snapshot(utilization: 99, dataAsOf: Date(timeIntervalSince1970: 200))
+            }
+        )
+        await coordinator.refreshCodex()
+        #expect(sessionReads == 0)
+        #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == live)
+    }
+
+    @Test @MainActor
+    func failedCodexRequestScansSessionsOnceAndUsesNewerQuota() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cached = snapshot(utilization: 0, dataAsOf: Date(timeIntervalSince1970: 100))
+        let local = snapshot(utilization: 2, dataAsOf: Date(timeIntervalSince1970: 200))
+        var sessionReads = 0
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                throw CodexUsageAPI.FetchError.transport(URLError(.timedOut))
+            },
+            loadCodexCache: { cached },
+            readCodexFallback: {
+                sessionReads += 1
+                return local
+            }
+        )
+        await coordinator.refreshCodex()
+        #expect(sessionReads == 1)
+        #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == local)
+        #expect(!appState.isCodexRateLimitRefreshing)
+    }
+
+    @Test @MainActor
     func closingPanelCancelsCodexRefreshWithoutPublishingLateData() async {
         let appState = AppState()
         var requestStarted = false

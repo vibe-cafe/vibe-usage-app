@@ -4,6 +4,25 @@ import Testing
 
 struct CodexUsageAPITests {
 
+    @Test
+    func businessProLitePlanIsReadableFromLiveResponseAndLegacyCache() throws {
+        let now = Date(timeIntervalSince1970: 1_784_000_000)
+        let json = #"{"plan_type":"self_serve_business_prolite","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_after_seconds":604800}},"rate_limit_reset_credits":{"available_count":2}}"#
+        var snapshot = try #require(CodexUsageAPI.parseUsageResponse(Data(json.utf8), now: now))
+        #expect(snapshot.planLabel == "Business ProLite")
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.sevenDay?.utilization == 0)
+        #expect(snapshot.fiveHourNotEnforced)
+        #expect(snapshot.resetCreditsCount == 2)
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        snapshot.planLabel = "Self_serve_business_prolite"
+        CodexUsageAPI.cache(snapshot, scope: "test", to: url)
+        let cached = try #require(CodexUsageAPI.cachedSnapshot(from: url, now: now, scope: "test"))
+        #expect(cached.planLabel == "Business ProLite")
+    }
+
     // MARK: - Response parsing
 
     /// The live shape since OpenAI dropped the 5h window (2026-07-12): the
