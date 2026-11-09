@@ -143,9 +143,74 @@ struct RateLimitCardView: View {
         case .sessionWithoutPlanLimits:
             return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）"
         case nil:
+            // The live read's own fixed reason (e.g. no Claude Code binary)
+            // is more specific than local detection, which only saw a folder.
+            if let failure = snapshot.liveFailure {
+                return liveFailureText(failure, provider: snapshot.provider)
+            }
             return isDetected
                 ? "暂未读取到订阅配额数据"
                 : "未检测到本机安装或登录"
+        }
+    }
+
+    /// Headline and source line for a `.retryableError` card. Without a known
+    /// reason (an adapter that cannot name one) the generic headline stays.
+    /// Such a card only exists after a live read found nothing it could fall
+    /// back to, so its source is always the live read.
+    static func retryableErrorText(for snapshot: ProviderRateLimit) -> (title: String, detail: String) {
+        let title = snapshot.liveFailure.map { liveFailureText($0, provider: snapshot.provider) }
+            ?? "暂时无法读取订阅配额"
+        return (title, "来源：实时读取")
+    }
+
+    /// One quiet line under the meters when they are *not* from this
+    /// refresh's live read, because that read failed: which source is on
+    /// screen and why live did not replace it. A successful live card shows
+    /// nothing (an age line under every card was removed as noise on
+    /// 2026-10-24); this line exists only while something is actually wrong.
+    static func staleDataNote(for snapshot: ProviderRateLimit) -> String? {
+        guard snapshot.status == .ok, let failure = snapshot.liveFailure else { return nil }
+        let reason = liveFailureText(failure, provider: snapshot.provider)
+        let source: String
+        switch snapshot.source {
+        // An earlier live reading kept on screen after this one failed.
+        case .live: source = "上次实时读取"
+        case .cache: source = "缓存"
+        case .desktopRecord: source = "Claude 桌面端记录"
+        case .localLog: source = "本地日志"
+        case nil: return reason
+        }
+        return "来源：\(source) · \(reason)"
+    }
+
+    /// Our own fixed copy for every reason a live read can report. Nothing
+    /// here interpolates process output, server text, or a path — only the
+    /// product name and an HTTP status number.
+    static func liveFailureText(
+        _ failure: ProviderRateLimit.LiveFailure,
+        provider: ProviderRateLimit.Provider
+    ) -> String {
+        let name = provider.displayName
+        switch failure {
+        case .claudeBinaryNotFound: return "未找到 Claude Code 程序"
+        case .claudeLaunchFailed: return "Claude 启动失败"
+        case .claudeTimedOut: return "Claude 配额读取超时"
+        case .claudeNoResponse: return "Claude 没有响应配额请求"
+        case .claudeNoWindows: return "Claude 没有返回额度窗口"
+        case .credentialsNotFound: return "未找到 \(name) 登录信息"
+        case .credentialsRejected: return "\(name) 登录已失效"
+        case .endpointTimedOut: return "\(name) 配额接口请求超时"
+        case .endpointUnreachable: return "\(name) 配额接口连接失败"
+        case let .endpointHTTPStatus(status): return "\(name) 配额接口返回错误 \(status)"
+        case .endpointUnrecognized: return "\(name) 配额接口返回了无法识别的数据"
+        case .cliRuntimeMissing: return "未找到 Node.js 或 Bun"
+        case .cliTimedOut: return "配额 CLI 读取超时"
+        case .cliFailed: return "配额 CLI 运行失败"
+        case .cliUnrecognizedOutput: return "配额 CLI 返回了无法识别的数据"
+        case .cliSchemaMismatch: return "配额 CLI 协议版本不兼容"
+        case .cliNoResult: return "配额 CLI 没有返回这个产品"
+        case .cliReportedFailure: return "实时读取失败"
         }
     }
 }
@@ -174,6 +239,12 @@ private struct ProviderCard: View {
             content
             if snapshot.status == .ok, foldedMeterCount > 0 {
                 meterDisclosure
+            }
+            if let note = RateLimitCardView.staleDataNote(for: snapshot) {
+                Text(note)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Color(white: 0.45))
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -265,7 +336,8 @@ private struct ProviderCard: View {
                 messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
             }
         case .retryableError:
-            messageContent(text: "暂时无法读取订阅配额", action: "重试")
+            let text = RateLimitCardView.retryableErrorText(for: snapshot)
+            messageContent(text: text.title, detail: text.detail, action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:
             if isRefreshing {
@@ -475,15 +547,27 @@ private struct ProviderCard: View {
 
     private func messageContent(
         text: String,
+        detail: String? = nil,
         action: String,
         perform: (() async -> Void)? = nil
     ) -> some View {
         HStack(spacing: 8) {
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(Color(white: 0.5))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            // Two lines, not one: a fixed failure reason beside the retry
+            // button would otherwise be cut off mid-word.
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.5))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Color(white: 0.38))
+                        .lineLimit(1)
+                }
+            }
             Spacer(minLength: 0)
             Button {
                 Task { await (perform ?? retryProvider)() }

@@ -64,6 +64,103 @@ struct RateLimitCardViewTests {
         #expect(unexplained != exhausted)
     }
 
+    // MARK: - Live failure reasons (diagnostics 1a)
+
+    /// The 11-09 class of report: a retryable Claude card used to read the
+    /// same generic line for every failure. Each reason now reads differently,
+    /// and the card states that it tried a live read.
+    @Test
+    func retryableClaudeCardsNameTheirFixedReason() {
+        let reasons: [ProviderRateLimit.LiveFailure] = [
+            .claudeBinaryNotFound, .claudeLaunchFailed, .claudeTimedOut,
+            .claudeNoResponse, .claudeNoWindows,
+        ]
+        let texts = reasons.map {
+            RateLimitCardView.retryableErrorText(for: ProviderRateLimit(
+                provider: .claudeCode, status: .retryableError, liveFailure: $0))
+        }
+
+        #expect(Set(texts.map(\.title)).count == reasons.count)
+        #expect(texts.map(\.title) == [
+            "未找到 Claude Code 程序", "Claude 启动失败", "Claude 配额读取超时",
+            "Claude 没有响应配额请求", "Claude 没有返回额度窗口",
+        ])
+        #expect(texts.allSatisfy { $0.detail == "来源：实时读取" })
+
+        // An adapter that cannot name a reason keeps the generic headline.
+        let generic = RateLimitCardView.retryableErrorText(
+            for: ProviderRateLimit(provider: .kimiCode, status: .retryableError))
+        #expect(generic.title == "暂时无法读取订阅配额")
+        #expect(generic.detail == "来源：实时读取")
+    }
+
+    /// Cached numbers stay on screen after a failed live read; the card adds
+    /// one line naming the source and the reason. A successful live card adds
+    /// nothing (an age line under every card was removed as noise).
+    @Test
+    func cachedReadingAfterFailedLiveReadNamesSourceAndReason() {
+        func ok(_ source: ProviderRateLimit.Source?, _ failure: ProviderRateLimit.LiveFailure?,
+                provider: ProviderRateLimit.Provider = .claudeCode) -> ProviderRateLimit {
+            ProviderRateLimit(
+                provider: provider,
+                fiveHour: RateLimitWindow(utilization: 10),
+                status: .ok,
+                source: source,
+                liveFailure: failure
+            )
+        }
+
+        #expect(RateLimitCardView.staleDataNote(for: ok(.cache, .claudeTimedOut))
+            == "来源：缓存 · Claude 配额读取超时")
+        #expect(RateLimitCardView.staleDataNote(for: ok(.desktopRecord, .claudeBinaryNotFound))
+            == "来源：Claude 桌面端记录 · 未找到 Claude Code 程序")
+        #expect(RateLimitCardView.staleDataNote(for: ok(.live, .claudeLaunchFailed))
+            == "来源：上次实时读取 · Claude 启动失败")
+        #expect(RateLimitCardView.staleDataNote(for: ok(.localLog, .endpointHTTPStatus(502), provider: .codex))
+            == "来源：本地日志 · Codex 配额接口返回错误 502")
+        #expect(RateLimitCardView.staleDataNote(for: ok(.cache, .cliReportedFailure, provider: .kimiCode))
+            == "来源：缓存 · 实时读取失败")
+
+        #expect(RateLimitCardView.staleDataNote(for: ok(.live, nil)) == nil)
+        #expect(RateLimitCardView.staleDataNote(for: ok(.cache, nil)) == nil)
+        #expect(RateLimitCardView.staleDataNote(for: ProviderRateLimit(
+            provider: .claudeCode, status: .retryableError, liveFailure: .claudeTimedOut)) == nil)
+    }
+
+    /// A settled empty card prefers the source's own answer, then the live
+    /// read's reason, then local detection.
+    @Test
+    func emptyCardPrefersTheLiveReadReasonOverDetection() {
+        let noBinary = ProviderRateLimit(provider: .claudeCode, status: .noData,
+                                         liveFailure: .claudeBinaryNotFound)
+        #expect(RateLimitCardView.emptyStateText(for: noBinary, isDetected: true) == "未找到 Claude Code 程序")
+        #expect(RateLimitCardView.emptyStateText(for: noBinary, isDetected: false) == "未找到 Claude Code 程序")
+
+        let notLoggedIn = ProviderRateLimit(provider: .codex, status: .noData,
+                                            liveFailure: .credentialsNotFound)
+        #expect(RateLimitCardView.emptyStateText(for: notLoggedIn, isDetected: true) == "未找到 Codex 登录信息")
+
+        let answered = ProviderRateLimit(provider: .opencodeGo, status: .noData,
+                                         emptyReason: .notEntitled, liveFailure: .credentialsNotFound)
+        #expect(RateLimitCardView.emptyStateText(for: answered, isDetected: true) == "未订阅 OpenCode Go")
+    }
+
+    /// Every reason is our own copy: no path, key, or server text can appear,
+    /// only the product name and an HTTP status number.
+    @Test
+    func failureCopyIsFixedText() {
+        let all: [ProviderRateLimit.LiveFailure] = [
+            .claudeBinaryNotFound, .claudeLaunchFailed, .claudeTimedOut, .claudeNoResponse,
+            .claudeNoWindows, .credentialsNotFound, .credentialsRejected, .endpointTimedOut,
+            .endpointUnreachable, .endpointHTTPStatus(503), .endpointUnrecognized,
+            .cliRuntimeMissing, .cliTimedOut, .cliFailed, .cliUnrecognizedOutput,
+            .cliSchemaMismatch, .cliNoResult, .cliReportedFailure,
+        ]
+        let texts = all.map { RateLimitCardView.liveFailureText($0, provider: .codex) }
+        #expect(Set(texts).count == all.count)
+        #expect(texts.allSatisfy { !$0.contains("/") && !$0.contains("~") })
+    }
+
     @Test
     func genericQuotaWindowsLeadFromShortestToLongest() {
         let meters = [

@@ -160,6 +160,7 @@ final class RateLimitCoordinator {
             // an actual request failure: the latter must stay visible with a
             // retry affordance instead of being reported as 「暂无数据」.
             let failure = Self.classify(error)
+            let reason = Self.liveFailure(error)
             if failure == .unauthorized {
                 debugLog("[rate-limit] codex live fetch unauthorized — user logged out of Codex CLI")
             } else {
@@ -169,7 +170,10 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
             if fallback.status == .ok {
                 upsertIfNewer(fallback)
-            } else if currentSnapshot(.codex)?.status != .ok {
+            }
+            if currentSnapshot(.codex)?.status == .ok {
+                markLiveFailure(reason, on: .codex)
+            } else {
                 let status: ProviderRateLimit.Status
                 switch failure {
                 case .absent, .notApplicable:
@@ -179,7 +183,8 @@ final class RateLimitCoordinator {
                 case .transient:
                     status = .retryableError
                 }
-                upsert(ProviderRateLimit(provider: .codex, status: status, fetchedAt: Date()))
+                upsert(ProviderRateLimit(provider: .codex, status: status, fetchedAt: Date(),
+                    liveFailure: reason))
             }
         }
         guard !Task.isCancelled else { return }
@@ -258,6 +263,7 @@ final class RateLimitCoordinator {
             TestDiagnosticLog.recordQuotaFailure([.claudeCode], error: error)
             #endif
             let failure = Self.classify(error)
+            let reason = Self.liveFailure(error)
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             if failure == .notApplicable {
                 // API key / Bedrock / Vertex session: this account has no plan
@@ -269,14 +275,18 @@ final class RateLimitCoordinator {
                     fetchedAt: Date(), emptyReason: .sessionWithoutPlanLimits))
             } else {
                 // No binary, offline, or the binary's own usage fetch failed.
-                // Keep whatever cache painted; with no cache, absence stays
-                // quiet while a concrete failure remains retryable.
+                // Keep whatever cache painted, now marked with the reason; with
+                // no cache, absence stays quiet (no retry) while a concrete
+                // failure remains retryable — both name the fixed reason.
                 debugLog("[rate-limit] claude probe failed (\(error)) — keeping cached snapshot")
-                if currentSnapshot(.claudeCode)?.status != .ok {
+                if currentSnapshot(.claudeCode)?.status == .ok {
+                    markLiveFailure(reason, on: .claudeCode)
+                } else {
                     let status: ProviderRateLimit.Status = failure == .absent
                         ? .noData
                         : .retryableError
-                    upsert(ProviderRateLimit(provider: .claudeCode, status: status, fetchedAt: Date()))
+                    upsert(ProviderRateLimit(provider: .claudeCode, status: status,
+                        fetchedAt: Date(), liveFailure: reason))
                 }
             }
         }
@@ -345,6 +355,7 @@ final class RateLimitCoordinator {
             TestDiagnosticLog.recordQuotaFailure([.opencodeGo], error: error)
             #endif
             let failure = Self.classify(error)
+            let reason = Self.liveFailure(error)
             guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencodeGo) else { return }
             // A live reading already on screen survives a transient blip: its
             // 「数据截至」 note states the age honestly, which beats replacing a
@@ -360,15 +371,17 @@ final class RateLimitCoordinator {
                         fetchedAt: Date(), emptyReason: .notEntitled))
                 case .absent:
                     upsert(ProviderRateLimit(provider: .opencodeGo, status: .noData,
-                        fetchedAt: Date()))
+                        fetchedAt: Date(), liveFailure: reason))
                 case .unauthorized:
                     upsert(ProviderRateLimit(provider: .opencodeGo, status: .unauthorized,
-                        fetchedAt: Date()))
+                        fetchedAt: Date(), liveFailure: reason))
                 case .transient:
                     debugLog("[rate-limit] opencode go fetch failed (\(error))")
                     upsert(ProviderRateLimit(provider: .opencodeGo, status: .retryableError,
-                        fetchedAt: Date()))
+                        fetchedAt: Date(), liveFailure: reason))
                 }
+            } else {
+                markLiveFailure(reason, on: .opencodeGo)
             }
         }
         guard !Task.isCancelled else { return }
@@ -461,11 +474,17 @@ final class RateLimitCoordinator {
                 && (provider != .zCode || zCodeContextIsCurrent) {
                 if let snapshot = snapshots.first(where: { $0.provider == provider }) {
                     if snapshot.status == .ok {
-                        _ = upsertIfNewer(snapshot)
+                        // A CLI cache answer that is not newer than the card
+                        // still says this live read failed.
+                        if !upsertIfNewer(snapshot) {
+                            markLiveFailure(snapshot.liveFailure, on: provider)
+                        }
                     } else if snapshot.status != .retryableError
                                 || currentSnapshot(provider)?.status != .ok
                                 || provider == .cursor || provider == .antigravity {
                         upsert(snapshot)
+                    } else {
+                        markLiveFailure(.cliReportedFailure, on: provider)
                     }
                     #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                     TestDiagnosticLog.recordQuotaResult(snapshot)
@@ -478,8 +497,11 @@ final class RateLimitCoordinator {
                         upsert(ProviderRateLimit(
                             provider: provider,
                             status: .retryableError,
-                            fetchedAt: Date()
+                            fetchedAt: Date(),
+                            liveFailure: .cliNoResult
                         ))
+                    } else {
+                        markLiveFailure(.cliNoResult, on: provider)
                     }
                 }
                 lastCLIFetchAt[provider] = Date()
@@ -495,6 +517,7 @@ final class RateLimitCoordinator {
             TestDiagnosticLog.recordQuotaFailure(providers, error: error)
             #endif
             guard !Task.isCancelled else { return }
+            let reason = QuotaCLIBridge.liveFailure(for: error)
             let zCodeContextIsCurrent = !requestsZCode || (
                 requestedZCodeKey == appState.zCodeAPIKeyForQuotaFetch()
                     && requestedZCodeRegion == appState.zCodeQuotaRegion
@@ -505,8 +528,11 @@ final class RateLimitCoordinator {
                     upsert(ProviderRateLimit(
                         provider: provider,
                         status: .retryableError,
-                        fetchedAt: Date()
+                        fetchedAt: Date(),
+                        liveFailure: reason
                     ))
+                } else {
+                    markLiveFailure(reason, on: provider)
                 }
                 lastCLIFetchAt[provider] = Date()
             }
@@ -689,6 +715,29 @@ final class RateLimitCoordinator {
     /// make a concrete read failure disappear as mere absence.
     private nonisolated static func classify(_ error: Error) -> RateLimitFetchFailure {
         (error as? any RateLimitFetchError)?.rateLimitFailure ?? .transient
+    }
+
+    /// The adapter's fixed reason, or nil when it cannot name one (the card
+    /// then keeps its generic copy).
+    private nonisolated static func liveFailure(_ error: Error) -> ProviderRateLimit.LiveFailure? {
+        (error as? any RateLimitFetchError)?.liveFailure
+    }
+
+    /// A failed live read leaves an `.ok` reading on screen (it beats an error
+    /// card) but records why, so the card can say it is showing older data.
+    /// Without a reason the existing annotation is left alone rather than
+    /// cleared: only a successful live read clears it.
+    private func markLiveFailure(
+        _ reason: ProviderRateLimit.LiveFailure?,
+        on provider: ProviderRateLimit.Provider
+    ) {
+        guard let reason,
+              var current = currentSnapshot(provider),
+              current.status == .ok,
+              current.liveFailure != reason
+        else { return }
+        current.liveFailure = reason
+        upsert(current)
     }
 
     /// Fallback data may replace the current card only when it was produced

@@ -75,7 +75,8 @@ enum ClaudeUsageCache {
             fetchedAt: now,
             // The numbers are as old as Claude's own fetch, not as old as our
             // read — this is what drives 「数据截至 N 分钟前」.
-            dataAsOf: fetchedAt
+            dataAsOf: fetchedAt,
+            source: .cache
         )
     }
 
@@ -162,7 +163,8 @@ enum ClaudeUsageCache {
             sevenDaySonnet: window("sn", maxAge: ClaudeUsageProbe.sevenDayDuration),
             status: .ok,
             fetchedAt: now,
-            dataAsOf: sampledAt
+            dataAsOf: sampledAt,
+            source: .desktopRecord
         )
     }
 

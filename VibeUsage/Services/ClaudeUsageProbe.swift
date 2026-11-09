@@ -57,6 +57,24 @@ enum ClaudeUsageProbe {
                 return .transient
             }
         }
+
+        /// The card's fixed reason. With several candidates this is the last
+        /// one tried (the same error `fetch` keeps); the launch error's text is
+        /// never shown.
+        var liveFailure: ProviderRateLimit.LiveFailure? {
+            switch self {
+            case .noBinary: return .claudeBinaryNotFound
+            case .launchFailed: return .claudeLaunchFailed
+            case .timedOut: return .claudeTimedOut
+            case .noResponse: return .claudeNoResponse
+            case .limitsUnavailable: return .claudeNoWindows
+            case .limitsNotApplicable: return nil
+            case let .allCandidatesFailed(underlying):
+                // Anything else `run` can throw is a failed write to the
+                // child's stdin: it stopped reading before answering.
+                return (underlying as? any RateLimitFetchError)?.liveFailure ?? .claudeNoResponse
+            }
+        }
     }
 
     /// Overall budget for one refresh, shared by every discovered binary.
@@ -536,7 +554,8 @@ enum ClaudeUsageProbe {
             fetchedAt: now,
             // The binary fetched this from the server just now, so the numbers
             // are current — no 「数据截至」 note for the live path.
-            dataAsOf: now
+            dataAsOf: now,
+            source: .live
         )
     }
 
