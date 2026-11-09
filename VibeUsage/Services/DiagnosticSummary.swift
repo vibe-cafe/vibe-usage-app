@@ -130,20 +130,28 @@ enum DiagnosticSummary {
         case let .timedOut(seconds): text = "版本检查超时（\(seconds)s）"
         case .failed: text = "启动阶段失败（版本检查没有成功）"
         }
+        // The newest record's own classification, without inferring a stage:
+        // a timeout may have stalled in the package download before the CLI
+        // itself ran.
         if let last = records.first {
-            text += last.result == .launchFailed
-                ? " · 最近一次同步：CLI 启动阶段失败"
-                : " · 最近一次同步：CLI 已启动"
+            text += " · 最近一次同步：\(syncResultText(last))"
         }
         return text
     }
 
     static func accountText(_ input: Input) -> String {
         var parts = [input.keyConfigured ? "已配置 Key" : "未配置 Key"]
-        if let last = input.syncRecords.first(where: { $0.result != .launchFailed && $0.result != .timedOut }) {
-            parts.append(last.reason == .keyRejected
-                ? "最近一次同步被服务器拒绝（Key 无效）"
-                : "最近一次同步未被服务器拒绝")
+        // Only the newest record speaks for 「最近一次」. An older rejection
+        // must not stand in for a newer run that never got an answer.
+        if let last = input.syncRecords.first {
+            switch last.result {
+            case .timedOut, .launchFailed:
+                parts.append("最近一次同步没有完成，无法判断 Key 是否被拒")
+            case .success, .failure:
+                parts.append(last.reason == .keyRejected
+                    ? "最近一次同步被服务器拒绝（Key 无效）"
+                    : "最近一次同步未被服务器拒绝")
+            }
         }
         parts.append("设备标签 \(input.deviceTag)")
         return parts.joined(separator: " · ")
@@ -179,14 +187,16 @@ enum DiagnosticSummary {
         case .launch: trigger = "启动时"
         case .manual: trigger = "手动"
         }
-        let result: String
+        return "\(trigger) · \(syncResultText(record)) · \(seconds(record.duration))"
+    }
+
+    static func syncResultText(_ record: SyncRecord) -> String {
         switch record.result {
-        case .success: result = "成功"
-        case .timedOut: result = "超时，120s 时被 App 结束"
-        case .failure: result = "失败（\(syncReasonText(record))）"
-        case .launchFailed: result = "CLI 启动阶段失败（\(syncReasonText(record))）"
+        case .success: return "成功"
+        case .timedOut: return "超时，120s 时被 App 结束"
+        case .failure: return "失败（\(syncReasonText(record))）"
+        case .launchFailed: return "CLI 启动阶段失败（\(syncReasonText(record))）"
         }
-        return "\(trigger) · \(result) · \(seconds(record.duration))"
     }
 
     static func syncReasonText(_ record: SyncRecord) -> String {

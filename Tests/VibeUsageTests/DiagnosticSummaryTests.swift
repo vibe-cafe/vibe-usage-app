@@ -165,7 +165,7 @@ struct DiagnosticSummaryTests {
         #expect(lines.first?.hasPrefix("Vibe Usage 诊断报告 v1 · ") == true)
         #expect(lines.first?.hasSuffix("（UTC+8）") == true)
         #expect(report.contains("环境：macOS 26.1.0 arm64 · App 0.7.4（40）正式版 · 运行环境：bun 1.2.19"))
-        #expect(report.contains("CLI：启动正常 · 0.14.11 · 最近一次同步：CLI 已启动"))
+        #expect(report.contains("CLI：启动正常 · 0.14.11 · 最近一次同步：成功"))
         #expect(report.contains("账号：已配置 Key · 最近一次同步未被服务器拒绝 · 设备标签 "))
         #expect(report.contains("后台：App 定时同步（每 30 分钟）已开启"))
         #expect(report.contains("定时 · 成功 · 18s"))
@@ -181,12 +181,40 @@ struct DiagnosticSummaryTests {
                                   result: .failure, reason: .keyRejected)]
         let report = DiagnosticSummary.render(input(syncRecords: records, cli: .runtimeMissing))
         #expect(report.contains("最近一次同步被服务器拒绝（Key 无效）"))
-        #expect(report.contains("CLI：启动阶段失败（未找到 Node.js 或 Bun）"))
+        #expect(report.contains("CLI：启动阶段失败（未找到 Node.js 或 Bun） · 最近一次同步：失败（Key 被服务器拒绝）"))
 
         let launch = [SyncRecord(startedAt: Date(), duration: 0, trigger: .scheduled,
                                  result: .launchFailed, reason: .runtimeMissing)]
         #expect(DiagnosticSummary.render(input(syncRecords: launch, cli: .timedOut(seconds: 20)))
-            .contains("CLI：版本检查超时（20s） · 最近一次同步：CLI 启动阶段失败"))
+            .contains("CLI：版本检查超时（20s） · 最近一次同步：CLI 启动阶段失败（未找到 Node.js 或 Bun）"))
+    }
+
+    /// 「最近一次」 means the newest record. An older Key rejection must not
+    /// stand in for a newer run that timed out or never launched, and a
+    /// timeout is not claimed to mean the CLI started (npx may have stalled
+    /// in the package download).
+    @Test
+    func newestUnfinishedSyncIsNotReplacedByAnOlderRejection() {
+        let rejected = SyncRecord(startedAt: Date(timeIntervalSince1970: 100), duration: 2,
+                                  trigger: .scheduled, result: .failure, reason: .keyRejected)
+        let newest: [SyncRecord] = [
+            SyncRecord(startedAt: Date(timeIntervalSince1970: 200), duration: 120.1,
+                       trigger: .scheduled, result: .timedOut),
+            SyncRecord(startedAt: Date(timeIntervalSince1970: 200), duration: 21,
+                       trigger: .scheduled, result: .launchFailed, reason: .launcherFailed),
+        ]
+        let expectedCLI = [
+            "CLI：启动正常 · 0.14.11 · 最近一次同步：超时，120s 时被 App 结束",
+            "CLI：启动正常 · 0.14.11 · 最近一次同步：CLI 启动阶段失败（下载或启动 CLI 失败）",
+        ]
+        for (latest, cliLine) in zip(newest, expectedCLI) {
+            let report = DiagnosticSummary.render(input(syncRecords: [latest, rejected]))
+            #expect(report.contains("账号：已配置 Key · 最近一次同步没有完成，无法判断 Key 是否被拒 · 设备标签 "))
+            #expect(!report.contains("最近一次同步被服务器拒绝"))
+            #expect(!report.contains("最近一次同步未被服务器拒绝"))
+            #expect(report.contains(cliLine))
+            #expect(!report.contains("CLI 已启动"))
+        }
     }
 
     // MARK: - Collector helpers

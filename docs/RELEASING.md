@@ -72,8 +72,10 @@ flags:
 ```
 
 Do not generate or publish an Appcast for an external test build. Ordinary
-Release builds omit the diagnostic implementation, UI, separate Keychain
-namespace, and bundled CLI at compile time. When release credentials are not
+Release builds omit the test-build JSONL diagnostic log (`TestDiagnosticLog`)
+and its export UI, the separate Keychain namespace, and the bundled CLI at
+compile time. They do include the whitelisted 「复制诊断信息」 summary and the
+local last-10 sync history approved on 2026-11-09 (see `AGENTS.md`). When release credentials are not
 available, omit `--notarize` to create an ad-hoc signed
 `dist/VibeUsage-Test.zip`; testers must use macOS Control-click → Open. The
 signed/notarized path remains the preferred wider-distribution artifact.
