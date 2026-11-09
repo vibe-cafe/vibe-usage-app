@@ -305,6 +305,107 @@ struct ClaudeUsageProbeTests {
         ) == .cli)
     }
 
+    /// The diagnostic summary names each candidate by a fixed template, never
+    /// its real path: a PATH entry under a home with a Chinese user name,
+    /// spaces and a Claude-encoded project directory shows only its index.
+    @Test
+    func candidatesCarryTemplatesInsteadOfRealPaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("张三 home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cli = root.appendingPathComponent(".local/bin")
+        let pathDir = root.appendingPathComponent("My Projects/-Users-张三-Coding-秘密项目/bin")
+        let desktop = root.appendingPathComponent(
+            "Library/Application Support/Claude/claude-code/2.1.300/claude.app/Contents/MacOS")
+        for dir in [cli, pathDir, desktop] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let binary = dir.appendingPathComponent("claude")
+            try Data().write(to: binary)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        }
+
+        let found = ClaudeUsageProbe.discoverBinaries(
+            fileManager: HomeOverridingFileManager(home: root),
+            environment: ["PATH": "/usr/bin:\(pathDir.path):/bin"]
+        )
+
+        #expect(found.map(\.template) == [
+            "~/.local/bin/claude", "PATH 第 2 项中的 claude", "Claude 桌面端内置 2.1.300",
+        ])
+        #expect(ClaudeUsageProbe.pathClaudeCount(
+            fileManager: HomeOverridingFileManager(home: root),
+            environment: ["PATH": "\(pathDir.path):\(pathDir.path)/:/usr/bin"]
+        ) == 1)
+    }
+
+    /// The latest completed probe keeps a per-candidate record: fixed reason,
+    /// step timings and exit status. Synthetic executables only.
+    @Test
+    func probeRecordsEachCandidateAttempt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-attempts-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func script(_ name: String, _ body: String) throws -> ClaudeUsageProbe.Binary {
+            let url = directory.appendingPathComponent(name)
+            try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            return ClaudeUsageProbe.Binary(url: url, kind: .cli, label: name, template: "模板-\(name)")
+        }
+        let initReply = #"{"type":"control_response","response":{"request_id":"vibe-init","subtype":"success","response":{}}}"#
+        let usageReply = #"{"type":"control_response","response":{"request_id":"vibe-usage","subtype":"success","response":{"rate_limits":{"five_hour":{"utilization":12,"resets_at":"2099-01-01T00:00:00Z"}},"subscription_type":"pro"}}}"#
+        let hangs = try script("hangs", "read -r line\necho '\(initReply)'\nwhile IFS= read -r line; do :; done")
+        let silent = try script("silent", "read -r line\necho '\(initReply)'\nread -r line\nexit 0")
+        let answers = try script("answers", "read -r line\necho '\(initReply)'\nread -r line\necho '\(usageReply)'")
+
+        func settledLog(_ store: ClaudeUsageProbe.AttemptLogStore) async throws -> ClaudeUsageProbe.AttemptLog {
+            // Exit statuses arrive from the termination handlers.
+            var log = try #require(store.snapshot())
+            for _ in 0..<50 where log.attempts.contains(where: { $0.exit == nil }) {
+                try await Task.sleep(for: .milliseconds(20))
+                log = try #require(store.snapshot())
+            }
+            return log
+        }
+
+        // A candidate that stops answering is ended by the app's deadline.
+        let timedOutStore = ClaudeUsageProbe.AttemptLogStore()
+        await #expect(throws: ClaudeUsageProbe.ProbeError.self) {
+            _ = try await ClaudeUsageProbe.fetch(candidates: [hangs], timeout: 0.5, attemptLog: timedOutStore)
+        }
+        let timedOut = try await settledLog(timedOutStore).attempts
+        #expect(timedOut.count == 1)
+        #expect(timedOut.first?.outcome == .failed(.claudeTimedOut))
+        #expect(timedOut.first?.initializeSeconds != nil)
+        #expect(timedOut.first?.usageSeconds == nil)
+        #expect(timedOut.first?.exit == .signal(SIGTERM))
+
+        // One candidate exits without answering, the next one answers.
+        let store = ClaudeUsageProbe.AttemptLogStore()
+        let snapshot = try await ClaudeUsageProbe.fetch(
+            candidates: [silent, answers], timeout: 5, attemptLog: store)
+        #expect(snapshot.status == .ok)
+        let log = try await settledLog(store)
+        #expect(log.attempts.map(\.template) == ["模板-silent", "模板-answers"])
+        #expect(log.untriedCount == 0)
+        #expect(log.attempts[0].outcome == .failed(.claudeNoResponse))
+        #expect(log.attempts[0].exit == .code(0))
+        #expect(log.attempts[1].outcome == .ok)
+        #expect(log.attempts[1].initializeSeconds != nil)
+        #expect(log.attempts[1].usageSeconds != nil)
+        #expect(log.attempts[1].exit == .code(0))
+
+        // Nothing was written to the app's shared record by these probes.
+        #expect(ClaudeUsageProbe.lastAttemptLog()?.attempts.contains { $0.template.hasPrefix("模板-") } != true)
+    }
+
+    @Test
+    func versionNumberKeepsOnlyTheDottedNumber() {
+        #expect(ClaudeUsageProbe.versionNumber(in: "2.1.316 (Claude Code)\n") == "2.1.316")
+        #expect(ClaudeUsageProbe.versionNumber(in: "v22.11.0") == "22.11.0")
+        #expect(ClaudeUsageProbe.versionNumber(in: "no version here sk-ant-xyz") == nil)
+    }
+
     @Test
     func explicitOverrideOutranksEverythingElse() throws {
         let binary = FileManager.default.temporaryDirectory

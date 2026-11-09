@@ -27,6 +27,9 @@ struct SettingsView: View {
     @State private var isCodexHomeExpanded = false
     @State private var isIsolatedRootsExpanded = false
     @State private var isZCodeExpanded = false
+    @State private var isGeneratingDiagnostics = false
+    @State private var copiedDiagnosticSummary: String?
+    @State private var isDiagnosticSummaryExpanded = false
     #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
     @State private var diagnosticExportMessage: String?
     #endif
@@ -518,6 +521,8 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            diagnosticSummaryRow
+
             Button("检查更新") {
                 updaterViewModel.checkForUpdates()
             }
@@ -525,6 +530,43 @@ struct SettingsView: View {
         } header: {
             Text("关于")
         }
+    }
+
+    /// One row, per the terse-copy rule: the button copies a whitelisted
+    /// summary (no raw output, paths, keys or account names) and the result
+    /// can be expanded to read exactly what was copied.
+    @ViewBuilder
+    private var diagnosticSummaryRow: some View {
+        LabeledContent("诊断信息") {
+            Button(isGeneratingDiagnostics ? "正在生成…" : "复制诊断信息") {
+                Task { await copyDiagnosticSummary() }
+            }
+            .disabled(isGeneratingDiagnostics)
+        }
+        if let copiedDiagnosticSummary {
+            DisclosureGroup(isExpanded: $isDiagnosticSummaryExpanded) {
+                ScrollView {
+                    Text(copiedDiagnosticSummary)
+                        .font(.system(size: 10, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+            } label: {
+                Text("已复制，可以直接贴到群里")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func copyDiagnosticSummary() async {
+        isGeneratingDiagnostics = true
+        defer { isGeneratingDiagnostics = false }
+        let summary = await appState.diagnosticSummary()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary, forType: .string)
+        copiedDiagnosticSummary = summary
     }
 
     #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
@@ -813,6 +855,8 @@ struct SettingsView: View {
         let configPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".vibe-usage/\(AppConfig.configFileName)")
         try? FileManager.default.removeItem(at: configPath)
+        // The local sync summaries go with the app's data.
+        appState.syncHistory.clear()
 
         appState.isConfigured = false
         appState.buckets = []

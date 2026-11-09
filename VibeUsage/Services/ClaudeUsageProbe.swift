@@ -98,23 +98,36 @@ enum ClaudeUsageProbe {
     static func fetch(
         candidates: [Binary],
         now: Date = Date(),
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        attemptLog lastAttempts: AttemptLogStore = Self.lastAttempts
     ) async throws -> ProviderRateLimit {
-        guard !candidates.isEmpty else { throw ProbeError.noBinary }
+        let recorder = AttemptRecorder()
+        guard !candidates.isEmpty else {
+            lastAttempts.store(recorder, untried: 0)
+            throw ProbeError.noBinary
+        }
 
         let deadline = ProcessInfo.processInfo.systemUptime + max(0, timeout)
         var lastError: Error = ProbeError.noResponse
-        for candidate in candidates {
+        var untried = 0
+        // A cancelled refresh (panel closed) keeps the previous completed
+        // record instead of replacing it with a half-run one.
+        func finish() { lastAttempts.store(recorder, untried: untried) }
+        for (index, candidate) in candidates.enumerated() {
             try Task.checkCancellation()
             let remaining = deadline - ProcessInfo.processInfo.systemUptime
             guard remaining > 0 else {
                 lastError = ProbeError.timedOut
+                untried = candidates.count - index
                 break
             }
+            let slot = recorder.begin(candidate)
             do {
                 let raw = try await run(
                     candidate: candidate,
-                    timeout: min(candidateTimeout, remaining)
+                    timeout: min(candidateTimeout, remaining),
+                    recorder: recorder,
+                    slot: slot
                 )
                 guard let payload = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
                     throw ProbeError.noResponse
@@ -130,31 +143,180 @@ enum ClaudeUsageProbe {
                     throw ProbeError.limitsUnavailable
                 }
                 debugLog("[rate-limit] claude probe ok via \(candidate.label)")
+                recorder.update(slot) { $0.outcome = .ok }
+                finish()
                 return snapshot
             } catch is CancellationError {
                 throw CancellationError()
             } catch ProbeError.limitsNotApplicable {
                 // Definitive answer, not a candidate failure: this account has
                 // no plan limits at all. Don't retry with another binary.
+                recorder.update(slot) { $0.outcome = .notApplicable }
+                finish()
                 throw ProbeError.limitsNotApplicable
             } catch {
                 debugLog("[rate-limit] claude probe via \(candidate.label) failed: \(error)")
+                let reason = (error as? ProbeError)?.liveFailure ?? .claudeNoResponse
+                recorder.update(slot) { $0.outcome = .failed(reason) }
                 lastError = error
             }
         }
+        finish()
         throw ProbeError.allCandidatesFailed(lastError)
+    }
+
+    // MARK: - Attempt record (diagnostics)
+
+    /// What one candidate did during the latest completed probe. Typed fields
+    /// only: a fixed path template (never the real path), step timings, the
+    /// fixed reason and the exit status — no stdout/stderr. Shown only in the
+    /// diagnostic summary the user copies from Settings.
+    struct CandidateAttempt: Equatable, Sendable {
+        enum Outcome: Equatable, Sendable {
+            case pending
+            case ok
+            case notApplicable
+            case failed(ProviderRateLimit.LiveFailure)
+        }
+
+        enum Exit: Equatable, Sendable {
+            case code(Int32)
+            case signal(Int32)
+        }
+
+        var template: String
+        var kind: Kind
+        var initializeSeconds: TimeInterval?
+        var usageSeconds: TimeInterval?
+        var outcome: Outcome = .pending
+        /// Filled when the process exits, which may be just after `fetch`
+        /// returned; nil when it never launched.
+        var exit: Exit?
+    }
+
+    struct AttemptLog: Equatable, Sendable {
+        var finishedAt: Date
+        var attempts: [CandidateAttempt]
+        /// Candidates skipped because the shared 25s budget ran out.
+        var untriedCount: Int
+    }
+
+    /// The latest completed probe, if any ran since launch. Memory only.
+    static func lastAttemptLog() -> AttemptLog? {
+        lastAttempts.snapshot()
+    }
+
+    static let lastAttempts = AttemptLogStore()
+
+    final class AttemptRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var attempts: [CandidateAttempt] = []
+
+        func begin(_ candidate: Binary) -> Int {
+            lock.withLock {
+                attempts.append(CandidateAttempt(
+                    template: candidate.template ?? "VIBE_USAGE_CLAUDE_BIN 指定的程序",
+                    kind: candidate.kind
+                ))
+                return attempts.count - 1
+            }
+        }
+
+        func update(_ slot: Int, _ body: (inout CandidateAttempt) -> Void) {
+            lock.withLock {
+                guard attempts.indices.contains(slot) else { return }
+                body(&attempts[slot])
+            }
+        }
+
+        func snapshot() -> [CandidateAttempt] { lock.withLock { attempts } }
+    }
+
+    /// Holds the latest completed probe's record. One shared instance backs
+    /// the app; tests pass their own so parallel probes cannot interleave.
+    final class AttemptLogStore: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorder: AttemptRecorder?
+        private var finishedAt = Date.distantPast
+        private var untried = 0
+
+        func store(_ recorder: AttemptRecorder, untried: Int) {
+            lock.withLock {
+                self.recorder = recorder
+                self.finishedAt = Date()
+                self.untried = untried
+            }
+        }
+
+        func snapshot() -> AttemptLog? {
+            let (recorder, finishedAt, untried) = lock.withLock { (self.recorder, self.finishedAt, self.untried) }
+            guard let recorder else { return nil }
+            return AttemptLog(finishedAt: finishedAt, attempts: recorder.snapshot(), untriedCount: untried)
+        }
+    }
+
+    /// `claude --version` for each candidate, run only when the user copies a
+    /// diagnostic summary. Only a dotted version number is kept.
+    static func versions(of candidates: [Binary], timeout: TimeInterval = 5) async -> [URL: String] {
+        await withTaskGroup(of: (URL, String?).self) { group in
+            for candidate in candidates {
+                group.addTask {
+                    let output = try? await CLIProcessRunner.run(
+                        executable: candidate.url.path,
+                        arguments: ["--version"],
+                        environment: childEnvironment(),
+                        timeout: timeout
+                    )
+                    guard let output, !output.timedOut, output.exitCode == 0 else {
+                        return (candidate.url, nil)
+                    }
+                    return (candidate.url, versionNumber(in: output.stdout))
+                }
+            }
+            var out: [URL: String] = [:]
+            for await (url, version) in group {
+                if let version { out[url] = version }
+            }
+            return out
+        }
+    }
+
+    static func versionNumber(in text: String) -> String? {
+        guard let range = text.range(of: #"[0-9]+(\.[0-9]+){1,3}"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(text[range])
+    }
+
+    /// How many `$PATH` directories hold an executable `claude` (duplicates
+    /// of one directory counted once). Only the count leaves this function.
+    static func pathClaudeCount(
+        fileManager: FileManager = .default,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Int {
+        var seen: Set<String> = []
+        for directory in (environment["PATH"] ?? "").split(separator: ":", omittingEmptySubsequences: true) {
+            let path = URL(fileURLWithPath: String(directory)).appendingPathComponent("claude")
+                .standardizedFileURL.path
+            if fileManager.isExecutableFile(atPath: path) { seen.insert(path) }
+        }
+        return seen.count
     }
 
     // MARK: - Binary discovery
 
-    struct Binary: Equatable {
+    struct Binary: Equatable, Sendable {
         var url: URL
         var kind: Kind
         /// Human-readable origin, for debug logs and the opt-in live test.
         var label: String
+        /// The location as a fixed template for the diagnostic summary
+        /// (e.g. `~/.local/bin/claude`, `PATH 第 3 项中的 claude`). Never the
+        /// real path: user, folder and project names stay on this Mac.
+        var template: String? = nil
     }
 
-    enum Kind: Equatable {
+    enum Kind: Equatable, Sendable {
         /// A standalone Claude Code install the user manages.
         case cli
         /// The copy Claude Desktop ships and updates itself.
@@ -179,39 +341,42 @@ enum ClaudeUsageProbe {
     ) -> [Binary] {
         var out: [Binary] = []
 
-        func append(_ url: URL, _ kind: Kind, _ label: String) {
+        func append(_ url: URL, _ kind: Kind, _ label: String, _ template: String) {
             guard fileManager.isExecutableFile(atPath: url.path) else { return }
             guard !out.contains(where: { $0.url == url }) else { return }
-            out.append(Binary(url: url, kind: kind, label: label))
+            out.append(Binary(url: url, kind: kind, label: label, template: template))
         }
 
         if let override = environment["VIBE_USAGE_CLAUDE_BIN"], !override.isEmpty {
             append(
                 URL(fileURLWithPath: (override as NSString).expandingTildeInPath),
                 .override,
-                "自定义路径"
+                "自定义路径",
+                "VIBE_USAGE_CLAUDE_BIN 指定的程序"
             )
         }
 
         let home = fileManager.homeDirectoryForCurrentUser
-        append(home.appendingPathComponent(".local/bin/claude"), .cli, "Claude Code CLI")
-        append(home.appendingPathComponent(".claude/local/claude"), .cli, "Claude Code CLI")
+        append(home.appendingPathComponent(".local/bin/claude"), .cli, "Claude Code CLI",
+               "~/.local/bin/claude")
+        append(home.appendingPathComponent(".claude/local/claude"), .cli, "Claude Code CLI",
+               "~/.claude/local/claude")
         for path in ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"] {
-            append(URL(fileURLWithPath: path), .cli, "Claude Code CLI")
+            append(URL(fileURLWithPath: path), .cli, "Claude Code CLI", path)
         }
         // Version-manager installs (nvm / fnm / volta / asdf shims) live only on
         // the user's PATH. `QuotaProductRegistry` already treats a PATH `claude`
         // as "installed", so skipping it here left Settings reporting 已检测
         // while the probe could never find the binary — Anthropic's own
         // installer and Homebrew both go on PATH too.
-        for directory in (environment["PATH"] ?? "")
-            .split(separator: ":", omittingEmptySubsequences: true) {
+        for (index, directory) in (environment["PATH"] ?? "")
+            .split(separator: ":", omittingEmptySubsequences: true).enumerated() {
             append(URL(fileURLWithPath: String(directory)).appendingPathComponent("claude"),
-                .cli, "Claude Code CLI")
+                .cli, "Claude Code CLI", "PATH 第 \(index + 1) 项中的 claude")
         }
 
         for bundled in desktopBundledBinaries(fileManager: fileManager, home: home) {
-            append(bundled.url, .desktop, bundled.label)
+            append(bundled.url, .desktop, bundled.label, bundled.template ?? "Claude 桌面端内置")
         }
 
         return out
@@ -249,10 +414,16 @@ enum ClaudeUsageProbe {
         for version in versions.sorted(by: { isVersion($0.lastPathComponent, newerThan: $1.lastPathComponent) }) {
             let binary = version.appendingPathComponent("claude.app/Contents/MacOS/claude")
             if fileManager.isExecutableFile(atPath: binary.path) {
+                // The directory name is Desktop's version number; anything
+                // else is not repeated into the diagnostic template.
+                let name = version.lastPathComponent
+                let isVersionNumber = name.range(of: #"^[0-9]+(\.[0-9]+)*$"#,
+                                                 options: .regularExpression) != nil
                 out.append(Binary(
                     url: binary,
                     kind: .desktop,
-                    label: "Claude Desktop 内置 \(version.lastPathComponent)"
+                    label: "Claude Desktop 内置 \(name)",
+                    template: isVersionNumber ? "Claude 桌面端内置 \(name)" : "Claude 桌面端内置"
                 ))
                 // Old Desktop-managed versions are retained for rollback, but
                 // share the same account and protocol. Retrying every retained
@@ -263,7 +434,8 @@ enum ClaudeUsageProbe {
 
         let legacy = URL(fileURLWithPath: "/Applications/Claude.app/Contents/Resources/bin/claude")
         if fileManager.isExecutableFile(atPath: legacy.path) {
-            out.append(Binary(url: legacy, kind: .desktop, label: "Claude Desktop 内置"))
+            out.append(Binary(url: legacy, kind: .desktop, label: "Claude Desktop 内置",
+                              template: "Claude 桌面端内置（旧版位置）"))
         }
         return out
     }
@@ -331,7 +503,12 @@ enum ClaudeUsageProbe {
         ["subtype": "get_usage", "skip_behaviors": true]
     }
 
-    private static func run(candidate: Binary, timeout: TimeInterval) async throws -> Data {
+    private static func run(
+        candidate: Binary,
+        timeout: TimeInterval,
+        recorder: AttemptRecorder,
+        slot: Int
+    ) async throws -> Data {
         let process = Process()
         process.executableURL = candidate.url
         process.arguments = processArguments
@@ -345,12 +522,21 @@ enum ClaudeUsageProbe {
         // Discard stderr rather than piping it: nothing reads it, and an
         // unread pipe that fills up would block the child mid-response.
         process.standardError = FileHandle.nullDevice
+        // Exit status for the diagnostic record; it may arrive after this
+        // function returned, which is fine — the record is read later.
+        process.terminationHandler = { finished in
+            let exit: CandidateAttempt.Exit = finished.terminationReason == .uncaughtSignal
+                ? .signal(finished.terminationStatus)
+                : .code(finished.terminationStatus)
+            recorder.update(slot) { $0.exit = exit }
+        }
 
         do {
             try process.run()
         } catch {
             throw ProbeError.launchFailed(error.localizedDescription)
         }
+        let launchedAt = ProcessInfo.processInfo.systemUptime
         let control = ProcessControl()
         control.register(process)
         defer {
@@ -371,7 +557,17 @@ enum ClaudeUsageProbe {
                         try await exchange(
                             stdin: stdin.fileHandleForWriting,
                             stdout: stdout.fileHandleForReading
-                        )
+                        ) { step in
+                            let elapsed = ProcessInfo.processInfo.systemUptime - launchedAt
+                            recorder.update(slot) { attempt in
+                                switch step {
+                                case .initialized:
+                                    attempt.initializeSeconds = elapsed
+                                case .answered:
+                                    attempt.usageSeconds = elapsed - (attempt.initializeSeconds ?? 0)
+                                }
+                            }
+                        }
                     }
                     group.addTask {
                         try await Task.sleep(nanoseconds: timeoutNanoseconds)
@@ -410,7 +606,13 @@ enum ClaudeUsageProbe {
         return pipe
     }
 
-    private static func exchange(stdin: FileHandle, stdout: FileHandle) async throws -> Data {
+    enum ExchangeStep: Sendable { case initialized, answered }
+
+    private static func exchange(
+        stdin: FileHandle,
+        stdout: FileHandle,
+        onStep: @Sendable (ExchangeStep) -> Void = { _ in }
+    ) async throws -> Data {
         func send(_ object: [String: Any]) throws {
             guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
             do {
@@ -437,6 +639,7 @@ enum ClaudeUsageProbe {
 
             switch response["request_id"] as? String {
             case "vibe-init" where !sentUsageRequest:
+                onStep(.initialized)
                 sentUsageRequest = true
                 try send([
                     "type": "control_request",
@@ -444,6 +647,7 @@ enum ClaudeUsageProbe {
                     "request": usageRequest,
                 ])
             case "vibe-usage":
+                onStep(.answered)
                 // Close stdin so the binary shuts down on its own (exit 0)
                 // instead of being terminated by the deferred cleanup.
                 try? stdin.close()
@@ -511,7 +715,7 @@ enum ClaudeUsageProbe {
     ///
     /// `CLAUDE_CONFIG_DIR` is deliberately preserved: users who relocate
     /// `~/.claude` need the probe to read the same profile they use.
-    private static func childEnvironment() -> [String: String] {
+    static func childEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         for key in [
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",

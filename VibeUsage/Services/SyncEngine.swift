@@ -31,15 +31,26 @@ actor SyncEngine {
 
     private var isRunning = false
 
-    func runSync() async -> Result<String, SyncError> {
+    /// How a run ended, for the local sync history: a fixed result and reason
+    /// derived from the process, never its text.
+    struct Outcome: Equatable, Sendable {
+        var result: SyncRecord.Result
+        var reason: SyncRecord.Reason?
+        var httpStatus: Int?
+        var exitCode: Int32?
+    }
+
+    /// `outcome` is nil only when no sync actually ran (one was already in
+    /// flight), so that call leaves no history entry.
+    func runSync() async -> (result: Result<String, SyncError>, outcome: Outcome?) {
         guard !isRunning else {
-            return .success("同步已在进行中")
+            return (.success("同步已在进行中"), nil)
         }
         isRunning = true
         defer { isRunning = false }
 
         guard let runtime = RuntimeDetector.detect() else {
-            return .failure(.noRuntime)
+            return (.failure(.noRuntime), Outcome(result: .launchFailed, reason: .runtimeMissing))
         }
 
         var env = ProcessInfo.processInfo.environment
@@ -55,10 +66,49 @@ actor SyncEngine {
                 executable: runtime.executablePath, arguments: runtime.syncArguments,
                 environment: env, timeout: 120
             )
-            return interpret(output)
+            return (interpret(output), Self.outcome(for: output))
         } catch {
-            return .failure(.processFailure(error.localizedDescription))
+            return (
+                .failure(.processFailure(error.localizedDescription)),
+                Outcome(result: .launchFailed, reason: .processNotStarted)
+            )
         }
+    }
+
+    /// Classifies a finished run into fixed codes. The process text is only
+    /// *matched* here; nothing from it is kept except an HTTP status number.
+    nonisolated static func outcome(for output: CLIProcessRunner.Output) -> Outcome {
+        if output.timedOut { return Outcome(result: .timedOut) }
+        if output.exitCode == 0 { return Outcome(result: .success) }
+
+        let text = output.stdout + "\n" + output.stderr
+        // The CLI prints its own Chinese hint; older builds and the app's
+        // earlier check used the English markers.
+        if text.contains("API Key 无效") || text.contains("Invalid API key")
+            || text.contains("UNAUTHORIZED") {
+            return Outcome(result: .failure, reason: .keyRejected)
+        }
+        // `npx` / `bun x` failing to fetch or start the package: the CLI's own
+        // code never ran (e.g. the npm registry is unreachable).
+        let lowered = text.lowercased()
+        if lowered.contains("npm err!") || lowered.contains("npm error")
+            || lowered.range(of: #"(?m)^error: .*(registry|manifest|vibe-usage)"#,
+                             options: .regularExpression) != nil {
+            return Outcome(result: .launchFailed, reason: .launcherFailed)
+        }
+        if let match = text.range(of: #"HTTP [1-5][0-9]{2}"#, options: .regularExpression),
+           let status = Int(text[match].dropFirst(5)) {
+            return Outcome(result: .failure, reason: .serverError, httpStatus: status)
+        }
+        let networkMarkers = ["ECONNREFUSED", "ENOTFOUND", "ETIMEDOUT", "ECONNRESET",
+                              "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "socket hang up"]
+        if networkMarkers.contains(where: text.contains) {
+            return Outcome(result: .failure, reason: .network)
+        }
+        if text.contains("RangeError: Invalid string length") || text.contains("node:internal/readline") {
+            return Outcome(result: .failure, reason: .cliCrashed)
+        }
+        return Outcome(result: .failure, reason: .other, exitCode: output.exitCode)
     }
 
     func interpret(_ output: CLIProcessRunner.Output) -> Result<String, SyncError> {
