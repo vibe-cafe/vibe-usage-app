@@ -135,7 +135,7 @@ final class RateLimitCoordinator {
            !Task.isCancelled,
            appState.codexRateLimitEnabled,
            currentSnapshot(.codex)?.status != .ok {
-            upsert(cached)
+            upsert(carryingLiveFailure(cached))
         }
 
         do {
@@ -246,7 +246,7 @@ final class RateLimitCoordinator {
         if let cached = await loadClaudeCache(),
            !Task.isCancelled,
            appState.claudeRateLimitEnabled {
-            upsertIfNewer(cached)
+            upsertIfNewer(carryingLiveFailure(cached))
         }
 
         do {
@@ -746,6 +746,18 @@ final class RateLimitCoordinator {
         else { return }
         current.liveFailure = reason
         upsert(current)
+    }
+
+    /// A cache paint replaces the numbers and their source, not the verdict on
+    /// the live read: the card keeps the current reason until a live read
+    /// succeeds or reports again. Otherwise a refresh cancelled right after
+    /// the paint (panel closed) would erase a failure that never recovered.
+    private func carryingLiveFailure(_ cached: ProviderRateLimit) -> ProviderRateLimit {
+        var painted = cached
+        if painted.liveFailure == nil {
+            painted.liveFailure = currentSnapshot(cached.provider)?.liveFailure
+        }
+        return painted
     }
 
     /// A successful read whose numbers were not newer than the card's still

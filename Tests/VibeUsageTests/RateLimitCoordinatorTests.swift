@@ -1097,4 +1097,64 @@ struct RateLimitCoordinatorTests {
         #expect(appState.rateLimits.first { $0.provider == .codex } == nil)
         #expect(appState.rateLimits.first { $0.provider == .opencodeGo } == nil)
     }
+
+    /// A newer disk cache replaces the numbers but not the open verdict on the
+    /// live read: if the probe is then cancelled (panel closed), the card must
+    /// still say live reading has not recovered.
+    @Test @MainActor
+    func cachePaintKeepsTheReasonUntilLiveReadingAnswers() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: {
+                if calls.next() == 1 { throw ClaudeUsageProbe.ProbeError.timedOut }
+                throw CancellationError()
+            },
+            loadClaudeCache: {
+                var cached = self.claudeSnapshot(
+                    utilization: calls.count == 0 ? 10 : 20,
+                    dataAsOf: Date(timeIntervalSince1970: calls.count == 0 ? 100 : 200)
+                )
+                cached.source = .cache
+                return cached
+            }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .claudeCode } }
+
+        await coordinator.refreshClaude()
+        #expect(card()?.fiveHour?.utilization == 10)
+        #expect(card()?.liveFailure == .claudeTimedOut)
+
+        // Newer cache painted, then the probe is cancelled.
+        await coordinator.refreshClaude()
+        #expect(card()?.fiveHour?.utilization == 20)
+        #expect(card()?.source == .cache)
+        #expect(card()?.liveFailure == .claudeTimedOut)
+    }
+
+    /// The Codex paint over an error card keeps that card's reason too.
+    @Test @MainActor
+    func codexCachePaintKeepsTheReasonOfTheErrorCard() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        appState.rateLimits = [ProviderRateLimit(provider: .codex, status: .retryableError,
+                                                 liveFailure: .endpointUnreachable)]
+        let cached = ProviderRateLimit(provider: .codex, sevenDay: RateLimitWindow(utilization: 30),
+                                       status: .ok, dataAsOf: Date(timeIntervalSince1970: 100),
+                                       source: .cache)
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: { throw CancellationError() },
+            loadCodexCache: { cached },
+            readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData) }
+        )
+
+        await coordinator.refreshCodex()
+
+        let card = appState.rateLimits.first { $0.provider == .codex }
+        #expect(card?.sevenDay?.utilization == 30)
+        #expect(card?.liveFailure == .endpointUnreachable)
+    }
 }
