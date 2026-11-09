@@ -455,11 +455,23 @@ final class AppState {
 
     // MARK: - Sync
 
-    func triggerSync() async {
+    func triggerSync(_ trigger: SyncRecord.Trigger = .manual) async {
         guard syncStatus != .syncing else { return }
         syncStatus = .syncing
 
-        let result = await SyncEngine.shared.runSync()
+        let startedAt = Date()
+        let (result, outcome) = await SyncEngine.shared.runSync()
+        if let outcome {
+            syncHistory.append(SyncRecord(
+                startedAt: startedAt,
+                duration: Date().timeIntervalSince(startedAt),
+                trigger: trigger,
+                result: outcome.result,
+                reason: outcome.reason,
+                httpStatus: outcome.httpStatus,
+                exitCode: outcome.exitCode
+            ))
+        }
 
         switch result {
         case .success(let message):
@@ -837,8 +849,8 @@ final class AppState {
     }
 
     private func startScheduler() {
-        syncScheduler = SyncScheduler(interval: 1800) { [weak self] in
-            await self?.triggerSync()
+        syncScheduler = SyncScheduler(interval: Self.syncInterval) { [weak self] in
+            await self?.triggerSync(.scheduled)
         }
         syncScheduler?.start()
 
@@ -846,6 +858,16 @@ final class AppState {
         // the CLI subprocess (which can take 5-30s, or hang if Node isn't installed).
         Task { await fetchUsageData() }
         // Run the full sync (CLI upload + fetch) in parallel as the background pipeline.
-        Task { await triggerSync() }
+        Task { await triggerSync(.launch) }
     }
+
+    // MARK: - Diagnostics
+
+    static let syncInterval: TimeInterval = 1800
+
+    /// Whether the 30-minute timer is running (it starts once a Key exists).
+    var isSyncSchedulerRunning: Bool { syncScheduler != nil }
+
+    /// The app's own record of recent syncs, newest first (at most 10).
+    var syncHistory: SyncHistoryStore { SyncHistoryStore(defaults: quotaDefaults) }
 }

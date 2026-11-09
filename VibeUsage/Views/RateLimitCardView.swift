@@ -187,7 +187,7 @@ struct RateLimitCardView: View {
     /// Our own fixed copy for every reason a live read can report. Nothing
     /// here interpolates process output, server text, or a path — only the
     /// product name and an HTTP status number.
-    static func liveFailureText(
+    nonisolated static func liveFailureText(
         _ failure: ProviderRateLimit.LiveFailure,
         provider: ProviderRateLimit.Provider
     ) -> String {
