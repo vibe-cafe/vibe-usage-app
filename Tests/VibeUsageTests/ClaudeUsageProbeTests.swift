@@ -368,6 +368,104 @@ struct ClaudeUsageProbeTests {
         #expect(Date().timeIntervalSince(started) < 2)
     }
 
+    /// The real `fetch` path, end to end with synthetic executables: each way
+    /// a candidate can fail reaches the card as its own fixed reason.
+    @Test
+    func realProbeFailuresMapToFixedReasons() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-failures-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func script(_ name: String, _ body: String, executable: Bool = true) throws -> ClaudeUsageProbe.Binary {
+            let url = directory.appendingPathComponent(name)
+            try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: executable ? 0o755 : 0o644], ofItemAtPath: url.path)
+            return ClaudeUsageProbe.Binary(url: url, kind: .override, label: name)
+        }
+
+        func reason(_ candidate: ClaudeUsageProbe.Binary, timeout: TimeInterval) async -> ProviderRateLimit.LiveFailure? {
+            do {
+                _ = try await ClaudeUsageProbe.fetch(candidates: [candidate], timeout: timeout)
+                return nil
+            } catch {
+                return (error as? any RateLimitFetchError)?.liveFailure
+            }
+        }
+
+        #expect(await reason(try script("not-executable", "exit 0", executable: false), timeout: 5)
+            == .claudeLaunchFailed)
+        // Reads the initialize request first, so the probe's write never hits
+        // a closed pipe (SIGPIPE), then exits without answering.
+        #expect(await reason(try script("exits", "read -r line\nexit 3"), timeout: 5) == .claudeNoResponse)
+        #expect(await reason(try script("hangs", "while IFS= read -r line; do :; done"), timeout: 0.5)
+            == .claudeTimedOut)
+        // A reply without windows (rate_limits: null on a subscription account).
+        let nullLimits = #"{"type":"control_response","response":{"request_id":"vibe-usage","subtype":"success","response":{"rate_limits":null,"subscription_type":"pro"}}}"#
+        let initReply = #"{"type":"control_response","response":{"request_id":"vibe-init","subtype":"success","response":{}}}"#
+        #expect(await reason(try script("no-windows", """
+            read -r line
+            echo '\(initReply)'
+            read -r line
+            echo '\(nullLimits)'
+            """), timeout: 5) == .claudeNoWindows)
+
+        do {
+            _ = try await ClaudeUsageProbe.fetch(candidates: [], timeout: 5)
+            Issue.record("expected noBinary")
+        } catch {
+            #expect((error as? any RateLimitFetchError)?.liveFailure == .claudeBinaryNotFound)
+        }
+    }
+
+    /// Writing to a child that already exited must fail with an error, never
+    /// SIGPIPE: the signal's default action kills the whole app (and, here,
+    /// the test runner — which is how CI first caught it).
+    @Test
+    func requestPipeFailsWithAnErrorInsteadOfSIGPIPE() throws {
+        let pipe = ClaudeUsageProbe.makeRequestPipe()
+        try pipe.fileHandleForReading.close()
+        #expect(throws: (any Error).self) {
+            try pipe.fileHandleForWriting.write(contentsOf: Data("{}\n".utf8))
+        }
+    }
+
+    /// A Claude Code that exits at once without reading its stdin (e.g. it
+    /// rejects a flag) yields the fixed 「没有响应」 reason, whichever side of
+    /// the race the request write lands on. Repeated to cover both orders.
+    @Test
+    func childExitingBeforeReadingYieldsAFixedReason() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-exits-early-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("claude")
+        try Data("#!/bin/sh\nexec 0<&-\nexit 2\n".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        let candidate = ClaudeUsageProbe.Binary(url: url, kind: .override, label: "exits early")
+
+        for _ in 0..<20 {
+            do {
+                _ = try await ClaudeUsageProbe.fetch(candidates: [candidate], timeout: 5)
+                Issue.record("expected a failure")
+            } catch {
+                #expect((error as? any RateLimitFetchError)?.liveFailure == .claudeNoResponse)
+            }
+        }
+    }
+
+    /// The launch error's own text (which can hold a path) is not part of the
+    /// reason; only the classification survives.
+    @Test @MainActor
+    func launchErrorTextIsNotCarriedIntoTheReason() {
+        let error = ClaudeUsageProbe.ProbeError.allCandidatesFailed(
+            ClaudeUsageProbe.ProbeError.launchFailed("/Users/张三/-Users-张三-Coding-秘密项目/claude sk-ant-abc123")
+        )
+        let text = RateLimitCardView.liveFailureText(try! #require(error.liveFailure), provider: .claudeCode)
+        #expect(text == "Claude 启动失败")
+    }
+
     @Test
     func iso8601IsParsedWithAndWithoutFractionalSeconds() {
         #expect(ClaudeUsageProbe.parseISO8601("2026-07-28T05:20:00.420021+00:00") != nil)

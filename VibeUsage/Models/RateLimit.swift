@@ -13,6 +13,13 @@ enum RateLimitFetchFailure: Equatable {
 
 protocol RateLimitFetchError: Error {
     var rateLimitFailure: RateLimitFetchFailure { get }
+    /// The fixed, user-facing reason for this failure, when the adapter can
+    /// name one. Never derived from raw process or server text.
+    var liveFailure: ProviderRateLimit.LiveFailure? { get }
+}
+
+extension RateLimitFetchError {
+    var liveFailure: ProviderRateLimit.LiveFailure? { nil }
 }
 
 /// One subscription window (e.g. 5h or 7d) for a single provider.
@@ -234,4 +241,66 @@ struct ProviderRateLimit: Equatable, Identifiable {
     }
 
     var emptyReason: EmptyReason?
+
+    /// Which kind of source produced the numbers. Set by the producer, so a
+    /// card can say whether it is showing a live reading or something older
+    /// (only after a live read failed — a successful live card stays quiet).
+    enum Source: Equatable {
+        /// This refresh's live read: the Claude Code probe, the Codex /
+        /// OpenCode Go endpoint, or the CLI reporting `source: "live"`.
+        case live
+        /// A stored earlier result: Codex's last-live snapshot file, Claude
+        /// Code's `cachedUsageUtilization`, or the CLI's quota cache.
+        case cache
+        /// Claude Desktop's `plan-usage-history.json` samples.
+        case desktopRecord
+        /// A local log: Codex session JSONL, or the CLI reporting
+        /// `source: "local"` (Grok's own log).
+        case localLog
+    }
+
+    var source: Source?
+
+    /// Why the most recent live read failed, as one of our own fixed reasons.
+    ///
+    /// Only the classification travels: never the child process's stderr, an
+    /// HTTP body, or the CLI's free-text `message`, any of which can carry
+    /// paths, account names, or credentials. A successful live read produces a
+    /// snapshot without it, so the annotation clears itself.
+    enum LiveFailure: Equatable {
+        // Claude Code probe (`ClaudeUsageProbe.ProbeError`)
+        case claudeBinaryNotFound
+        case claudeLaunchFailed
+        case claudeTimedOut
+        case claudeNoResponse
+        case claudeNoWindows
+        // Native HTTP providers (Codex, OpenCode Go)
+        case credentialsNotFound
+        case credentialsRejected
+        case endpointTimedOut
+        case endpointUnreachable
+        case endpointHTTPStatus(Int)
+        case endpointUnrecognized
+        // Shared quota CLI
+        case cliRuntimeMissing
+        case cliTimedOut
+        case cliFailed
+        case cliUnrecognizedOutput
+        case cliSchemaMismatch
+        case cliNoResult
+        /// The CLI reported `retryable_error` (and may have answered from its
+        /// cache). Its specific reason exists only as free text, which the app
+        /// deliberately does not display.
+        case cliReportedFailure
+    }
+
+    var liveFailure: LiveFailure?
+}
+
+extension ProviderRateLimit.LiveFailure {
+    /// URLSession failures split only into "timed out" and "could not
+    /// connect"; the error's own description is not kept.
+    static func transport(_ error: Error) -> Self {
+        (error as? URLError)?.code == .timedOut ? .endpointTimedOut : .endpointUnreachable
+    }
 }

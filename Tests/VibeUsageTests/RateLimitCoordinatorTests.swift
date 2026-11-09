@@ -251,7 +251,10 @@ struct RateLimitCoordinatorTests {
         )
         await coordinator.refreshCodex()
         #expect(sessionReads == 1)
-        #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == local)
+        // The newer session reading wins and carries why the endpoint failed.
+        var expected = local
+        expected.liveFailure = .endpointTimedOut
+        #expect(appState.rateLimits.first(where: { $0.provider == .codex }) == expected)
         #expect(!appState.isCodexRateLimitRefreshing)
     }
 
@@ -308,6 +311,8 @@ struct RateLimitCoordinatorTests {
             appState.rateLimits.first(where: { $0.provider == .codex })?.status
                 == .retryableError
         )
+        #expect(appState.rateLimits.first { $0.provider == .codex }?.liveFailure
+            == .endpointUnreachable)
     }
 
     /// A machine with no Codex OAuth login and no sessions is an absent feature,
@@ -615,16 +620,18 @@ struct RateLimitCoordinatorTests {
         #expect(!appState.isClaudeRateLimitRefreshing)
     }
 
-    /// A failing probe must not blank a card the cache already filled — the
-    /// 「数据截至」 footer states the age honestly instead.
+    /// A failing probe must not blank a card the cache already filled. The
+    /// card keeps the cached numbers and only gains the fixed reason, so it
+    /// can say it is showing the cache and why live did not replace it.
     @Test @MainActor
     func claudeProbeFailureKeepsCachedSnapshot() async {
         let appState = AppState()
         appState.claudeRateLimitEnabled = true
-        let cached = claudeSnapshot(
+        var cached = claudeSnapshot(
             utilization: 10,
             dataAsOf: Date(timeIntervalSince1970: 100)
         )
+        cached.source = .cache
 
         let coordinator = RateLimitCoordinator(
             appState: appState,
@@ -634,7 +641,9 @@ struct RateLimitCoordinatorTests {
 
         await coordinator.refreshClaude()
 
-        #expect(appState.rateLimits.first { $0.provider == .claudeCode } == cached)
+        var expected = cached
+        expected.liveFailure = .claudeBinaryNotFound
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode } == expected)
     }
 
     @Test @MainActor
@@ -681,6 +690,8 @@ struct RateLimitCoordinatorTests {
             appState.rateLimits.first(where: { $0.provider == .claudeCode })?.status
                 == .retryableError
         )
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.liveFailure
+            == .claudeTimedOut)
     }
 
     /// Not having Claude installed is expected on many Macs: the card stays
@@ -701,6 +712,9 @@ struct RateLimitCoordinatorTests {
         #expect(
             appState.rateLimits.first(where: { $0.provider == .claudeCode })?.status == .noData
         )
+        // Still no retry button, but the card can name what is missing.
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.liveFailure
+            == .claudeBinaryNotFound)
     }
 
     /// An API-key / Bedrock session has no plan quota at all. That is a
@@ -728,5 +742,419 @@ struct RateLimitCoordinatorTests {
         // reading like "Claude isn't installed" (issue #39).
         #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.emptyReason
             == .sessionWithoutPlanLimits)
+    }
+
+    // MARK: - Live failure reasons (diagnostics 1a)
+
+    /// Every distinguishable probe failure reaches the card as its own fixed
+    /// reason, including the wrapped "every candidate failed" form `fetch`
+    /// actually throws.
+    @Test @MainActor
+    func claudeProbeFailuresCarryTheirFixedReason() async {
+        let cases: [(ClaudeUsageProbe.ProbeError, ProviderRateLimit.LiveFailure)] = [
+            (.allCandidatesFailed(ClaudeUsageProbe.ProbeError.timedOut), .claudeTimedOut),
+            (.allCandidatesFailed(ClaudeUsageProbe.ProbeError.launchFailed("x")), .claudeLaunchFailed),
+            (.allCandidatesFailed(ClaudeUsageProbe.ProbeError.noResponse), .claudeNoResponse),
+            (.allCandidatesFailed(ClaudeUsageProbe.ProbeError.limitsUnavailable), .claudeNoWindows),
+            (.allCandidatesFailed(CocoaError(.fileWriteUnknown)), .claudeNoResponse),
+        ]
+        for (error, reason) in cases {
+            let appState = AppState()
+            appState.claudeRateLimitEnabled = true
+            let coordinator = RateLimitCoordinator(
+                appState: appState,
+                fetchClaudeLive: { throw error },
+                loadClaudeCache: { nil }
+            )
+
+            await coordinator.refreshClaude()
+
+            let card = appState.rateLimits.first { $0.provider == .claudeCode }
+            #expect(card?.status == .retryableError)
+            #expect(card?.liveFailure == reason)
+        }
+    }
+
+    /// The annotation describes the latest live read only: once a live read
+    /// succeeds, the new snapshot carries no reason and the note disappears.
+    @Test @MainActor
+    func successfulClaudeProbeClearsAnEarlierFailureReason() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let live = ProviderRateLimit(
+            provider: .claudeCode,
+            fiveHour: RateLimitWindow(utilization: 42),
+            status: .ok,
+            fetchedAt: Date(timeIntervalSince1970: 200),
+            dataAsOf: Date(timeIntervalSince1970: 200),
+            source: .live
+        )
+        let cache: @MainActor () async -> ProviderRateLimit? = {
+            var cached = self.claudeSnapshot(utilization: 10, dataAsOf: Date(timeIntervalSince1970: 100))
+            cached.source = .cache
+            return cached
+        }
+
+        let failing = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.timedOut },
+            loadClaudeCache: cache
+        )
+        await failing.refreshClaude()
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.liveFailure == .claudeTimedOut)
+
+        let succeeding = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: { live },
+            loadClaudeCache: cache
+        )
+        await succeeding.refreshClaude()
+        #expect(appState.rateLimits.first { $0.provider == .claudeCode } == live)
+    }
+
+    /// Codex's JSONL fallback is shown as before, now labelled as a local log
+    /// with the endpoint's fixed reason.
+    @Test @MainActor
+    func codexFallbackRecordsWhyTheLiveEndpointFailed() async {
+        let appState = AppState()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                throw CodexUsageAPI.FetchError.transport(URLError(.timedOut))
+            },
+            loadCodexCache: { nil },
+            readCodexFallback: {
+                ProviderRateLimit(
+                    provider: .codex,
+                    sevenDay: RateLimitWindow(utilization: 30),
+                    status: .ok,
+                    fetchedAt: Date(),
+                    dataAsOf: Date(),
+                    source: .localLog
+                )
+            }
+        )
+
+        await coordinator.refreshCodex()
+
+        let card = appState.rateLimits.first { $0.provider == .codex }
+        #expect(card?.status == .ok)
+        #expect(card?.sevenDay?.utilization == 30)
+        #expect(card?.source == .localLog)
+        #expect(card?.liveFailure == .endpointTimedOut)
+    }
+
+    @Test @MainActor
+    func codexHTTPFailureKeepsOnlyTheStatusNumber() async {
+        let appState = AppState()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: { throw CodexUsageAPI.FetchError.badResponse(502) },
+            loadCodexCache: { nil },
+            readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData) }
+        )
+
+        await coordinator.refreshCodex()
+
+        #expect(appState.rateLimits.first { $0.provider == .codex }?.liveFailure
+            == .endpointHTTPStatus(502))
+    }
+
+    @Test @MainActor
+    func openCodeGoFailureCarriesItsReasonAndKeepsAnEarlierReading() async {
+        let (appState, defaults, suite) = selectedAppState([.opencodeGo])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchOpenCodeGoLive: {
+                throw OpenCodeGoUsageAPI.FetchError.transport(URLError(.cannotConnectToHost))
+            }
+        )
+
+        await coordinator.refreshOpenCodeGo()
+        #expect(appState.rateLimits.first { $0.provider == .opencodeGo }?.status == .retryableError)
+        #expect(appState.rateLimits.first { $0.provider == .opencodeGo }?.liveFailure
+            == .endpointUnreachable)
+
+        // An earlier live reading stays on screen and is marked, not replaced.
+        let earlier = ProviderRateLimit(
+            provider: .opencodeGo,
+            meters: [RateLimitMeter(id: "rolling", label: "5h", window: RateLimitWindow(utilization: 12))],
+            status: .ok,
+            fetchedAt: Date(timeIntervalSince1970: 100),
+            dataAsOf: Date(timeIntervalSince1970: 100),
+            source: .live
+        )
+        appState.rateLimits = [earlier]
+        await coordinator.refreshOpenCodeGo()
+        let card = appState.rateLimits.first { $0.provider == .opencodeGo }
+        #expect(card?.meters == earlier.meters)
+        #expect(card?.source == .live)
+        #expect(card?.liveFailure == .endpointUnreachable)
+    }
+
+    /// A whole-envelope CLI failure maps to a fixed reason per card; the
+    /// process output inside `processFailure` never reaches the snapshot.
+    @Test @MainActor
+    func cliEnvelopeFailureCarriesAFixedReason() async {
+        let (appState, defaults, suite) = selectedAppState([.kimiCode])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in
+            throw CLIBridge.CLIError.timeout
+        })
+
+        await coordinator.refreshCLIProviders([.kimiCode])
+
+        let card = appState.rateLimits.first { $0.provider == .kimiCode }
+        #expect(card?.status == .retryableError)
+        #expect(card?.liveFailure == .cliTimedOut)
+    }
+
+    /// A CLI `retryable_error` keeps an earlier reading (existing behavior) and
+    /// marks it; a missing product result does the same with its own reason.
+    @Test @MainActor
+    func cliFailureMarksAnEarlierReadingInsteadOfReplacingIt() async {
+        let (appState, defaults, suite) = selectedAppState([.kimiCode, .grok])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func reading(_ provider: ProviderRateLimit.Provider) -> ProviderRateLimit {
+            ProviderRateLimit(
+                provider: provider,
+                meters: [RateLimitMeter(id: "weekly", label: "7d", window: RateLimitWindow(utilization: 40))],
+                status: .ok,
+                fetchedAt: Date(timeIntervalSince1970: 100),
+                dataAsOf: Date(timeIntervalSince1970: 100),
+                source: .live
+            )
+        }
+        appState.rateLimits = [reading(.kimiCode), reading(.grok)]
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in
+            [ProviderRateLimit(provider: .kimiCode, status: .retryableError, fetchedAt: Date(), source: .live)]
+        })
+
+        await coordinator.refreshCLIProviders([.kimiCode, .grok])
+
+        let kimi = appState.rateLimits.first { $0.provider == .kimiCode }
+        let grok = appState.rateLimits.first { $0.provider == .grok }
+        #expect(kimi?.meters == reading(.kimiCode).meters)
+        #expect(kimi?.liveFailure == .cliReportedFailure)
+        #expect(grok?.meters == reading(.grok).meters)
+        #expect(grok?.liveFailure == .cliNoResult)
+    }
+
+    // MARK: - A later success clears the reason (#60 review)
+
+    /// Counts fetch calls from inside `@MainActor` fetch closures.
+    @MainActor
+    private final class Calls {
+        private(set) var count = 0
+        func next() -> Int {
+            count += 1
+            return count
+        }
+    }
+
+    /// Grok dates its reading by the log event, so re-reading the same event
+    /// is not "newer". A successful read must still clear the earlier failure;
+    /// only a CLI cache answer keeps the card marked.
+    @Test @MainActor
+    func sameTimestampCLISuccessClearsAnEarlierFailureReason() async {
+        let (appState, defaults, suite) = selectedAppState([.grok])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let event = Date(timeIntervalSince1970: 100)
+        let reading = ProviderRateLimit(
+            provider: .grok,
+            meters: [RateLimitMeter(id: "credits", label: "7d", window: RateLimitWindow(utilization: 30))],
+            status: .ok,
+            fetchedAt: event,
+            dataAsOf: event,
+            source: .localLog
+        )
+        var cached = reading
+        cached.source = .cache
+        cached.liveFailure = .cliReportedFailure
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in
+            switch calls.next() {
+            case 2: throw CLIBridge.CLIError.timeout
+            case 4: return [cached]
+            default: return [reading]
+            }
+        })
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .grok } }
+
+        await coordinator.refreshCLIProviders([.grok])
+        #expect(card() == reading)
+
+        await coordinator.refreshCLIProviders([.grok])
+        #expect(card()?.meters == reading.meters)
+        #expect(card()?.liveFailure == .cliTimedOut)
+
+        await coordinator.refreshCLIProviders([.grok])
+        #expect(card() == reading)
+
+        await coordinator.refreshCLIProviders([.grok])
+        #expect(card()?.meters == reading.meters)
+        #expect(card()?.liveFailure == .cliReportedFailure)
+        #expect(calls.count == 4)
+    }
+
+    @Test @MainActor
+    func codexSuccessAfterFailureClearsTheReason() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let live = ProviderRateLimit(
+            provider: .codex,
+            sevenDay: RateLimitWindow(utilization: 30),
+            status: .ok,
+            fetchedAt: Date(timeIntervalSince1970: 100),
+            dataAsOf: Date(timeIntervalSince1970: 100),
+            source: .live
+        )
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                if calls.next() == 2 { throw CodexUsageAPI.FetchError.badResponse(503) }
+                return live
+            },
+            loadCodexCache: { nil },
+            readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData) }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .codex } }
+
+        await coordinator.refreshCodex()
+        #expect(card() == live)
+        await coordinator.refreshCodex()
+        #expect(card()?.sevenDay == live.sevenDay)
+        #expect(card()?.liveFailure == .endpointHTTPStatus(503))
+        await coordinator.refreshCodex()
+        #expect(card() == live)
+    }
+
+    @Test @MainActor
+    func openCodeGoSuccessAfterFailureClearsTheReason() async {
+        let (appState, defaults, suite) = selectedAppState([.opencodeGo])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let live = ProviderRateLimit(
+            provider: .opencodeGo,
+            meters: [RateLimitMeter(id: "rolling", label: "5h", window: RateLimitWindow(utilization: 12))],
+            status: .ok,
+            fetchedAt: Date(timeIntervalSince1970: 100),
+            dataAsOf: Date(timeIntervalSince1970: 100),
+            source: .live
+        )
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchOpenCodeGoLive: {
+                if calls.next() == 2 {
+                    throw OpenCodeGoUsageAPI.FetchError.transport(URLError(.timedOut))
+                }
+                return live
+            }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .opencodeGo } }
+
+        await coordinator.refreshOpenCodeGo()
+        #expect(card() == live)
+        await coordinator.refreshOpenCodeGo()
+        #expect(card()?.meters == live.meters)
+        #expect(card()?.liveFailure == .endpointTimedOut)
+        await coordinator.refreshOpenCodeGo()
+        #expect(card() == live)
+    }
+
+    /// Turning monitoring off removes the card; a failure that arrives after
+    /// that must not write a card (or a reason) back.
+    @Test @MainActor
+    func lateFailureAfterMonitoringOffDoesNotWriteBack() async {
+        let (appState, defaults, suite) = selectedAppState([.codex, .opencodeGo])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        appState.rateLimits = [
+            ProviderRateLimit(provider: .codex, sevenDay: RateLimitWindow(utilization: 30),
+                              status: .ok, source: .live),
+            ProviderRateLimit(provider: .opencodeGo,
+                              meters: [RateLimitMeter(id: "rolling", label: "5h", window: RateLimitWindow(utilization: 12))],
+                              status: .ok, source: .live),
+        ]
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                await appState.setQuotaProductSelected(.codex, selected: false)
+                throw CodexUsageAPI.FetchError.transport(URLError(.timedOut))
+            },
+            loadCodexCache: { nil },
+            readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData) },
+            fetchOpenCodeGoLive: {
+                await appState.setQuotaProductSelected(.opencodeGo, selected: false)
+                throw OpenCodeGoUsageAPI.FetchError.transport(URLError(.timedOut))
+            }
+        )
+
+        await coordinator.refreshCodex()
+        await coordinator.refreshOpenCodeGo()
+
+        #expect(appState.rateLimits.first { $0.provider == .codex } == nil)
+        #expect(appState.rateLimits.first { $0.provider == .opencodeGo } == nil)
+    }
+
+    /// A newer disk cache replaces the numbers but not the open verdict on the
+    /// live read: if the probe is then cancelled (panel closed), the card must
+    /// still say live reading has not recovered.
+    @Test @MainActor
+    func cachePaintKeepsTheReasonUntilLiveReadingAnswers() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchClaudeLive: {
+                if calls.next() == 1 { throw ClaudeUsageProbe.ProbeError.timedOut }
+                throw CancellationError()
+            },
+            loadClaudeCache: {
+                var cached = self.claudeSnapshot(
+                    utilization: calls.count == 0 ? 10 : 20,
+                    dataAsOf: Date(timeIntervalSince1970: calls.count == 0 ? 100 : 200)
+                )
+                cached.source = .cache
+                return cached
+            }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .claudeCode } }
+
+        await coordinator.refreshClaude()
+        #expect(card()?.fiveHour?.utilization == 10)
+        #expect(card()?.liveFailure == .claudeTimedOut)
+
+        // Newer cache painted, then the probe is cancelled.
+        await coordinator.refreshClaude()
+        #expect(card()?.fiveHour?.utilization == 20)
+        #expect(card()?.source == .cache)
+        #expect(card()?.liveFailure == .claudeTimedOut)
+    }
+
+    /// The Codex paint over an error card keeps that card's reason too.
+    @Test @MainActor
+    func codexCachePaintKeepsTheReasonOfTheErrorCard() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        appState.rateLimits = [ProviderRateLimit(provider: .codex, status: .retryableError,
+                                                 liveFailure: .endpointUnreachable)]
+        let cached = ProviderRateLimit(provider: .codex, sevenDay: RateLimitWindow(utilization: 30),
+                                       status: .ok, dataAsOf: Date(timeIntervalSince1970: 100),
+                                       source: .cache)
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: { throw CancellationError() },
+            loadCodexCache: { cached },
+            readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData) }
+        )
+
+        await coordinator.refreshCodex()
+
+        let card = appState.rateLimits.first { $0.provider == .codex }
+        #expect(card?.sevenDay?.utilization == 30)
+        #expect(card?.liveFailure == .endpointUnreachable)
     }
 }

@@ -136,6 +136,58 @@ struct QuotaCLIBridgeTests {
         #expect(snapshot.meters.first?.window.utilization == 30)
     }
 
+    /// The CLI's `source` is carried through, and a cached answer (which the
+    /// CLI returns only after a live `retryable_error`) is marked as a failed
+    /// live read. The free-text `message` is never used.
+    @Test
+    func carriesTheCLISourceAndMarksCachedAnswers() throws {
+        func product(_ id: String, source: String) -> QuotaCLIBridge.Product {
+            QuotaCLIBridge.Product(
+                id: id,
+                status: "ok",
+                meters: [.init(id: "weekly", label: "7d", utilization: 10)],
+                fetchedAt: Date(timeIntervalSince1970: 100),
+                source: source,
+                message: "Kimi usage request failed for vbu_secret at /Users/张三"
+            )
+        }
+        let snapshots = try QuotaCLIBridge.snapshots(from: .init(schemaVersion: 1, products: [
+            product("kimi-code", source: "cache"),
+            product("grok", source: "local"),
+            product("zcode", source: "live"),
+            product("cursor", source: "something-new"),
+        ]))
+        func snapshot(_ provider: ProviderRateLimit.Provider) -> ProviderRateLimit? {
+            snapshots.first { $0.provider == provider }
+        }
+
+        #expect(snapshot(.kimiCode)?.source == .cache)
+        #expect(snapshot(.kimiCode)?.liveFailure == .cliReportedFailure)
+        #expect(snapshot(.grok)?.source == .localLog)
+        #expect(snapshot(.grok)?.liveFailure == nil)
+        #expect(snapshot(.zCode)?.source == .live)
+        #expect(snapshot(.zCode)?.liveFailure == nil)
+        #expect(snapshot(.cursor)?.source == nil)
+    }
+
+    @Test
+    func envelopeFailuresMapToFixedReasonsWithoutProcessOutput() throws {
+        #expect(QuotaCLIBridge.liveFailure(for: CLIBridge.CLIError.noRuntime) == .cliRuntimeMissing)
+        #expect(QuotaCLIBridge.liveFailure(for: CLIBridge.CLIError.timeout) == .cliTimedOut)
+        #expect(QuotaCLIBridge.liveFailure(
+            for: CLIBridge.CLIError.processFailure("npm ERR! /Users/张三/.npm vbu_secret")
+        ) == .cliFailed)
+        #expect(QuotaCLIBridge.liveFailure(
+            for: QuotaCLIBridge.ProtocolError.unsupportedSchema(2)
+        ) == .cliSchemaMismatch)
+        #expect(QuotaCLIBridge.liveFailure(
+            for: QuotaCLIBridge.ProtocolError.unknownProduct("future")
+        ) == .cliUnrecognizedOutput)
+        var decodingError: Error?
+        do { _ = try QuotaCLIBridge.decode("not json") } catch { decodingError = error }
+        #expect(QuotaCLIBridge.liveFailure(for: try #require(decodingError)) == .cliUnrecognizedOutput)
+    }
+
     @Test
     func exposesZCodeKeyOnlyWhenZCodeIsExplicitlyRequested() {
         let kimiOnly = QuotaCLIBridge.quotaEnvironment(

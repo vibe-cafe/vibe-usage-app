@@ -49,7 +49,8 @@ enum CodexRateLimitReader {
                 // The JSONL event timestamp: how old these numbers really are.
                 // `.distantPast` fallbacks (mtime lookup failed) stay nil so the
                 // card doesn't render a nonsense 「数据截至 55 年前」.
-                dataAsOf: snapshot.recordedAt > .distantPast ? snapshot.recordedAt : nil
+                dataAsOf: snapshot.recordedAt > .distantPast ? snapshot.recordedAt : nil,
+                source: .localLog
             )
         }
         return .init(provider: .codex, status: .noData, fetchedAt: now)

@@ -41,6 +41,16 @@ enum CodexUsageAPI {
             case .transport, .badResponse, .unparseable: return .transient
             }
         }
+
+        var liveFailure: ProviderRateLimit.LiveFailure? {
+            switch self {
+            case .notLoggedIn: return .credentialsNotFound
+            case .unauthorized: return .credentialsRejected
+            case let .transport(error): return .transport(error)
+            case let .badResponse(status): return .endpointHTTPStatus(status)
+            case .unparseable: return .endpointUnrecognized
+            }
+        }
     }
 
     // MARK: - Fetch
@@ -286,7 +296,8 @@ enum CodexUsageAPI {
             resetCreditsCount: resetCredits,
             emptyReason: (fiveHour == nil && sevenDay == nil)
                 ? (reportsLimitReached(rateLimit) ? .limitReached : .noWindow)
-                : nil
+                : nil,
+            source: .live
         )
     }
 
@@ -485,7 +496,8 @@ enum CodexUsageAPI {
             // expired says nothing about enforcement — that placeholder should
             // read as "no data", and the live result corrects it in ~1s anyway.
             fiveHourNotEnforced: cached.fiveHour == nil && cached.fiveHourNotEnforced,
-            resetCreditsCount: cached.resetCreditsCount
+            resetCreditsCount: cached.resetCreditsCount,
+            source: .cache
         )
     }
 }

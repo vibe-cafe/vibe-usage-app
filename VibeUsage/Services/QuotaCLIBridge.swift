@@ -153,8 +153,38 @@ enum QuotaCLIBridge {
                 status: status,
                 fetchedAt: product.fetchedAt,
                 dataAsOf: product.dataAsOf,
-                emptyReason: product.emptyReason == "noWindow" ? .noWindow : nil
+                emptyReason: product.emptyReason == "noWindow" ? .noWindow : nil,
+                source: source(product.source),
+                // The CLI answers from its cache only after the live read
+                // reported `retryable_error`, so a cached answer is itself the
+                // statement that live failed. Its reason exists only in
+                // `message`, free text that is never shown.
+                liveFailure: product.source == "cache" ? .cliReportedFailure : nil
             )
+        }
+    }
+
+    /// The CLI's `source` field. Unknown values stay nil rather than guessed.
+    static func source(_ raw: String) -> ProviderRateLimit.Source? {
+        switch raw {
+        case "live": return .live
+        case "cache": return .cache
+        case "local": return .localLog
+        default: return nil
+        }
+    }
+
+    /// Fixed reason for a whole-envelope failure. Process output (stderr, a
+    /// launcher message) is deliberately dropped: it is free text that can
+    /// carry paths or credentials.
+    static func liveFailure(for error: Error) -> ProviderRateLimit.LiveFailure {
+        switch error {
+        case CLIBridge.CLIError.noRuntime: return .cliRuntimeMissing
+        case CLIBridge.CLIError.timeout: return .cliTimedOut
+        case CLIBridge.CLIError.processFailure: return .cliFailed
+        case ProtocolError.unsupportedSchema: return .cliSchemaMismatch
+        case ProtocolError.unknownProduct, is DecodingError: return .cliUnrecognizedOutput
+        default: return .cliFailed
         }
     }
 

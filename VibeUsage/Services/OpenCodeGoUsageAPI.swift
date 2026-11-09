@@ -45,6 +45,18 @@ enum OpenCodeGoUsageAPI {
             case .transport, .badResponse, .unparseable: return .transient
             }
         }
+
+        var liveFailure: ProviderRateLimit.LiveFailure? {
+            switch self {
+            case .notLoggedIn: return .credentialsNotFound
+            case .unauthorized: return .credentialsRejected
+            // A definitive answer, carried as `EmptyReason.notEntitled`.
+            case .notSubscribed: return nil
+            case let .transport(error): return .transport(error)
+            case let .badResponse(status): return .endpointHTTPStatus(status)
+            case .unparseable: return .endpointUnrecognized
+            }
+        }
     }
 
     // MARK: - Credentials
@@ -284,7 +296,8 @@ enum OpenCodeGoUsageAPI {
             dataAsOf: now,
             // The endpoint answered, so "no window" is its own statement rather
             // than a read failure — the same distinction Codex's card makes.
-            emptyReason: meters.isEmpty ? .noWindow : nil
+            emptyReason: meters.isEmpty ? .noWindow : nil,
+            source: .live
         )
     }
 
