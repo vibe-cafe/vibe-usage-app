@@ -474,10 +474,18 @@ final class RateLimitCoordinator {
                 && (provider != .zCode || zCodeContextIsCurrent) {
                 if let snapshot = snapshots.first(where: { $0.provider == provider }) {
                     if snapshot.status == .ok {
-                        // A CLI cache answer that is not newer than the card
-                        // still says this live read failed.
+                        // Which numbers to show is decided by age, as before.
+                        // Whether this read succeeded is decided separately:
+                        // a live/local answer clears an earlier reason even
+                        // when it carries the same timestamp (Grok re-reading
+                        // the same log event), while a CLI cache answer still
+                        // marks the card as showing older data.
                         if !upsertIfNewer(snapshot) {
-                            markLiveFailure(snapshot.liveFailure, on: provider)
+                            if let reason = snapshot.liveFailure {
+                                markLiveFailure(reason, on: provider)
+                            } else {
+                                clearLiveFailure(on: provider)
+                            }
                         }
                     } else if snapshot.status != .retryableError
                                 || currentSnapshot(provider)?.status != .ok
@@ -737,6 +745,17 @@ final class RateLimitCoordinator {
               current.liveFailure != reason
         else { return }
         current.liveFailure = reason
+        upsert(current)
+    }
+
+    /// A successful read whose numbers were not newer than the card's still
+    /// proves the source works again, so the earlier reason must go.
+    private func clearLiveFailure(on provider: ProviderRateLimit.Provider) {
+        guard var current = currentSnapshot(provider),
+              current.status == .ok,
+              current.liveFailure != nil
+        else { return }
+        current.liveFailure = nil
         upsert(current)
     }
 
