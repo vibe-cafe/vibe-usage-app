@@ -77,6 +77,31 @@ enum DiagnosticCollector {
             .sorted()
     }
 
+    /// `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` —
+    /// the file whose `env` Claude Code applies after spawn (where
+    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` silently empties the card).
+    static func claudeSettingsURL(environment: [String: String]) -> URL {
+        if let custom = environment["CLAUDE_CONFIG_DIR"], !custom.isEmpty {
+            return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
+                .appendingPathComponent("settings.json")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/settings.json")
+    }
+
+    /// Key names of the file's `env` object, conventional names only. Values
+    /// and every other part of the file are ignored.
+    static func claudeSettingsEnv(at url: URL) -> DiagnosticSummary.SettingsEnv {
+        guard let data = try? Data(contentsOf: url) else { return .missing }
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .unreadable
+        }
+        let env = root["env"] as? [String: Any] ?? [:]
+        return .names(env.keys
+            .filter { $0.range(of: #"^[A-Z0-9_]+$"#, options: .regularExpression) != nil }
+            .sorted())
+    }
+
     // MARK: Runtime and CLI
 
     static func runtime() async -> DiagnosticSummary.Runtime? {
@@ -197,7 +222,9 @@ extension AppState {
                 },
                 pathClaudeCount: ClaudeUsageProbe.pathClaudeCount(),
                 configDirSet: !(environment["CLAUDE_CONFIG_DIR"] ?? "").isEmpty,
-                environmentNames: DiagnosticCollector.claudeEnvironmentNames(environment)
+                environmentNames: DiagnosticCollector.claudeEnvironmentNames(environment),
+                settingsEnv: DiagnosticCollector.claudeSettingsEnv(
+                    at: DiagnosticCollector.claudeSettingsURL(environment: environment))
             )
         )
         return DiagnosticSummary.render(input)

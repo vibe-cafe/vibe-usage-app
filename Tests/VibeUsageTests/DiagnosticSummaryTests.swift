@@ -95,6 +95,20 @@ struct DiagnosticSummaryTests {
         #expect(DiagnosticRedactor.redact(ordinary, homeDirectory: Self.chineseHome) == ordinary)
     }
 
+    /// The long-string rule must not eat the variable names the report lists
+    /// on purpose (this one is exactly 40 characters), while a long mixed-case
+    /// token next to it is still masked.
+    @Test
+    func longVariableNamesSurviveButLongTokensDoNot() {
+        let line = "settings.json 的 env：CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC、ANTHROPIC_DEFAULT_SONNET_MODEL_FOR_LONG_CONTEXT_X · abcDEF0123456789abcDEF0123456789abcDEF0123"
+        let redacted = DiagnosticRedactor.redact(line, homeDirectory: Self.chineseHome)
+        #expect("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".count == 40)
+        #expect(redacted.contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"))
+        #expect(redacted.contains("ANTHROPIC_DEFAULT_SONNET_MODEL_FOR_LONG_CONTEXT_X"))
+        #expect(!redacted.contains("abcDEF0123456789"))
+        #expect(redacted.hasSuffix("· ***"))
+    }
+
     // MARK: - Whole report
 
     /// Even if a hostile value slipped into a whitelisted field by mistake,
@@ -145,6 +159,7 @@ struct DiagnosticSummaryTests {
         #expect(report.contains("HTTPS_PROXY 有"))
         #expect(report.contains("Claude 配额读取超时"))
         #expect(report.contains("被信号 15 结束"))
+        #expect(report.contains("App 进程环境中 ANTHROPIC/CLAUDE 开头的：ANTHROPIC_AUTH_TOKEN"))
     }
 
     @Test
@@ -189,29 +204,58 @@ struct DiagnosticSummaryTests {
             .contains("CLI：版本检查超时（20s） · 最近一次同步：CLI 启动阶段失败（未找到 Node.js 或 Bun）"))
     }
 
-    /// 「最近一次」 means the newest record. An older Key rejection must not
-    /// stand in for a newer run that timed out or never launched, and a
-    /// timeout is not claimed to mean the CLI started (npx may have stalled
-    /// in the package download).
+    /// 「最近一次」 means the newest record, and only a success or an explicit
+    /// rejection says anything about the Key (the wording all three clients
+    /// share). An older rejection must not stand in for a newer run, and a
+    /// timeout is not claimed to mean the CLI started (npx may have stalled in
+    /// the package download).
     @Test
-    func newestUnfinishedSyncIsNotReplacedByAnOlderRejection() {
-        let rejected = SyncRecord(startedAt: Date(timeIntervalSince1970: 100), duration: 2,
-                                  trigger: .scheduled, result: .failure, reason: .keyRejected)
-        let newest: [SyncRecord] = [
-            SyncRecord(startedAt: Date(timeIntervalSince1970: 200), duration: 120.1,
-                       trigger: .scheduled, result: .timedOut),
-            SyncRecord(startedAt: Date(timeIntervalSince1970: 200), duration: 21,
-                       trigger: .scheduled, result: .launchFailed, reason: .launcherFailed),
+    func accountLineFollowsOnlyTheNewestRecord() {
+        func record(_ result: SyncRecord.Result, _ reason: SyncRecord.Reason? = nil,
+                    at time: TimeInterval = 200, status: Int? = nil) -> SyncRecord {
+            SyncRecord(startedAt: Date(timeIntervalSince1970: time), duration: 3, trigger: .scheduled,
+                       result: result, reason: reason, httpStatus: status)
+        }
+        let olderRejection = record(.failure, .keyRejected, at: 100)
+        let olderSuccess = record(.success, at: 100)
+
+        func accountLine(_ records: [SyncRecord]) -> String? {
+            DiagnosticSummary.render(input(syncRecords: records))
+                .components(separatedBy: "\n").first { $0.hasPrefix("账号：") }
+        }
+
+        #expect(accountLine([record(.success), olderRejection])
+            == "账号：已配置 Key · 最近一次同步未被服务器拒绝 · 设备标签 \(DiagnosticCollector.deviceTag(hostname: Self.fakeHostname))")
+        #expect(accountLine([record(.failure, .keyRejected), olderSuccess])?
+            .contains("最近一次同步被服务器拒绝（Key 无效）") == true)
+
+        let undecided: [SyncRecord] = [
+            record(.timedOut),
+            record(.launchFailed, .launcherFailed),
+            record(.failure, .network),
+            record(.failure, .serverError, status: 502),
+            record(.failure, .other),
         ]
-        let expectedCLI = [
-            "CLI：启动正常 · 0.14.11 · 最近一次同步：超时，120s 时被 App 结束",
-            "CLI：启动正常 · 0.14.11 · 最近一次同步：CLI 启动阶段失败（下载或启动 CLI 失败）",
+        for latest in undecided {
+            for older in [olderRejection, olderSuccess] {
+                let line = accountLine([latest, older]) ?? ""
+                #expect(line.contains("无法从最近一次同步判断 Key 是否被拒"), "\(latest.result) \(String(describing: latest.reason))")
+                #expect(!line.contains("被服务器拒绝"))
+            }
+        }
+
+        // No record: the Key verdict is omitted.
+        #expect(accountLine([])?.contains("Key 是否") == false)
+        #expect(accountLine([])?.contains("服务器拒绝") == false)
+
+        // The CLI line reuses the record's own classification.
+        let expectedCLI: [(SyncRecord, String)] = [
+            (record(.timedOut), "CLI：启动正常 · 0.14.11 · 最近一次同步：超时，120s 时被 App 结束"),
+            (record(.launchFailed, .launcherFailed),
+             "CLI：启动正常 · 0.14.11 · 最近一次同步：CLI 启动阶段失败（下载或启动 CLI 失败）"),
         ]
-        for (latest, cliLine) in zip(newest, expectedCLI) {
-            let report = DiagnosticSummary.render(input(syncRecords: [latest, rejected]))
-            #expect(report.contains("账号：已配置 Key · 最近一次同步没有完成，无法判断 Key 是否被拒 · 设备标签 "))
-            #expect(!report.contains("最近一次同步被服务器拒绝"))
-            #expect(!report.contains("最近一次同步未被服务器拒绝"))
+        for (latest, cliLine) in expectedCLI {
+            let report = DiagnosticSummary.render(input(syncRecords: [latest, olderRejection]))
             #expect(report.contains(cliLine))
             #expect(!report.contains("CLI 已启动"))
         }
@@ -316,16 +360,62 @@ struct DiagnosticSummaryTests {
                          ("Claude 桌面端内置 2.1.300", "2.1.300")],
             pathClaudeCount: 2,
             configDirSet: false,
-            environmentNames: []
+            environmentNames: [],
+            settingsEnv: .names(["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"])
         ), now: Date(timeIntervalSince1970: 1_793_000_000))
 
+        // The historical attempts carry no version; today's versions sit in
+        // their own section, so an update since then is not blamed.
         #expect(lines == [
             "Claude 读取记录（最近一次，2 分钟前）：",
-            "  候选 1：~/.local/bin/claude · 2.1.316 · initialize 0.9s · get_usage 未完成 · Claude 配额读取超时 · 被信号 15 结束",
-            "  候选 2：PATH 第 2 项中的 claude · 版本未知 · Claude 启动失败",
-            "  候选 3：Claude 桌面端内置 2.1.300 · 2.1.300 · 未尝试（总时限已用完）",
-            "  PATH 上的 claude：2 个 · CLAUDE_CONFIG_DIR 未设 · ANTHROPIC/CLAUDE 开头的变量（只列名字）：无",
+            "  候选 1：~/.local/bin/claude · initialize 0.9s · get_usage 未完成 · Claude 配额读取超时 · 被信号 15 结束",
+            "  候选 2：PATH 第 2 项中的 claude · Claude 启动失败",
+            "  另有 1 个候选因总时限用完未尝试",
+            "当前安装的 Claude Code（生成报告时检查，按查找顺序）：",
+            "  1. ~/.local/bin/claude · 2.1.316",
+            "  2. PATH 第 2 项中的 claude · 版本未知",
+            "  3. Claude 桌面端内置 2.1.300 · 2.1.300",
+            "  PATH 上的 claude：2 个 · CLAUDE_CONFIG_DIR 未设",
+            "  相关变量（只列名字）：App 进程环境中 ANTHROPIC/CLAUDE 开头的：无 · settings.json 的 env：CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
         ])
+    }
+
+    /// Only the key names of `settings.json` `env` are read; values and the
+    /// rest of the file never are. Synthetic files only.
+    @Test
+    func settingsEnvYieldsKeyNamesOnly() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-settings-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("settings.json")
+        let settings: [String: Any] = [
+            "env": [
+                "ANTHROPIC_AUTH_TOKEN": Self.fakeAnthropicKey,
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                "HTTPS_PROXY": Self.proxyWithCredentials,
+                "odd key \(Self.fakeEmail)": "x",
+            ],
+            "statusLine": ["command": Self.spacedPath + "/statusline.sh"],
+        ]
+        try JSONSerialization.data(withJSONObject: settings).write(to: url)
+
+        let env = DiagnosticCollector.claudeSettingsEnv(at: url)
+        #expect(env == .names(["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "HTTPS_PROXY"]))
+
+        let lines = DiagnosticSummary.claudeLines(DiagnosticSummary.Claude(
+            log: nil, candidates: [], pathClaudeCount: 0, configDirSet: true,
+            environmentNames: [], settingsEnv: env
+        ), now: Date()).joined(separator: "\n")
+        expectClean(DiagnosticRedactor.redact(lines, homeDirectory: Self.chineseHome))
+        #expect(lines.contains("settings.json 的 env：ANTHROPIC_AUTH_TOKEN、CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC、HTTPS_PROXY"))
+
+        #expect(DiagnosticCollector.claudeSettingsEnv(at: directory.appendingPathComponent("missing.json")) == .missing)
+        try Data("{ not json".utf8).write(to: url)
+        #expect(DiagnosticCollector.claudeSettingsEnv(at: url) == .unreadable)
+
+        #expect(DiagnosticCollector.claudeSettingsURL(environment: ["CLAUDE_CONFIG_DIR": directory.path])
+            == directory.appendingPathComponent("settings.json"))
     }
 
     // MARK: - Sync history

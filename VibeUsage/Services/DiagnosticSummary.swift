@@ -69,13 +69,24 @@ enum DiagnosticSummary {
     }
 
     struct Claude {
+        /// The latest completed probe. It carries no version: what is
+        /// installed now may differ (Claude Code updates itself often).
         var log: ClaudeUsageProbe.AttemptLog?
-        /// Current discovery, in probe order, with `claude --version`.
+        /// Current discovery, in probe order, with `claude --version` run
+        /// when the summary is built.
         var candidates: [(template: String, version: String?)]
         var pathClaudeCount: Int
         var configDirSet: Bool
         /// Names of `ANTHROPIC*` / `CLAUDE*` variables in the app's environment.
         var environmentNames: [String]
+        /// Key names of Claude's `settings.json` `env` (never values).
+        var settingsEnv: SettingsEnv = .missing
+    }
+
+    enum SettingsEnv: Equatable {
+        case names([String])
+        case missing
+        case unreadable
     }
 
     static let proxyVariableNames = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"]
@@ -141,16 +152,17 @@ enum DiagnosticSummary {
 
     static func accountText(_ input: Input) -> String {
         var parts = [input.keyConfigured ? "已配置 Key" : "未配置 Key"]
-        // Only the newest record speaks for 「最近一次」. An older rejection
-        // must not stand in for a newer run that never got an answer.
+        // Only the newest record speaks for 「最近一次」, and only two outcomes
+        // say anything about the Key: a success (accepted) and an explicit
+        // rejection. A timeout, launch failure, network or server error says
+        // nothing either way. Same wording on CLI, Mac and Windows.
         if let last = input.syncRecords.first {
-            switch last.result {
-            case .timedOut, .launchFailed:
-                parts.append("最近一次同步没有完成，无法判断 Key 是否被拒")
-            case .success, .failure:
-                parts.append(last.reason == .keyRejected
-                    ? "最近一次同步被服务器拒绝（Key 无效）"
-                    : "最近一次同步未被服务器拒绝")
+            if last.result == .success {
+                parts.append("最近一次同步未被服务器拒绝")
+            } else if last.reason == .keyRejected {
+                parts.append("最近一次同步被服务器拒绝（Key 无效）")
+            } else {
+                parts.append("无法从最近一次同步判断 Key 是否被拒")
             }
         }
         parts.append("设备标签 \(input.deviceTag)")
@@ -218,36 +230,42 @@ enum DiagnosticSummary {
         if let log = claude.log {
             lines.append("Claude 读取记录（最近一次，\(age(from: log.finishedAt, to: now))）：")
             if log.attempts.isEmpty {
-                lines.append("  未找到 Claude Code 程序")
+                lines.append("  当时未找到 Claude Code 程序")
             }
-            let versions = Dictionary(claude.candidates.map { ($0.template, $0.version) },
-                                      uniquingKeysWith: { first, _ in first })
             for (index, attempt) in log.attempts.enumerated() {
-                lines.append("  候选 \(index + 1)：\(attemptText(attempt, version: versions[attempt.template] ?? nil))")
+                lines.append("  候选 \(index + 1)：\(attemptText(attempt))")
             }
-            let tried = Set(log.attempts.map(\.template))
-            var next = log.attempts.count + 1
-            for candidate in claude.candidates where !tried.contains(candidate.template) {
-                let note = log.untriedCount > 0 ? "未尝试（总时限已用完）" : "未尝试（前面的候选已回答）"
-                lines.append("  候选 \(next)：\(candidate.template) · \(candidate.version ?? "版本未知") · \(note)")
-                next += 1
+            if log.untriedCount > 0 {
+                lines.append("  另有 \(log.untriedCount) 个候选因总时限用完未尝试")
             }
         } else {
             lines.append("Claude 读取记录：本次启动后还没有读取过")
-            for (index, candidate) in claude.candidates.enumerated() {
-                lines.append("  候选 \(index + 1)：\(candidate.template) · \(candidate.version ?? "版本未知")")
-            }
-            if claude.candidates.isEmpty { lines.append("  未找到 Claude Code 程序") }
         }
-        var settings = "  PATH 上的 claude：\(claude.pathClaudeCount) 个 · CLAUDE_CONFIG_DIR \(claude.configDirSet ? "已设" : "未设")"
-        settings += " · ANTHROPIC/CLAUDE 开头的变量（只列名字）："
-        settings += claude.environmentNames.isEmpty ? "无" : claude.environmentNames.joined(separator: "、")
-        lines.append(settings)
+
+        lines.append("当前安装的 Claude Code（生成报告时检查，按查找顺序）：")
+        if claude.candidates.isEmpty {
+            lines.append("  未找到 Claude Code 程序")
+        }
+        for (index, candidate) in claude.candidates.enumerated() {
+            lines.append("  \(index + 1). \(candidate.template) · \(candidate.version ?? "版本未知")")
+        }
+        lines.append("  PATH 上的 claude：\(claude.pathClaudeCount) 个 · CLAUDE_CONFIG_DIR \(claude.configDirSet ? "已设" : "未设")")
+
+        let processNames = claude.environmentNames.isEmpty ? "无" : claude.environmentNames.joined(separator: "、")
+        let settingsNames: String
+        switch claude.settingsEnv {
+        case let .names(names): settingsNames = names.isEmpty ? "无" : names.joined(separator: "、")
+        case .missing: settingsNames = "文件不存在"
+        case .unreadable: settingsNames = "无法解析"
+        }
+        lines.append("  相关变量（只列名字）：App 进程环境中 ANTHROPIC/CLAUDE 开头的：\(processNames) · settings.json 的 env：\(settingsNames)")
         return lines
     }
 
-    static func attemptText(_ attempt: ClaudeUsageProbe.CandidateAttempt, version: String?) -> String {
-        var parts = [attempt.template, version ?? "版本未知"]
+    /// One historical attempt. No version: the binary may have been updated
+    /// since, and today's version must not be pinned on yesterday's failure.
+    static func attemptText(_ attempt: ClaudeUsageProbe.CandidateAttempt) -> String {
+        var parts = [attempt.template]
         if attempt.outcome == .failed(.claudeLaunchFailed) {
             parts.append("Claude 启动失败")
             return parts.joined(separator: " · ")
