@@ -419,6 +419,42 @@ struct ClaudeUsageProbeTests {
         }
     }
 
+    /// Writing to a child that already exited must fail with an error, never
+    /// SIGPIPE: the signal's default action kills the whole app (and, here,
+    /// the test runner — which is how CI first caught it).
+    @Test
+    func requestPipeFailsWithAnErrorInsteadOfSIGPIPE() throws {
+        let pipe = ClaudeUsageProbe.makeRequestPipe()
+        try pipe.fileHandleForReading.close()
+        #expect(throws: (any Error).self) {
+            try pipe.fileHandleForWriting.write(contentsOf: Data("{}\n".utf8))
+        }
+    }
+
+    /// A Claude Code that exits at once without reading its stdin (e.g. it
+    /// rejects a flag) yields the fixed 「没有响应」 reason, whichever side of
+    /// the race the request write lands on. Repeated to cover both orders.
+    @Test
+    func childExitingBeforeReadingYieldsAFixedReason() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claude-exits-early-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("claude")
+        try Data("#!/bin/sh\nexec 0<&-\nexit 2\n".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        let candidate = ClaudeUsageProbe.Binary(url: url, kind: .override, label: "exits early")
+
+        for _ in 0..<20 {
+            do {
+                _ = try await ClaudeUsageProbe.fetch(candidates: [candidate], timeout: 5)
+                Issue.record("expected a failure")
+            } catch {
+                #expect((error as? any RateLimitFetchError)?.liveFailure == .claudeNoResponse)
+            }
+        }
+    }
+
     /// The launch error's own text (which can hold a path) is not part of the
     /// reason; only the classification survives.
     @Test @MainActor

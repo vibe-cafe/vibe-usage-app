@@ -338,7 +338,7 @@ enum ClaudeUsageProbe {
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         process.environment = childEnvironment()
 
-        let stdin = Pipe()
+        let stdin = makeRequestPipe()
         let stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
@@ -397,10 +397,28 @@ enum ClaudeUsageProbe {
         }
     }
 
+    /// The pipe the probe writes requests into. Its write end is marked
+    /// `F_SETNOSIGPIPE` (macOS): a child that exits before reading — Claude
+    /// Code rejecting its flags at startup, or a child the deadline already
+    /// killed before the request task got scheduled — makes the write fail
+    /// with `EPIPE` instead of raising SIGPIPE, whose default action would
+    /// terminate the whole app. Scoped to this descriptor rather than
+    /// ignoring SIGPIPE process-wide.
+    static func makeRequestPipe() -> Pipe {
+        let pipe = Pipe()
+        _ = fcntl(pipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+        return pipe
+    }
+
     private static func exchange(stdin: FileHandle, stdout: FileHandle) async throws -> Data {
         func send(_ object: [String: Any]) throws {
             guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
-            try stdin.write(contentsOf: data + Data("\n".utf8))
+            do {
+                try stdin.write(contentsOf: data + Data("\n".utf8))
+            } catch {
+                // The child is no longer reading: it never answered.
+                throw ProbeError.noResponse
+            }
         }
 
         try send([
