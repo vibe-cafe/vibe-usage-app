@@ -113,6 +113,8 @@ a release machine needs neither rotation nor a new signing identity.
   publishing: an installed 0.7.4 updates to the final notarized build through
   a local feed, and that build then updates once more to a local-only test
   build, proving that the newly signed app can still receive later updates.
+  It also checks that an installed 0.5.3 pointed at the same local feed is
+  offered 0.7.4, not 0.7.5.
 - Installs of 0.5.3 (build 24) and earlier still embed the Sparkle key retired
   in 0.5.4, so for them a 0.7.5+ update changes both the key and the team and
   Sparkle would reject it. `scripts/generate-appcast.sh` passes
@@ -186,7 +188,7 @@ Once all credential checks pass, follow the release sequence documented in
 
 ```bash
 ./scripts/check-version.sh
-./scripts/build-app.sh --notarize
+./scripts/build-app.sh --universal --notarize
 curl -fL -o dist/appcast.xml https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml
 ./scripts/generate-appcast.sh
 ```
