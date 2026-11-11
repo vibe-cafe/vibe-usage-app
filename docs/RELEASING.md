@@ -10,7 +10,9 @@ exist only on one Mac is an inventory snapshot, not a one-device restriction.
 Each Mac used for a production release must have all three of these items:
 
 1. A valid `Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)` identity, including its private key.
-2. A working `notarytool` Keychain profile named `VibeUsage-8HGCD674ZS` for team `8HGCD674ZS`.
+2. A working `notarytool` Keychain profile named `VibeUsage-8HGCD674ZS` for team `8HGCD674ZS`,
+   stored with `notarytool store-credentials`; it currently holds an App Store
+   Connect API key of that team (`--key`/`--key-id`/`--issuer`).
 3. The current Sparkle Ed25519 private key in the login Keychain.
 
 Verify the Apple credentials with:

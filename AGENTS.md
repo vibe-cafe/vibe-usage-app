@@ -413,7 +413,7 @@ gh release upload vX.Y.Z dist/<missing-file> --clobber
 Multiple authorized Macs can retain release capability at the same time; provisioning a second Mac does not disable the first. Readiness depends on the three credentials below, not the machine owner's name. Verify them on the actual release machine before each release. A missing or mismatched credential blocks production release on that machine; coordinate provisioning with the credential holder instead of generating a replacement Sparkle key. See `docs/RELEASING.md` for adding a release Mac while preserving the existing signing identity (clarified 2026-10-26 after a support investigation).
 
 - **Identity**: `Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)` (since 0.7.5)
-- **Notarization profile**: `VibeUsage-8HGCD674ZS` (stored in Keychain via `notarytool store-credentials --team-id 8HGCD674ZS`)
+- **Notarization profile**: `VibeUsage-8HGCD674ZS` (stored in Keychain via `notarytool store-credentials`; currently an App Store Connect API key of team `8HGCD674ZS`, saved with `--key`/`--key-id`/`--issuer`)
 - **Sparkle Ed25519 key**: In Keychain, used by `generate_appcast` automatically
 - **Sparkle public key**: In `Info.plist` as `SUPublicEDKey`
 - The build script signs Sparkle internals inside-out, then the framework, then the app bundle
