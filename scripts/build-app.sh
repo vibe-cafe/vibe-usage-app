@@ -211,6 +211,15 @@ if $EXTERNAL_TEST; then
     echo "==> External-test diagnostics enabled (production API/config unchanged)."
 fi
 
+# Xcode 27 (Swift 6.4) made SwiftPM's "swiftbuild" engine the default, which
+# writes per-arch products to .build/out/Products/Release instead of
+# .build/<arch>-apple-macosx/release. Releases up to 0.7.4 were built with the
+# native build system and the paths below follow its layout, so select it
+# explicitly whenever the toolchain offers the choice.
+if swift build --help 2>&1 | grep -q -- '--build-system'; then
+    SWIFT_BUILD_ARGS+=(--build-system native)
+fi
+
 # Prefer SwiftPM --arch when available (Xcode toolchain); otherwise --triple (CLT).
 SWIFT_SUPPORTS_ARCH=false
 if swift build --help 2>&1 | grep -q -- '--arch'; then
