@@ -7,6 +7,9 @@ set -euo pipefail
 # Prerequisites:
 #   1. Ed25519 private key in Keychain (created via Sparkle's generate_keys)
 #   2. dist/VibeUsage.zip exists (signed + notarized)
+#   3. dist/appcast.xml is the currently published feed, so older items carry
+#      over (on a fresh checkout: curl -fL -o dist/appcast.xml
+#      https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml)
 #
 # Usage: ./scripts/generate-appcast.sh
 #
@@ -64,6 +67,20 @@ else
 fi
 DOWNLOAD_URL_PREFIX="$REPO_RELEASES_URL/download/$TAG/"
 
+# Builds 41+ (0.7.5 and later) are signed by team 8HGCD674ZS, while builds
+# <= 24 (0.5.3 and earlier) still embed the Sparkle key retired in 0.5.4. For
+# those installs both the EdDSA key and the signing team would change, which
+# Sparkle rejects. Every item created from now on therefore carries
+# sparkle:minimumUpdateVersion 25: Sparkle hides it from builds below 25, so
+# they update to 0.7.4 (build 40: old team, current key) first and reach the
+# newer release from there. generate_appcast only adds this element to the
+# items it creates and keeps it on existing items, so never drop the flag.
+MINIMUM_UPDATE_VERSION=25
+# The stepping-stone item every build <= 24 needs. It survives each run as the
+# newest item of its own branch, but only if dist/appcast.xml was seeded with
+# the published feed before running this script.
+STEPPING_STONE_BUILD=40
+
 echo "==> Generating appcast.xml..."
 echo "    Using: $GENERATE_APPCAST"
 echo "    Source: $DIST_DIR"
@@ -75,13 +92,21 @@ DMG_PATH="$DIST_DIR/VibeUsage.dmg"
 if [ -f "$DMG_PATH" ]; then
     mv "$DMG_PATH" "$DMG_PATH.bak"
 fi
-"$GENERATE_APPCAST" --download-url-prefix "$DOWNLOAD_URL_PREFIX" "$DIST_DIR"
+"$GENERATE_APPCAST" --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+    --minimum-update-version "$MINIMUM_UPDATE_VERSION" "$DIST_DIR"
 if [ -f "$DMG_PATH.bak" ]; then
     mv "$DMG_PATH.bak" "$DMG_PATH"
 fi
 
 if [ ! -f "$DIST_DIR/appcast.xml" ]; then
     echo "ERROR: appcast.xml was not generated."
+    exit 1
+fi
+
+if ! grep -q "<sparkle:version>$STEPPING_STONE_BUILD</sparkle:version>" "$DIST_DIR/appcast.xml"; then
+    echo "ERROR: appcast.xml has no build $STEPPING_STONE_BUILD (0.7.4) item, so installs of"
+    echo "       0.5.3 and earlier would get no update. Seed the published feed and rerun:"
+    echo "       curl -fL -o dist/appcast.xml $REPO_RELEASES_URL/latest/download/appcast.xml"
     exit 1
 fi
 

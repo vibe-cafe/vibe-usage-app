@@ -19,8 +19,8 @@ BUNDLE_ID="ai.vibecafe.vibe-usage"
 EXECUTABLE="VibeUsage"
 DIST_DIR="$PROJECT_DIR/dist"
 ICON_SOURCE_DIR="$PROJECT_DIR/VibeUsage/Resources/Assets.xcassets/AppIcon.appiconset"
-SIGN_IDENTITY="Developer ID Application: Yin Ming (D33463FWDZ)"
-NOTARIZE_PROFILE="VibeUsage"
+SIGN_IDENTITY="Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)"
+NOTARIZE_PROFILE="VibeUsage-8HGCD674ZS"
 # Matches Package.swift platforms: .macOS(.v14)
 MACOS_DEPLOYMENT_TARGET="14.0"
 
