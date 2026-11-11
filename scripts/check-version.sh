@@ -44,12 +44,16 @@ fi
 if git -C "$PROJECT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     LAST_TAG=$(git -C "$PROJECT_DIR" describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
     if [[ -n "$LAST_TAG" ]]; then
-        LAST_BUILD=$(git -C "$PROJECT_DIR" show "$LAST_TAG:VibeUsage/Info.plist" 2>/dev/null \
-            | /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" /dev/stdin 2>/dev/null || true)
-        if [[ -n "$LAST_BUILD" && "$LAST_BUILD" =~ ^[0-9]+$ ]]; then
-            if (( PLIST_BUILD <= LAST_BUILD )); then
-                fail "CFBundleVersion ($PLIST_BUILD) must be greater than last tag $LAST_TAG ($LAST_BUILD) — Sparkle won't detect the update otherwise"
-            fi
+        # PlistBuddy cannot read a plist from stdin, so this uses plutil. A tag
+        # whose build number cannot be read is an error, not a skipped check.
+        LAST_BUILD=$(git -C "$PROJECT_DIR" show "$LAST_TAG:VibeUsage/Info.plist" \
+            | plutil -extract CFBundleVersion raw -o - -) \
+            || fail "could not read CFBundleVersion from $LAST_TAG:VibeUsage/Info.plist"
+        if ! [[ "$LAST_BUILD" =~ ^[0-9]+$ ]]; then
+            fail "CFBundleVersion in $LAST_TAG ($LAST_BUILD) is not a plain integer"
+        fi
+        if (( PLIST_BUILD <= LAST_BUILD )); then
+            fail "CFBundleVersion ($PLIST_BUILD) must be greater than last tag $LAST_TAG ($LAST_BUILD) — Sparkle won't detect the update otherwise"
         fi
     fi
 fi
