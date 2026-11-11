@@ -108,15 +108,27 @@ a release machine needs neither rotation nor a new signing identity.
 - From 0.7.5: `Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)`,
   notarized with `VibeUsage-8HGCD674ZS` (maintainer-approved 2026-11-11). The
   Sparkle key and `SUPublicEDKey` did not change, which is what lets installed
-  0.7.4 and earlier accept the differently signed update. The release gate for
-  this switch is a local two-hop rehearsal before publishing: an installed
-  0.7.4 updates to the final notarized build through a local feed, and that
-  build then updates once more to a local-only test build, proving that the
-  newly signed app can still receive later updates.
-- Users who saved a ZCode API key in the app see one Keychain access prompt
-  after the first launch of a build signed by a different team, because the
-  Keychain item's access list trusts the old signature. Choosing "Always
-  Allow" ends the prompts. Nothing else in the app depends on the signing team.
+  0.5.4 (build 25) and later accept the differently signed update directly.
+  The release gate for this switch is a local two-hop rehearsal before
+  publishing: an installed 0.7.4 updates to the final notarized build through
+  a local feed, and that build then updates once more to a local-only test
+  build, proving that the newly signed app can still receive later updates.
+- Installs of 0.5.3 (build 24) and earlier still embed the Sparkle key retired
+  in 0.5.4, so for them a 0.7.5+ update changes both the key and the team and
+  Sparkle would reject it. `scripts/generate-appcast.sh` passes
+  `--minimum-update-version 25`, which stamps every new item with
+  `sparkle:minimumUpdateVersion` 25; Sparkle hides such items from builds
+  below 25, so those installs are offered 0.7.4 (build 40: old team, current
+  key) first and reach the latest release from there. This only works while
+  the 0.7.4 item stays in the feed, so seed `dist/appcast.xml` from the
+  published feed before generating (see "Production release"). Do not remove
+  the flag: `generate_appcast` only stamps the items it creates.
+- Users who saved ZCode API keys in the app see a Keychain access prompt after
+  the first launch of a build signed by a different team, because each
+  Keychain item's access list trusts the old signature. The BigModel and Z.ai
+  keys are separate items, so a user who saved both may be asked once for
+  each. Choosing "Always Allow" ends the prompts for that item. Nothing else
+  in the app depends on the signing team.
 - The `8HGCD674ZS` certificate expires 2027-02-01 (issued under the G1
   intermediate). Replace it with a new certificate in the same team before the
   first release after that date and delete the expired one from Keychain; a
@@ -175,8 +187,13 @@ Once all credential checks pass, follow the release sequence documented in
 ```bash
 ./scripts/check-version.sh
 ./scripts/build-app.sh --notarize
+curl -fL -o dist/appcast.xml https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml
 ./scripts/generate-appcast.sh
 ```
+
+The `curl` step seeds the currently published feed so older items, in
+particular the 0.7.4 stepping-stone item, carry over into the new appcast.
+`generate-appcast.sh` stops if that item is missing.
 
 Publish `dist/VibeUsage.dmg`, `dist/VibeUsage.zip`, and `dist/appcast.xml`, then
 verify that all three assets are present on the GitHub release.

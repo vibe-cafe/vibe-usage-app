@@ -367,10 +367,11 @@ Produces in `dist/`:
 ### 4. Generate Appcast
 
 ```bash
+curl -fL -o dist/appcast.xml https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml
 ./scripts/generate-appcast.sh
 ```
 
-Reads `dist/VibeUsage.zip`, signs with Ed25519 key from Keychain, writes `dist/appcast.xml`.
+Reads `dist/VibeUsage.zip`, signs with Ed25519 key from Keychain, writes `dist/appcast.xml`. The `curl` seeds the published feed so older items carry over; the script stops if the 0.7.4 (build 40) item that 0.5.3-and-earlier installs need is missing (see "Signing Identity History").
 
 ### 5. Create GitHub Release
 
@@ -421,6 +422,7 @@ Multiple authorized Macs can retain release capability at the same time; provisi
 
 - Releases up to and including 0.7.4 were signed by `Developer ID Application: Yin Ming (D33463FWDZ)` and notarized with that team's `VibeUsage` profile. 0.7.5 switched to team `8HGCD674ZS` (maintainer-approved 2026-11-11) and **kept the same Sparkle key**.
 - Sparkle accepts an update when either the EdDSA key or the Apple code-signing identity is unchanged, never when both change. Change the signing team or rotate the Sparkle key in separate releases, and validate the installed-app upgrade path before publishing either.
+- Builds 25+ (0.5.4 and later) already have the current key, so they update to 0.7.5+ directly. Builds ≤ 24 (0.5.3 and earlier) still have the key retired in 0.5.4; for them 0.7.5+ changes both key and team. `generate-appcast.sh` therefore passes `--minimum-update-version 25`, so every item from 0.7.5 on carries `sparkle:minimumUpdateVersion` 25 and Sparkle hides it from builds ≤ 24. They take the 0.7.4 item (build 40: old team, current key) first and continue from there. Never drop that flag, and keep the 0.7.4 item in the feed: seed `dist/appcast.xml` from the published feed before generating (the script stops if build 40 is missing).
 - The current certificate was issued under Apple's G1 Developer ID intermediate and expires **2027-02-01**. Releases already published keep working (timestamped and notarized), but the next release after that date needs a new Developer ID Application certificate created in the same team `8HGCD674ZS`. The designated requirement pins the team, so a same-team certificate is invisible to users. Remove the expired certificate from Keychain first, or `codesign` reports an ambiguous identity.
 
 ### Releasing From Another Mac — Mandatory Sparkle-Key Check
