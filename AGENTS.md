@@ -333,6 +333,13 @@ Display names and families (server-supplied):
 - `CFBundleVersion` is a plain integer
 - `CFBundleVersion` strictly increased vs. the previous `v*` git tag
 
+The last rule fails only a release: the script run standalone, or a
+`build-app.sh --notarize` build without `--external-test`. Every other
+`build-app.sh` build (local, ad-hoc, external test, rehearsal) passes
+`--non-release` and gets a warning instead, because between releases `main` still
+carries the last tag's build number. A tag whose build number cannot be read is
+treated the same way.
+
 Commit and push the bump before building, so the release is cut from a commit that
 contains it:
 

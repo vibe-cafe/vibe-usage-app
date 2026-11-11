@@ -201,7 +201,14 @@ else
 fi
 
 echo "==> Checking version sync..."
-"$SCRIPT_DIR/check-version.sh"
+# Only a notarized production build is a release: it must carry a build number
+# above the last v* tag. Local, ad-hoc, and external-test builds (including a
+# notarized external test) happen between releases, so that rule only warns.
+if $NOTARIZE && ! $EXTERNAL_TEST; then
+    "$SCRIPT_DIR/check-version.sh"
+else
+    "$SCRIPT_DIR/check-version.sh" --non-release
+fi
 
 cd "$PROJECT_DIR"
 
