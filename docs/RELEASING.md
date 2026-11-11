@@ -9,16 +9,20 @@ exist only on one Mac is an inventory snapshot, not a one-device restriction.
 
 Each Mac used for a production release must have all three of these items:
 
-1. A valid `Developer ID Application: Yin Ming (D33463FWDZ)` identity, including its private key.
-2. A working `notarytool` Keychain profile named `VibeUsage`.
+1. A valid `Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)` identity, including its private key.
+2. A working `notarytool` Keychain profile named `VibeUsage-8HGCD674ZS` for team `8HGCD674ZS`.
 3. The current Sparkle Ed25519 private key in the login Keychain.
 
 Verify the Apple credentials with:
 
 ```bash
 security find-identity -v -p codesigning
-xcrun notarytool history --keychain-profile VibeUsage
+xcrun notarytool history --keychain-profile VibeUsage-8HGCD674ZS
 ```
+
+Releases up to and including 0.7.4 used `Developer ID Application: Yin Ming
+(D33463FWDZ)` and that team's `VibeUsage` profile; see "Signing identity
+history" below.
 
 ## CLI dependency and release ordering
 
@@ -85,7 +89,8 @@ signed/notarized path remains the preferred wider-distribution artifact.
 Keep the original machine configured. Obtain the existing Developer ID
 certificate **and its private key** from the authorized credential holder
 (for example, a password-protected PKCS#12 export), import them into the new
-Mac's Keychain, and configure a working `VibeUsage` notarization profile there.
+Mac's Keychain, and configure a working `VibeUsage-8HGCD674ZS` notarization
+profile there.
 Then import and verify the existing Sparkle key as described below. A public
 certificate alone cannot sign an app. No credential transfer or key rotation
 is implied by a request to document these steps.
@@ -95,6 +100,27 @@ update the build configuration and validate the installed-app upgrade path.
 Sparkle's regular-app key rotation supports changing the Apple signing
 certificate or the EdDSA key in an update, but not both at once. Merely adding
 a release machine needs neither rotation nor a new signing identity.
+
+### Signing identity history
+
+- Up to and including 0.7.4: `Developer ID Application: Yin Ming (D33463FWDZ)`,
+  notarized with that team's `VibeUsage` profile.
+- From 0.7.5: `Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)`,
+  notarized with `VibeUsage-8HGCD674ZS` (maintainer-approved 2026-11-11). The
+  Sparkle key and `SUPublicEDKey` did not change, which is what lets installed
+  0.7.4 and earlier accept the differently signed update. The release gate for
+  this switch is a local two-hop rehearsal before publishing: an installed
+  0.7.4 updates to the final notarized build through a local feed, and that
+  build then updates once more to a local-only test build, proving that the
+  newly signed app can still receive later updates.
+- Users who saved a ZCode API key in the app see one Keychain access prompt
+  after the first launch of a build signed by a different team, because the
+  Keychain item's access list trusts the old signature. Choosing "Always
+  Allow" ends the prompts. Nothing else in the app depends on the signing team.
+- The `8HGCD674ZS` certificate expires 2027-02-01 (issued under the G1
+  intermediate). Replace it with a new certificate in the same team before the
+  first release after that date and delete the expired one from Keychain; a
+  same-team certificate needs no user-visible migration.
 
 References: [Apple signing-identity export](https://developer.apple.com/documentation/xcode/sharing-your-teams-signing-certificates)
 and [Sparkle key transfer and rotation](https://sparkle-project.org/documentation/).

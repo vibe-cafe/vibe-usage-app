@@ -411,11 +411,17 @@ gh release upload vX.Y.Z dist/<missing-file> --clobber
 
 Multiple authorized Macs can retain release capability at the same time; provisioning a second Mac does not disable the first. Readiness depends on the three credentials below, not the machine owner's name. Verify them on the actual release machine before each release. A missing or mismatched credential blocks production release on that machine; coordinate provisioning with the credential holder instead of generating a replacement Sparkle key. See `docs/RELEASING.md` for adding a release Mac while preserving the existing signing identity (clarified 2026-10-26 after a support investigation).
 
-- **Identity**: `Developer ID Application: Yin Ming (D33463FWDZ)`
-- **Notarization profile**: `VibeUsage` (stored in Keychain via `notarytool store-credentials`)
+- **Identity**: `Developer ID Application: JIANZHONG ZHAO (8HGCD674ZS)` (since 0.7.5)
+- **Notarization profile**: `VibeUsage-8HGCD674ZS` (stored in Keychain via `notarytool store-credentials --team-id 8HGCD674ZS`)
 - **Sparkle Ed25519 key**: In Keychain, used by `generate_appcast` automatically
 - **Sparkle public key**: In `Info.plist` as `SUPublicEDKey`
 - The build script signs Sparkle internals inside-out, then the framework, then the app bundle
+
+### Signing Identity History
+
+- Releases up to and including 0.7.4 were signed by `Developer ID Application: Yin Ming (D33463FWDZ)` and notarized with that team's `VibeUsage` profile. 0.7.5 switched to team `8HGCD674ZS` (maintainer-approved 2026-11-11) and **kept the same Sparkle key**.
+- Sparkle accepts an update when either the EdDSA key or the Apple code-signing identity is unchanged, never when both change. Change the signing team or rotate the Sparkle key in separate releases, and validate the installed-app upgrade path before publishing either.
+- The current certificate was issued under Apple's G1 Developer ID intermediate and expires **2027-02-01**. Releases already published keep working (timestamped and notarized), but the next release after that date needs a new Developer ID Application certificate created in the same team `8HGCD674ZS`. The designated requirement pins the team, so a same-team certificate is invisible to users. Remove the expired certificate from Keychain first, or `codesign` reports an ambiguous identity.
 
 ### Releasing From Another Mac — Mandatory Sparkle-Key Check
 
@@ -423,7 +429,7 @@ Multiple authorized Macs can retain release capability at the same time; provisi
 - Before every release, run `.build/artifacts/sparkle/Sparkle/bin/generate_keys -p` and compare it with `/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' VibeUsage/Info.plist`. They must match before `generate-appcast.sh` runs.
 - If the key is absent or mismatched, **stop**. Do not generate or rotate a key merely to make the release pass. Import the current private key from the secure backup or another authorized release Mac using `generate_keys -f <private-key-file>`.
 - To provision another release Mac, export from a Mac holding the current key with `generate_keys -x <private-key-file>`, transfer it through an encrypted channel, import it, verify the public-key match, and then remove or securely archive the transfer copy. Never commit the exported key.
-- Also verify that the destination Mac has the Developer ID private key and a working `VibeUsage` notarization profile. See `docs/RELEASING.md` for the complete migration checklist.
+- Also verify that the destination Mac has the Developer ID private key and a working `VibeUsage-8HGCD674ZS` notarization profile. See `docs/RELEASING.md` for the complete migration checklist.
 - A deliberate future key rotation requires explicit authorization and an update-path validation against the currently released app; it is not routine release-machine setup.
 
 ## Known Constraints
