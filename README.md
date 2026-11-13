@@ -60,7 +60,7 @@ Debug 构建的设置页提供“导出诊断日志”入口。日志仅保存�
 
 ## License
 
-MIT
+[MIT](LICENSE)
 
 ### Cursor / AGY 配额接入的发布顺序
 
