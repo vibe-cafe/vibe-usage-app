@@ -6,7 +6,7 @@ AI agent guidance for the vibe-usage-app repository.
 
 ```
 vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, macOS 14+)
-├── .github/workflows/ci.yml       # CI: version check, offline CLI gate test, debug/release build, swift test (no signing)
+├── .github/workflows/ci.yml       # CI: version check, offline CLI gate test, launcher copy check, bundled-Node launcher run, debug/release build, swift test (no signing)
 ├── Package.swift                  # SPM manifest (Sparkle dependency)
 ├── VibeUsage/
 │   ├── Info.plist                 # Bundle metadata (versions, Sparkle SUFeedURL, SUPublicEDKey)
@@ -28,11 +28,12 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── SettingsView.swift     # Grouped settings form: 订阅配额 toggles, 常规 (menu bar/Dock/auto-start), 数据同步, 数据目录（高级）collapsed disclosures, updates, reset
 │   ├── Services/
 │   │   ├── APIClient.swift        # HTTP client for /api/usage (Bearer auth with vbu_ key) + unauthenticated device-flow helpers (requestDeviceCode/pollDeviceCode)
-│   │   ├── SyncEngine.swift       # Orchestrates CLI sync (runs @vibe-cafe/vibe-usage via Node/Bun)
+│   │   ├── SyncEngine.swift       # Orchestrates CLI sync (runs the CLI through cli-bootstrap.mjs)
 │   │   ├── SyncScheduler.swift    # 30-minute interval auto-sync timer
 │   │   ├── CLIBridge.swift        # Executes vibe-usage CLI config commands
 │   │   ├── CLIProcessRunner.swift # Background process wait, temporary output files, explicit deadlines
-│   │   ├── RuntimeDetector.swift  # Finds Node.js or Bun runtime on the system
+│   │   ├── RuntimeDetector.swift  # Chooses the runtime: bundled Node (probed once per launch) → system Node ≥ 20 → Bun
+│   │   ├── CLILauncher.swift      # Reads cli-bootstrap.mjs output (failure / cached-CLI notice) and its cache
 │   │   ├── UpdaterViewModel.swift # Sparkle SPUUpdater bridge + SPUUpdaterDelegate proxy (publishes availableUpdate)
 │   │   ├── RateLimitCoordinator.swift # Orchestrates quota refreshes (cache-then-live for both providers)
 │   │   ├── CodexUsageAPI.swift    # Live Codex usage endpoint client (auth.json token, zero-quota GET)
@@ -53,13 +54,18 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── DiagnosticRedactor.swift # Last-line filter over the copied diagnostic summary
 │   │   └── Log.swift              # Debug logging
 │   └── Resources/
-│       └── Assets.xcassets/       # App icon, menu bar icon
+│       ├── Assets.xcassets/       # App icon, menu bar icon
+│       └── cli-bootstrap.mjs      # CLI launcher — byte-for-byte copy of vibe-usage-windows src-tauri/resources/
 ├── scripts/
-│   ├── build-app.sh               # Build + sign + notarize pipeline; supports --universal / --arch
+│   ├── build-app.sh               # Build + sign + notarize pipeline; supports --universal / --arch; bundles + checks Node
+│   ├── bundled-node.env           # Pinned Node.js version + both darwin tar.xz SHA256s
+│   ├── fetch-node.sh              # Download, double-verify, (lipo) the pinned Node into one executable
+│   ├── node.entitlements          # The bundled Node's two JIT entitlements
+│   ├── check-cli-bootstrap.sh     # Launcher copy must equal vibe-usage-windows (--github <ref> / --sibling)
 │   ├── check-version.sh           # Guards AppConfig/Info.plist version sync + monotonic CFBundleVersion
 │   └── generate-appcast.sh        # Generate Sparkle appcast.xml
 └── dist/                          # Build output (gitignored)
-    ├── Vibe Usage.app
+    ├── Vibe Usage.app             # Contents/Helpers/node = bundled Node
     ├── VibeUsage.dmg
     ├── VibeUsage.zip
     └── appcast.xml
@@ -72,6 +78,8 @@ swift build                              # Debug build
 swift build -c release                   # Release build
 swift test                               # Unit tests (opt-in acceptance tests skip by default)
 node --test scripts/check-cli.test.mjs   # Offline CLI contract-gate tests
+./scripts/check-cli-bootstrap.sh --sibling   # Launcher copy vs ../vibe-usage-windows origin/main
+./scripts/fetch-node.sh --universal --output /tmp/node   # Pinned Node, verified, universal
 ./scripts/check-version.sh               # Validate version sync across AppConfig + Info.plist
 ./scripts/build-app.sh                   # Build + codesign .app for host arch (runs check-version.sh first)
 ./scripts/build-app.sh --universal       # Build universal (arm64 + x86_64) .app
@@ -79,7 +87,7 @@ node --test scripts/check-cli.test.mjs   # Offline CLI contract-gate tests
 ./scripts/generate-appcast.sh            # Generate appcast.xml from dist/VibeUsage.zip
 ```
 
-CI (`.github/workflows/ci.yml`) runs `check-version.sh`, `check-cli.test.mjs`, debug/release `swift build`, and `swift test` on `macos-26` with Xcode 26.6 for every PR and push to `main`; opt-in acceptance tests remain skipped, with no signing or release. Its shallow checkout has no tags, so `check-version.sh` only checks AppConfig/Info.plist version consistency and an integer build number; comparison against the previous `v*` tag is left to the release machine.
+CI (`.github/workflows/ci.yml`) runs `check-version.sh`, `check-cli.test.mjs`, `check-cli-bootstrap.sh --github <ref>` (normally `main` of vibe-usage-windows; a PR that waits on a Windows launcher change may point it at that branch and must set it back before merging), fetches the pinned universal Node, ad-hoc signs it with hardened runtime + `scripts/node.entitlements` and runs the launcher's `--version` with it, then debug/release `swift build` and `swift test` on `macos-26` with Xcode 26.6 for every PR and push to `main`; opt-in acceptance tests remain skipped, with no Developer ID signing or release. Its shallow checkout has no tags, so `check-version.sh` only checks AppConfig/Info.plist version consistency and an integer build number; comparison against the previous `v*` tag is left to the release machine.
 
 ## Architecture Approval Gate
 
@@ -104,7 +112,19 @@ version (e.g. `QuotaCLIBridge.schemaVersion`), an unknown version or a missing
 command must surface an actionable "update the CLI" message instead of an empty
 card, and the app must keep working against CLI releases newer than itself.
 `VIBE_USAGE_CLI_PACKAGE` stays the only way to point the app at an unreleased
-build (integration tests). Before approval, present the current and proposed
+build (integration tests).
+
+**Cached fallback (approved 2026-11-14, 《Mac 自带 Node 方案》).** Since the
+bundled-Node release the app runs the CLI through `cli-bootstrap.mjs`, the same
+launcher as the Windows app. Every run still asks the registry for `latest`
+first and runs it; only when `latest` cannot be resolved, downloaded, verified
+or installed does the newest *complete* version in `~/.vibe-usage/cli-cache/`
+run instead, with one `vibe-usage launcher notice:` line on stderr. That is a
+fallback, not a pin, and is consistent with this policy (the Windows app has
+done the same since 2026-11-11). The launcher asks the registry named in the
+user's `~/.npmrc` (`@vibe-cafe:registry`, else `registry`; https only, never one
+the file holds credentials for), like `npx` did, and the official registry
+otherwise. Before approval, present the current and proposed
 invariants, all affected repositories, existing-user migration, release
 ordering, and rollback. Signed/notarized release creation happens only
 after that design approval; passing tests and possessing release credentials
@@ -197,11 +217,20 @@ Release builds always run `@latest` (CLI version policy above): the app must wor
 `scripts/check-cli.mjs` validates the actual npm package (current `latest`) before normal `build-app.sh` packaging. It requires schema v1 discovery/fetch for Kimi, ZCode, Grok, Cursor, and Antigravity, using isolated credential-free directories. `--from-local` validates a packed checkout for pre-publish integration or the explicit external-test build; it must never bypass the published-package check for an ordinary app. See `docs/RELEASING.md` for CLI-before-app ordering.
 
 1. `SyncScheduler` fires every 30 minutes (background upload + fetch)
-2. `SyncEngine` runs the `@vibe-cafe/vibe-usage` CLI via `CLIBridge`
-3. `RuntimeDetector` finds Node.js or Bun on the system
+2. `SyncEngine` runs `<runtime> cli-bootstrap.mjs sync`; `CLIBridge` does the same for config and quota commands
+3. `RuntimeDetector` chooses the runtime (see **Bundled Node** below)
 4. After sync completes, `fetchUsageData()` refreshes the dashboard
 5. Opening the popover calls `fetchUsageDataIfNeeded()` (60s debounce) — fetch only, no upload
 6. Settings can persist one legacy `codexExtraHome` plus per-source isolated runtime roots (Codex / Grok / Antigravity, e.g. Multica homes) through the CLI (`config roots` / `add-root` / `remove-root`, CLI ≥ 0.10.20) — both editors sit in the collapsed 数据目录（高级）group; sync then scans them together with each tool's default directory (`$CODEX_HOME` / `~/.codex` for Codex). The app never writes these fields itself — `CLIBridge` shells out so the CLI stays the single writer. Config writes must preserve unknown CLI fields, especially local privacy controls and `deviceId`. `VIBE_USAGE_CONFIG_DIR` / `VIBE_USAGE_CLI_PACKAGE` are integration-test hooks (the latter forces `npx` with a local package path).
+
+### Bundled Node (approved 2026-11-14, 《Mac 自带 Node 方案》)
+The app ships the official Node.js 24 (`scripts/bundled-node.env`; both architectures merged into one universal executable) at `Contents/Helpers/node`, so new users need no Node of their own. `RuntimeDetector.detect()` picks, in order: (1) the bundled Node, if `BundledNodeProbe` succeeds — once per app launch, on first use (never at launch on the main thread), it runs a tiny loop that makes V8 compile optimized code and prints `process.version`, 5s cap; a missing file, a launch failure, a signal (what the system does to a JIT without its entitlement), a timeout or a bad answer each map to a fixed `BundledNodeStatus`; (2) a system `node` from the search path, 22.5+ preferred (built-in `node:sqlite`), else 20+, each read with `--version`; (3) Bun. All three run the same `cli-bootstrap.mjs` from the SwiftPM resource bundle. `defaults write ai.vibecafe.vibe-usage cliRuntimePreference system` (support switch, no UI) skips (1) entirely; with no system runtime the footer then says so. `VIBE_USAGE_CLI_PACKAGE` and the external-test build still run their package through the system `npx` and are unaffected.
+
+- **The bundled Node is never put on `PATH`.** A system runtime's directory still goes first on `PATH`, as before; with the bundled one, tools the CLI starts (`agy` while reading quotas, …) keep finding the user's own Node. `Runtime.environment(base:)` is the single place that builds the CLI's environment, including `VIBE_USAGE_SURFACE=mac-app` / `VIBE_USAGE_SURFACE_VERSION`, which reach the CLI unchanged because the launcher imports it in-process.
+- **The launcher is owned by the Windows repository** (`vibe-usage-windows` `src-tauri/resources/cli-bootstrap.mjs`, tests in its `tests/cliBootstrap.test.ts`). Change it there first, then copy it byte for byte to `VibeUsage/Resources/`; `scripts/check-cli-bootstrap.sh` compares the two in CI (`--github <ref>`) and `build-app.sh` stops a release whose copy differs from the sibling checkout's `origin/main` (`--sibling`).
+- **Its two stderr beginnings** (`CLILauncher`, same rules as the Windows app's `sync_history.rs`): `vibe-usage launcher: …` means the CLI never ran → `launchFailed` / `launcherFailed` with a `launcherStage` (`network` / `registry` / `download` / `install` / `other`, from the message's fixed beginning); `vibe-usage launcher notice: stage=…` means a cached CLI ran → the notice is removed before the result is classified and before any error line is shown, and only its stage word is kept as `cliFallback`. A crash inside the CLI's `run()` carries no prefix and is judged as the CLI's own failure. The footer shows our own copy for the four named launcher stages. The `npm err!` / `error: … registry` rules stay for the `npx` test hooks.
+- **Cache**: `~/.vibe-usage/cli-cache/<version>/` (the launcher's default when `VIBE_USAGE_CONFIG_DIR` is unset; ~0.85 MB per version). The launcher never deletes old versions yet (known, shared with Windows).
+- **When nothing can run the CLI** (probe failed and no system Node ≥ 20 or Bun), the existing footer/card style shows 「自带 Node 无法启动，也未找到 Node.js 或 Bun」 (or 「已设为用系统运行环境，但未找到 Node.js 或 Bun」 with the switch); quota cards say 「没有可用的 Node.js 或 Bun」. `AppState.runtimeAvailable` follows the latest sync.
 
 CLI subprocesses use `CLIProcessRunner`: blocking waits run on a dispatch worker, stdout/stderr go to private temporary files (removed after completion), and deadlines are reported as timeout rather than launcher stderr. Never wait for a subprocess to exit before draining `Pipe` output: a full pipe deadlocks the child, and an inherited pipe can outlive it. A one-second SIGTERM grace period is followed by SIGKILL for an unresponsive process. Exit zero remains success even when Bun prints dependency-resolution progress to stderr.
 
@@ -213,8 +242,8 @@ No background timer. `RateLimitCoordinator` is driven entirely by user-visible e
 - Kimi reads the official Kimi Code 2.x OAuth file (`$KIMI_CODE_HOME/credentials/kimi-code.json`, otherwise `~/.kimi-code/credentials/kimi-code.json`) through the shared CLI, with the legacy `$KIMI_SHARE_DIR` / `~/.kimi` file as fallback, and calls the official `/coding/v1/usages` endpoint. The adapter accepts the current 2.x `usages` response and the legacy quota response. The shared CLI is the sole Vibe-side owner of Kimi refresh behavior: when the access token is near expiry or a usage request returns 401, it uses Kimi's standard OAuth refresh grant, serializes Vibe refreshes across processes, re-checks concurrent Kimi CLI rotation, and atomically writes the rotated credential at mode `0600`. No token reaches app output, diagnostics, quota cache, or upload state. ZCode accepts only a user-entered regional API key. BigModel (domestic) and Z.ai (overseas) use separate Vibe Usage Keychain items; the app removes both inherited variables, injects only `BIGMODEL_API_KEY` or `Z_AI_API_KEY` for the explicitly selected region, and never reads ZCode's OAuth database. Existing Z.ai keys remain assigned to Z.ai; a fresh configuration displays BigModel by default but performs no request until the user saves a key and selects ZCode. Normalized CLI quota cache entries are scoped by a one-way hash of region plus credential and contain no secrets. The Mac validates `schemaVersion == 1` before displaying results, so a CLI contract mismatch fails closed per card.
 - **OpenCode Go is app-native, not CLI-backed** (2026-09-26, the mode the maintainer chose). `OpenCodeGoUsageAPI` reads OpenCode's own Go API key — the `opencode-go` integration row in `~/.local/share/opencode/opencode.db` first (read-only, only that row's `value`), falling back to the plain-text `~/.local/share/opencode/auth.json` (`opencode.key`) that the pre-2.x layout writes — and calls the account-wide `GET https://opencode.ai/zen/go/v1/usage`, mapping its `rolling` / `weekly` / `monthly` percentages onto `ProviderRateLimit.meters` (labels 5h / Weekly / Monthly). `windowDuration` is stated only for the fixed 5h and 7-day windows; the monthly reset is a calendar month, so that row carries no duration and therefore no "% elapsed" bar rather than a guessed one. The key is read per request, sent only as a bearer header, and never logged, cached, uploaded, or written; the app never rewrites OpenCode's credential and never reads OpenCode's conversation store, only the credential entry `opencode` — other provider credentials in that file stay uninspected. There is deliberately **no on-disk snapshot cache** (unlike Codex): the file carries no account identity a cache could be scoped to, and the call is one fast request, so a cold card shows its spinner instead of risking another login's numbers. A 403 `EntitlementError` is the endpoint's answer, not a failed read: it maps `FetchError.notSubscribed → .notApplicable`, which the coordinator turns into `.noData` with `EmptyReason.notEntitled` (「未订阅 OpenCode Go」) and no retry affordance, while 401 asks the user to re-login in OpenCode itself. It never appears in `usesQuotaCLI`, so the CLI envelope can neither carry nor be asked for it; selection, detection (`~/.local/share/opencode`), and the popover-open refresh (`refreshOpenCodeGoIfNeeded`) use the same product registry and path as every other card.
 - **Diagnostics: what release builds may keep and export (rule changed 2026-11-09).** The maintainer Hogan approved revision 2 of the diagnostics plan under the Architecture Approval Gate on 2026-11-09 (「可以开工，你派活吧。 1、2、3我都同意。」), replacing the former rule that release builds contain no diagnostic writes or export entry. Three facilities, each with its own limits; adding a field to either release facility needs another gate approval:
-  - **Release 「复制诊断信息」 (Settings → 关于 → 诊断信息).** Only when the user presses the button does the app build a plain-text summary (`DiagnosticCollector` → `DiagnosticSummary`), copy it to the clipboard, and offer it for reading in a collapsed preview. Nothing is uploaded or written to disk. Whitelist only: app/OS version and build kind; the runtime the app uses (bun or npx, `--version`); whether the CLI starts and its version (one `@latest --version` run, 20s cap — sync output does not carry it); the app's sync history (below); each quota card's state, 1a fixed reason and source; the Claude probe's per-candidate record from the latest completed probe (fixed path template such as `~/.local/bin/claude` or `PATH 第 N 项中的 claude`, initialize / get_usage timings, fixed reason, exit status — no version, because Claude Code updates itself and today's version must not be pinned on an older failure); the currently installed candidates in their own section with `claude --version` (5s cap each) and the count of `claude` on `$PATH`; whether a system proxy or `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` exists and whether it is a loopback address (never host, port, or credentials); names, never values, of `ANTHROPIC*` / `CLAUDE*` variables in the app's environment and of the `env` keys in Claude's `settings.json` (`$CLAUDE_CONFIG_DIR` or `~/.claude`), and whether `CLAUDE_CONFIG_DIR` is set; scheduler state; 「已配置 Key」 and the newest sync record's Key verdict — 未被服务器拒绝 only after a success, 被服务器拒绝 only after an explicit rejection, otherwise 无法判断 (same wording as the CLI and Windows); a 4-hex device tag hashed from the hostname. Never Claude Code's or the CLI's raw output, server bodies, real paths, hostnames, account handles, keys, or environment values; there is no Vibe account tag. `DiagnosticRedactor` then rescans the finished text (home → `~`; URLs, `/Users/…`, encoded `-Users-…` project directories, `vbu_`, `sk-`, `Bearer`, JWTs, emails and 40+ character tokens → `***`; a long all-upper-case `A-Z0-9_` variable name such as `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is kept). The `doctor --json` merge is a later step.
-  - **Release sync history (default on).** `SyncHistoryStore` keeps the last 10 `SyncRecord`s, rolling, in the app's own preferences: start time, trigger (定时 / 启动时 / 手动), result (成功 / 失败 / 超时被 App 结束 / CLI 启动阶段失败), duration, one fixed reason, and an HTTP status number for server errors. `SyncEngine.outcome(for:)` only matches the CLI's text to choose the code; no text is stored. The app alone records the 120s timeout. Settings 「重置配置」 clears it.
+  - **Release 「复制诊断信息」 (Settings → 关于 → 诊断信息).** Only when the user presses the button does the app build a plain-text summary (`DiagnosticCollector` → `DiagnosticSummary`), copy it to the clipboard, and offer it for reading in a collapsed preview. Nothing is uploaded or written to disk. Whitelist only: app/OS version and build kind; the runtime the app uses — 「App 自带 Node / 系统 Node / Bun」 (`npx` for the test hooks) and its version, plus whether the `cliRuntimePreference` switch is set; the bundled Node's probe result (能启动 + version, or one fixed reason: 文件缺失 / 无法启动 / 被系统结束 / 超时 / 运行出错); whether the CLI starts and its version (one `--version` run through the launcher, 20s cap — sync output does not carry it), whether the launcher script is present, and the newest complete version in the launcher's cache (§2.6 fields, approved 2026-11-14 with the bundled-Node plan); the app's sync history (below); each quota card's state, 1a fixed reason and source; the Claude probe's per-candidate record from the latest completed probe (fixed path template such as `~/.local/bin/claude` or `PATH 第 N 项中的 claude`, initialize / get_usage timings, fixed reason, exit status — no version, because Claude Code updates itself and today's version must not be pinned on an older failure); the currently installed candidates in their own section with `claude --version` (5s cap each) and the count of `claude` on `$PATH`; whether a system proxy or `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` exists and whether it is a loopback address (never host, port, or credentials); names, never values, of `ANTHROPIC*` / `CLAUDE*` variables in the app's environment and of the `env` keys in Claude's `settings.json` (`$CLAUDE_CONFIG_DIR` or `~/.claude`), and whether `CLAUDE_CONFIG_DIR` is set; scheduler state; 「已配置 Key」 and the newest sync record's Key verdict — 未被服务器拒绝 only after a success, 被服务器拒绝 only after an explicit rejection, otherwise 无法判断 (same wording as the CLI and Windows); a 4-hex device tag hashed from the hostname. Never Claude Code's or the CLI's raw output, server bodies, real paths, hostnames, account handles, keys, or environment values; there is no Vibe account tag. `DiagnosticRedactor` then rescans the finished text (home → `~`; URLs, `/Users/…`, encoded `-Users-…` project directories, `vbu_`, `sk-`, `Bearer`, JWTs, emails and 40+ character tokens → `***`; a long all-upper-case `A-Z0-9_` variable name such as `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is kept). The `doctor --json` merge is a later step.
+  - **Release sync history (default on).** `SyncHistoryStore` keeps the last 10 `SyncRecord`s, rolling, in the app's own preferences: start time, trigger (定时 / 启动时 / 手动), result (成功 / 失败 / 超时被 App 结束 / CLI 启动阶段失败), duration, one fixed reason, an HTTP status number for server errors, and (approved 2026-11-14 with the bundled-Node plan) the launcher's stage word for a launcher failure (`launcherStage`) and for a run that used the cached CLI (`cliFallback`, shown as 「用了本机缓存的 CLI（…）」, the Windows app's field). Older records lack the two fields and decode unchanged. `SyncEngine.outcome(for:)` only matches the CLI's text to choose the code; no text is stored. The app alone records the 120s timeout. Settings 「重置配置」 clears it.
   - **Test-build JSONL log (unchanged).** The exportable `TestDiagnosticLog` file stays a test-build facility only: it and its Settings export UI must remain guarded by `#if DEBUG` or the explicit external-test build flag, so ordinary Release binaries contain neither its log writes nor its export entry. The JSONL schema is typed and may contain only error codes, detected/selected provider ids, status/meter counts, timestamps, app/OS versions, build kind/number, and reviewed App/CLI version or commit identifiers; never add raw stderr, response bodies, request headers, credentials, account identifiers, environment overrides, or filesystem paths. Files stay inside the current user's `~/Library/Logs/Vibe Usage/`, use owner-only permissions, and are shared only when that user explicitly exports them. A locally re-signed Debug UI build may set `VIBE_USAGE_TEST_KEYCHAIN_SERVICE` to an empty test namespace so it never queries the release app's ZCode items or triggers an approval prompt, and `VIBE_USAGE_QUOTA_UI_TEST=1` to show the quota dashboard without loading the production Vibe account config or starting its sync/upload scheduler. Both hooks must remain inside `#if DEBUG`; Release always uses `ai.vibecafe.vibe-usage` and its normal account lifecycle.
 - Popover open → selected providers only: native Codex/Claude plus the Kimi/ZCode/Grok/Cursor/Antigravity CLI adapters (60s debounce per provider). Neither path can prompt the user for another product's credentials.
 - Footer "更新数据" → `refreshAll()` (parallel; the coordinator still skips disabled providers). A card-level retry refreshes only that provider.
@@ -347,6 +376,10 @@ contains it:
 git add -A && git commit -m "bump version to X.Y.Z" && git push
 ```
 
+### 1a. Move the Bundled Node to the Newest 24.x Patch
+
+Before each release, check https://nodejs.org/dist/index.json for a newer `v24.*`. If there is one, update all three lines of `scripts/bundled-node.env` from that version's `SHASUMS256.txt` (`node-v<version>-darwin-arm64.tar.xz` / `-x64.tar.xz`) and commit it with the release. `fetch-node.sh` refuses a tarball whose SHA256 differs from either source. A Node release of its own is warranted only for a high-severity fix in code the CLI uses (HTTPS client, TLS, zlib, file access). Move to the next LTS major before 24's end of life (2028-04-30), after the CLI's CI covers it, together with the Windows app.
+
 ### 2. Model Names Need No Release Step Here
 
 Model display names and families are resolved by the server (`vibe-cafe`) and shipped
@@ -423,7 +456,8 @@ Multiple authorized Macs can retain release capability at the same time; provisi
 - **Notarization profile**: `VibeUsage-8HGCD674ZS` (stored in Keychain via `notarytool store-credentials`; currently an App Store Connect API key of team `8HGCD674ZS`, saved with `--key`/`--key-id`/`--issuer`)
 - **Sparkle Ed25519 key**: In Keychain, used by `generate_appcast` automatically
 - **Sparkle public key**: In `Info.plist` as `SUPublicEDKey`
-- The build script signs Sparkle internals inside-out, then the framework, then the app bundle
+- The build script signs inside-out: the bundled Node, Sparkle internals, then the framework, then the app bundle
+- **Bundled Node** (`Contents/Helpers/node`): re-signed with `--force` under our identity (replacing the Node.js project's `HX7739G8FX` signature, whose `get-task-allow` notarization rejects), hardened runtime, timestamp, identifier `ai.vibecafe.vibe-usage.node`, and only `scripts/node.entitlements` — `com.apple.security.cs.allow-jit` and `com.apple.security.cs.allow-unsigned-executable-memory`. Never add `get-task-allow`, `disable-library-validation`, `allow-dyld-environment-variables` or `disable-executable-page-protection`. `build-app.sh` refuses a Node that carries `get-task-allow` (or, with Developer ID, lacks `allow-jit`), then runs the app's probe, the shipped launcher and `check-cli.mjs` with this signed copy natively and, on Apple silicon, its Intel slice under Rosetta (a proxy only — no real Intel Mac in the loop). The ad-hoc fallback signs it without hardened runtime, like the rest of the bundle. Notarization covers it as part of the app; look at `notarytool log` for warnings about it.
 
 ### Signing Identity History
 
@@ -446,4 +480,4 @@ Multiple authorized Macs can retain release capability at the same time; provisi
 - LSUIElement apps cannot use SwiftUI `Settings` scene — must use NSWindow directly
 - `swift run` skips Sparkle initialization (no Info.plist in non-bundle builds)
 - Debug builds (`#if DEBUG`) use `localhost:3000` and `config.dev.json`
-- Requires Node.js or Bun on the user's system for CLI sync to work
+- The bundled Node makes the app ~240 MB larger installed; Sparkle still downloads a zip (format unchanged on purpose), the DMG uses ULMO compression (macOS 10.15+)

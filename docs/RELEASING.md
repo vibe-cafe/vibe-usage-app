@@ -61,6 +61,40 @@ Pre-publish Swift integration uses `VIBE_USAGE_CLI_PACKAGE` with the local
 checkout and a temporary `VIBE_USAGE_CONFIG_DIR`; see `CLIBridgeTests`.
 This verifies local compatibility and does not satisfy the production npm gate.
 
+## Bundled Node
+
+Ordinary builds ship the official Node.js named in `scripts/bundled-node.env`
+at `Contents/Helpers/node` (approved 2026-11-14, 《Mac 自带 Node 方案》). Before
+every release:
+
+1. Check https://nodejs.org/dist/index.json for a newer `v24.*` patch. If there
+   is one, copy the version and the two `node-v<version>-darwin-arm64.tar.xz` /
+   `node-v<version>-darwin-x64.tar.xz` lines of its `SHASUMS256.txt` into
+   `scripts/bundled-node.env` and commit that with the version bump.
+   `scripts/fetch-node.sh` accepts a tarball only when its SHA256 equals both
+   the published list and the pinned value.
+2. `build-app.sh` re-signs the binary with `scripts/node.entitlements`
+   (`allow-jit`, `allow-unsigned-executable-memory` — nothing else), refuses it
+   if it carries `get-task-allow`, and runs the app's start-up probe, the
+   shipped launcher and `check-cli.mjs` with the signed copy natively and, on
+   Apple silicon, its Intel slice under Rosetta (Rosetta must be installed for
+   `--notarize`).
+3. After notarization, read `xcrun notarytool log <submission-id> --keychain-profile VibeUsage-8HGCD674ZS`
+   and confirm it has no warnings about `Contents/Helpers/node`; check
+   `codesign -d --entitlements - "dist/Vibe Usage.app/Contents/Helpers/node"`
+   shows only the two entitlements, and `lipo -archs` on it says
+   `x86_64 arm64`.
+
+The CLI launcher `VibeUsage/Resources/cli-bootstrap.mjs` is a byte-for-byte
+copy of `vibe-usage-windows` `src-tauri/resources/cli-bootstrap.mjs`. A release
+build stops unless it equals `origin/main` of the `vibe-usage-windows` checkout
+beside this repository (`scripts/check-cli-bootstrap.sh --sibling`; set
+`VIBE_USAGE_WINDOWS_REPO` if it lives elsewhere). Change the launcher in the
+Windows repository first.
+
+Sparkle still receives a zip (`VibeUsage.zip`); only the DMG moved from UDZO
+to ULMO compression, which macOS 10.15 and later open.
+
 ## External test build
 
 An external test build uses the production API and the normal per-user config,
@@ -190,6 +224,7 @@ Once all credential checks pass, follow the release sequence documented in
 
 ```bash
 ./scripts/check-version.sh
+# scripts/bundled-node.env on the newest 24.x patch (see "Bundled Node")
 ./scripts/build-app.sh --universal --notarize
 curl -fL -o dist/appcast.xml https://github.com/vibe-cafe/vibe-usage-app/releases/latest/download/appcast.xml
 ./scripts/generate-appcast.sh
