@@ -40,12 +40,10 @@ jobs:
         run: node --test scripts/check-cli.test.mjs
 
       # The CLI launcher is owned by vibe-usage-windows; this copy must match it
-      # byte for byte. TEMPORARY: compare with the branch of
-      # vibe-cafe/vibe-usage-windows#47 until it merges, then set this back to
-      # main before merging.
+      # byte for byte.
       - name: CLI launcher matches vibe-usage-windows
         env:
-          WINDOWS_BOOTSTRAP_REF: feat/bootstrap-npmrc-registry
+          WINDOWS_BOOTSTRAP_REF: main
         run: ./scripts/check-cli-bootstrap.sh --github "$WINDOWS_BOOTSTRAP_REF"
 
       # The pinned official Node (both checksums, both architectures), signed
