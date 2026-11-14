@@ -39,6 +39,24 @@ jobs:
       - name: Test CLI contract gate (offline)
         run: node --test scripts/check-cli.test.mjs
 
+      # The CLI launcher is owned by vibe-usage-windows; this copy must match it
+      # byte for byte.
+      - name: CLI launcher matches vibe-usage-windows
+        env:
+          WINDOWS_BOOTSTRAP_REF: main
+        run: ./scripts/check-cli-bootstrap.sh --github "$WINDOWS_BOOTSTRAP_REF"
+
+      # The pinned official Node (both checksums, both architectures), signed
+      # the way a release signs it but ad hoc, runs the shipped launcher.
+      - name: Bundled Node runs the CLI launcher
+        run: |
+          ./scripts/fetch-node.sh --universal --output "$RUNNER_TEMP/node/node"
+          codesign --force --options runtime --entitlements scripts/node.entitlements \
+            --sign - "$RUNNER_TEMP/node/node"
+          mkdir -p "$RUNNER_TEMP/vu-home"
+          HOME="$RUNNER_TEMP/vu-home" VIBE_USAGE_CONFIG_DIR="$RUNNER_TEMP/vu-home" \
+            "$RUNNER_TEMP/node/node" VibeUsage/Resources/cli-bootstrap.mjs --version
+
       - name: Build debug
         run: swift build
 

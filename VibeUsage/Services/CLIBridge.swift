@@ -12,7 +12,7 @@ enum CLIBridge {
 
         var errorDescription: String? {
             switch self {
-            case .noRuntime: "未检测到 Node.js 或 Bun"
+            case .noRuntime: RuntimeDetector.unavailableMessage
             case .processFailure(let msg): msg
             case .timeout: "CLI 操作超时"
             }
@@ -60,26 +60,21 @@ enum CLIBridge {
         environmentOverrides: [String: String] = [:],
         environmentKeysToRemove: Set<String> = []
     ) async throws -> String {
-        guard let runtime = RuntimeDetector.detect() else { throw CLIError.noRuntime }
-        var env = ProcessInfo.processInfo.environment
-        let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
-        env["PATH"] = runtimeDir + (env["PATH"].map { ":\($0)" } ?? "")
-        env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
-        #if DEBUG
-        env["VIBE_USAGE_DEV"] = "1"
-        #endif
+        guard let runtime = await RuntimeDetector.detect() else { throw CLIError.noRuntime }
+        var env = runtime.environment(base: ProcessInfo.processInfo.environment)
         // Per-call credential injection (quota fetches): drop the other
         // regions' keys first so a stale key can never leak into a request.
         environmentKeysToRemove.forEach { env.removeValue(forKey: $0) }
         env.merge(environmentOverrides) { _, overrideValue in overrideValue }
         let output = try await CLIProcessRunner.run(
             executable: runtime.executablePath,
-            arguments: RuntimeDetector.arguments(runtimeName: runtime.name, command: args),
+            arguments: runtime.arguments(args),
             environment: env, timeout: timeout
         )
         if output.timedOut { throw CLIError.timeout }
         guard output.exitCode == 0 else {
-            let message = [output.stdout, output.stderr]
+            // The cached-CLI notice is not an error.
+            let message = [output.stdout, CLILauncher.withoutNotice(output.stderr)]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }.joined(separator: "\n")
             throw CLIError.processFailure(message.isEmpty ? "Exit code \(output.exitCode)" : message)

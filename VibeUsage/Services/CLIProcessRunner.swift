@@ -9,6 +9,8 @@ enum CLIProcessRunner {
         let stderr: String
         let exitCode: Int32
         let timedOut: Bool
+        /// The process ended on a signal; `exitCode` is then the signal number.
+        var terminatedBySignal = false
     }
 
     /// Tracks the live child so task cancellation can stop it, using the same
@@ -136,7 +138,8 @@ enum CLIProcessRunner {
             stdout: String(decoding: try Data(contentsOf: stdoutURL), as: UTF8.self),
             stderr: String(decoding: try Data(contentsOf: stderrURL), as: UTF8.self),
             exitCode: process.terminationStatus,
-            timedOut: timedOut
+            timedOut: timedOut,
+            terminatedBySignal: process.terminationReason == .uncaughtSignal
         )
     }
 }

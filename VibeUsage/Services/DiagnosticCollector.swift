@@ -6,7 +6,8 @@ import Foundation
 /// user presses 「复制诊断信息」. Each helper returns a name, a boolean, a
 /// version number, or a fixed template — never a path, hostname, address, or
 /// environment value. The only processes it starts are `--version` checks of
-/// the runtime, the CLI (20s cap), and each Claude Code candidate (5s cap).
+/// the runtime, the CLI (20s cap), and each Claude Code candidate (5s cap),
+/// plus the bundled Node's start-up probe if this launch has not run it yet.
 enum DiagnosticCollector {
     static let cliVersionTimeout: TimeInterval = 20
 
@@ -104,32 +105,24 @@ enum DiagnosticCollector {
 
     // MARK: Runtime and CLI
 
+    /// The runtime the app would use now, by kind and version — never its path.
     static func runtime() async -> DiagnosticSummary.Runtime? {
-        guard let runtime = RuntimeDetector.detect() else { return nil }
-        let directory = (runtime.executablePath as NSString).deletingLastPathComponent
-        var inherited = ProcessInfo.processInfo.environment
-        inherited["PATH"] = directory + (inherited["PATH"].map { ":\($0)" } ?? "")
-        let environment = inherited
-
-        async let version = versionOutput(runtime.executablePath, environment: environment)
-        let node = (directory as NSString).appendingPathComponent("node")
-        async let nodeVersion: String? = runtime.name == "npx"
+        guard let runtime = await RuntimeDetector.detect() else { return nil }
+        // Node versions were read while choosing; Bun and npx are asked here.
+        async let version: String? = runtime.version == nil
+            ? RuntimeDetector.versionNumber(of: runtime.executablePath)
+            : runtime.version
+        let node = ((runtime.executablePath as NSString).deletingLastPathComponent as NSString)
+            .appendingPathComponent("node")
+        async let nodeVersion: String? = runtime.kind == .npx
             && FileManager.default.isExecutableFile(atPath: node)
-            ? versionOutput(node, environment: environment)
+            ? RuntimeDetector.versionNumber(of: node)
             : nil
         return DiagnosticSummary.Runtime(
-            name: runtime.name,
+            kind: runtime.kind,
             version: await version,
             nodeVersion: await nodeVersion
         )
-    }
-
-    private static func versionOutput(_ executable: String, environment: [String: String]) async -> String? {
-        guard let output = try? await CLIProcessRunner.run(
-            executable: executable, arguments: ["--version"],
-            environment: environment, timeout: 5
-        ), !output.timedOut, output.exitCode == 0 else { return nil }
-        return ClaudeUsageProbe.versionNumber(in: output.stdout)
     }
 
     /// The CLI the app would run right now (`@latest` through the detected
@@ -178,6 +171,7 @@ extension AppState {
         let discovered = ClaudeUsageProbe.discoverBinaries()
 
         async let runtime = DiagnosticCollector.runtime()
+        async let bundledNode = BundledNodeProbe.shared.status(path: RuntimeDetector.bundledNodePath)
         async let cli = DiagnosticCollector.cliCheck()
         async let versions = ClaudeUsageProbe.versions(of: discovered)
 
@@ -204,7 +198,11 @@ extension AppState {
             osVersion: DiagnosticCollector.osVersion(),
             architecture: DiagnosticCollector.architecture,
             runtime: await runtime,
+            prefersSystemRuntime: RuntimeDetector.prefersSystemRuntime(),
+            bundledNode: await bundledNode,
             cli: await cli,
+            launcherPresent: RuntimeDetector.launcherScriptPath != nil,
+            cachedCLIVersion: CLILauncher.newestCachedVersion(),
             keyConfigured: isConfigured,
             deviceTag: DiagnosticCollector.deviceTag(hostname: DiagnosticCollector.hostname()),
             proxy: DiagnosticCollector.proxy(

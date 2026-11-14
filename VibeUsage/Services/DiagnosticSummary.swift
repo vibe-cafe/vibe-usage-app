@@ -22,7 +22,15 @@ enum DiagnosticSummary {
         var osVersion: String
         var architecture: String
         var runtime: Runtime?
+        /// `cliRuntimePreference` is `system` (support switch, §2.1).
+        var prefersSystemRuntime = false
+        /// The bundled Node's start-up probe (§2.6).
+        var bundledNode: BundledNodeStatus = .missing
         var cli: CLICheck
+        /// `cli-bootstrap.mjs` is in the app.
+        var launcherPresent = true
+        /// Newest complete version in the launcher's cache (a number only).
+        var cachedCLIVersion: String?
         var keyConfigured: Bool
         /// 4 hex characters of a one-way hash of the hostname.
         var deviceTag: String
@@ -37,10 +45,9 @@ enum DiagnosticSummary {
     }
 
     struct Runtime: Equatable {
-        /// "bun" or "npx"
-        var name: String
+        var kind: RuntimeDetector.Kind
         var version: String?
-        /// For npx: the Node.js next to it.
+        /// For npx (test hooks): the Node.js next to it.
         var nodeVersion: String?
     }
 
@@ -98,9 +105,10 @@ enum DiagnosticSummary {
         lines.append("Vibe Usage 诊断报告 v\(formatVersion) · \(timestamp(input.generatedAt, input.timeZone))")
 
         var environment = "环境：\(input.osVersion) \(input.architecture) · App \(input.appVersion)（\(input.buildNumber)）\(input.buildKind)"
-        environment += " · 运行环境：\(runtimeText(input.runtime))"
+        environment += " · 运行环境：\(runtimeText(input.runtime, prefersSystem: input.prefersSystemRuntime))"
         lines.append(environment)
-        lines.append("CLI：\(cliText(input.cli, records: input.syncRecords))")
+        lines.append("自带 Node：\(bundledNodeText(input.bundledNode))")
+        lines.append("CLI：\(cliText(input.cli, launcherPresent: input.launcherPresent, cachedVersion: input.cachedCLIVersion, records: input.syncRecords))")
         lines.append("账号：\(accountText(input))")
         lines.append(contentsOf: proxyLines(input.proxy))
         lines.append(input.schedulerRunning
@@ -126,21 +134,51 @@ enum DiagnosticSummary {
 
     // MARK: - Sections
 
-    static func runtimeText(_ runtime: Runtime?) -> String {
-        guard let runtime else { return "未找到 Node.js 或 Bun" }
-        var text = runtime.name + (runtime.version.map { " \($0)" } ?? "（版本未知）")
+    static func runtimeText(_ runtime: Runtime?, prefersSystem: Bool = false) -> String {
+        guard let runtime else {
+            return prefersSystem
+                ? "已设为优先用系统运行环境，但未找到 Node.js 或 Bun"
+                : "自带 Node 无法启动，也未找到 Node.js 或 Bun"
+        }
+        let name: String
+        switch runtime.kind {
+        case .bundledNode: name = "App 自带 Node"
+        case .systemNode: name = "系统 Node"
+        case .bun: name = "Bun"
+        case .npx: name = "npx"
+        }
+        var text = name + (runtime.version.map { " \($0)" } ?? "（版本未知）")
         if let node = runtime.nodeVersion { text += "（Node \(node)）" }
+        if prefersSystem { text += "（已设为优先用系统运行环境）" }
         return text
     }
 
-    static func cliText(_ check: CLICheck, records: [SyncRecord]) -> String {
+    static func bundledNodeText(_ status: BundledNodeStatus) -> String {
+        switch status {
+        case let .ok(version): return "能启动（\(version)）"
+        case .missing: return "不能启动（文件缺失）"
+        case .launchFailed: return "不能启动（无法启动）"
+        case .killed: return "不能启动（被系统结束）"
+        case .timedOut: return "不能启动（超时）"
+        case .failed: return "不能启动（运行出错）"
+        }
+    }
+
+    static func cliText(
+        _ check: CLICheck,
+        launcherPresent: Bool = true,
+        cachedVersion: String? = nil,
+        records: [SyncRecord]
+    ) -> String {
         var text: String
         switch check {
         case let .started(version): text = "启动正常 · \(version)"
-        case .runtimeMissing: text = "启动阶段失败（未找到 Node.js 或 Bun）"
+        case .runtimeMissing: text = "启动阶段失败（没有可用的 Node.js 或 Bun）"
         case let .timedOut(seconds): text = "版本检查超时（\(seconds)s）"
         case .failed: text = "启动阶段失败（版本检查没有成功）"
         }
+        text += launcherPresent ? " · 启动脚本正常" : " · 启动脚本缺失"
+        text += cachedVersion.map { " · 本机缓存最新 \($0)" } ?? " · 本机没有缓存的 CLI"
         // The newest record's own classification, without inferring a stage:
         // a timeout may have stalled in the package download before the CLI
         // itself ran.
@@ -203,19 +241,44 @@ enum DiagnosticSummary {
     }
 
     static func syncResultText(_ record: SyncRecord) -> String {
+        let result: String
         switch record.result {
-        case .success: return "成功"
-        case .timedOut: return "超时，120s 时被 App 结束"
-        case .failure: return "失败（\(syncReasonText(record))）"
-        case .launchFailed: return "CLI 启动阶段失败（\(syncReasonText(record))）"
+        case .success: result = "成功"
+        case .timedOut: result = "超时，120s 时被 App 结束"
+        case .failure: result = "失败（\(syncReasonText(record))）"
+        case .launchFailed: result = "CLI 启动阶段失败（\(syncReasonText(record))）"
+        }
+        guard let stage = record.cliFallback else { return result }
+        return "\(result) · 用了本机缓存的 CLI（\(fallbackText(stage))）"
+    }
+
+    /// Why the launcher ran a cached CLI (the run's own result is separate).
+    static func fallbackText(_ stage: SyncRecord.LauncherStage) -> String {
+        switch stage {
+        case .network: "连不上 npm 源"
+        case .registry: "npm 源返回错误"
+        case .download: "新版下载或校验失败"
+        case .install: "新版安装失败"
+        case .other: "原因未知"
+        }
+    }
+
+    /// The launcher's own failure: the CLI never ran.
+    static func launcherFailureText(_ stage: SyncRecord.LauncherStage) -> String {
+        switch stage {
+        case .network: "启动脚本连不上 npm 源"
+        case .registry: "npm 源返回错误"
+        case .download: "下载或校验 CLI 失败"
+        case .install: "安装 CLI 失败"
+        case .other: "启动脚本其他错误"
         }
     }
 
     static func syncReasonText(_ record: SyncRecord) -> String {
         switch record.reason {
-        case .runtimeMissing: return "未找到 Node.js 或 Bun"
+        case .runtimeMissing: return "没有可用的 Node.js 或 Bun"
         case .processNotStarted: return "运行环境无法启动"
-        case .launcherFailed: return "下载或启动 CLI 失败"
+        case .launcherFailed: return record.launcherStage.map(launcherFailureText) ?? "下载或启动 CLI 失败"
         case .keyRejected: return "Key 被服务器拒绝"
         case .serverError: return "服务器错误 \(record.httpStatus.map(String.init) ?? "未知状态码")"
         case .network: return "网络连接失败"

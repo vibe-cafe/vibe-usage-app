@@ -11,6 +11,13 @@ set -euo pipefail
 # Release builds should use --universal so Intel and Apple Silicon Macs both work.
 # --external-test keeps the production service/config behavior of a Release build,
 # while compiling in the local, redacted diagnostic exporter for test packages.
+#
+# Ordinary builds bundle the pinned official Node.js at Contents/Helpers/node
+# (scripts/fetch-node.sh, scripts/bundled-node.env), sign it with the two JIT
+# entitlements in scripts/node.entitlements, and check that this signed copy
+# runs the CLI launcher (VibeUsage/Resources/cli-bootstrap.mjs) and the CLI
+# contract gate. External-test builds keep running their embedded CLI through
+# the system npx and carry no Node.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -25,6 +32,7 @@ NOTARIZE_PROFILE="VibeUsage-8HGCD674ZS"
 MACOS_DEPLOYMENT_TARGET="14.0"
 
 NOTARIZE=false
+AD_HOC=false
 UNIVERSAL=false
 EXTERNAL_TEST=false
 CLI_SOURCE=""
@@ -32,11 +40,13 @@ ARCHS=()
 
 usage() {
     cat <<EOF
-Usage: $0 [--notarize] [--universal] [--external-test --cli-source <path>]
-       $0 [--notarize] [--arch <arch>]... [--external-test --cli-source <path>]
+Usage: $0 [--notarize | --ad-hoc] [--universal] [--external-test --cli-source <path>]
+       $0 [--notarize | --ad-hoc] [--arch <arch>]... [--external-test --cli-source <path>]
 
 Options:
   --notarize          Notarize the signed app + DMG (requires Developer ID)
+  --ad-hoc            Sign ad hoc even when the Developer ID is in the keychain
+                      (local tests and rehearsals that must not use it)
   --universal         Build a universal (arm64 + x86_64) binary
   --arch <arch>       Build for architecture (repeatable: arm64, x86_64)
   --external-test     Release-mode app with redacted local test diagnostics
@@ -48,6 +58,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --notarize)
             NOTARIZE=true
+            shift
+            ;;
+        --ad-hoc)
+            AD_HOC=true
             shift
             ;;
         --universal)
@@ -92,6 +106,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if $NOTARIZE && $AD_HOC; then
+    echo "ERROR: --notarize and --ad-hoc cannot be combined" >&2
+    exit 1
+fi
 
 if $EXTERNAL_TEST; then
     if [[ -z "$CLI_SOURCE" ]]; then
@@ -178,6 +197,15 @@ else
     node "$SCRIPT_DIR/check-cli.mjs"
 fi
 
+# The launcher is owned by the Windows repository; a release must ship exactly
+# what its main branch has. Other builds only warn.
+echo "==> Checking CLI launcher against vibe-usage-windows..."
+if $NOTARIZE && ! $EXTERNAL_TEST; then
+    "$SCRIPT_DIR/check-cli-bootstrap.sh" --sibling
+elif ! "$SCRIPT_DIR/check-cli-bootstrap.sh" --sibling; then
+    echo "    WARNING: launcher differs from vibe-usage-windows main (or the checkout is missing); a release build would stop here."
+fi
+
 # Fall back to ad-hoc signing when Developer ID is unavailable (e.g. local dev install).
 # Notarization obviously cannot work in that mode, and hardened runtime's library
 # validation rejects ad-hoc dylib loads across bundles, so the ad-hoc path also
@@ -187,7 +215,10 @@ fi
 # piping into `grep -q`: under `set -o pipefail`, grep exits on first match and
 # `security` gets SIGPIPE (141), which would mark the pipeline failed and silently
 # switch a valid Developer ID build to ad-hoc.
-IDENTITIES=$(security find-identity -v -p codesigning 2>/dev/null || true)
+IDENTITIES=""
+if ! $AD_HOC; then
+    IDENTITIES=$(security find-identity -v -p codesigning 2>/dev/null || true)
+fi
 if printf '%s\n' "$IDENTITIES" | grep -Fq -- "$SIGN_IDENTITY"; then
     codesign_args=(--force --options runtime --timestamp --sign "$SIGN_IDENTITY")
 else
@@ -195,7 +226,11 @@ else
         echo "ERROR: --notarize requires Developer ID ('$SIGN_IDENTITY') but it is not in the keychain." >&2
         exit 1
     fi
-    echo "==> Developer ID not found — falling back to ad-hoc signing."
+    if $AD_HOC; then
+        echo "==> --ad-hoc: signing ad hoc."
+    else
+        echo "==> Developer ID not found — falling back to ad-hoc signing."
+    fi
     SIGN_IDENTITY="-"
     codesign_args=(--force --sign "$SIGN_IDENTITY")
 fi
@@ -211,6 +246,17 @@ else
 fi
 
 cd "$PROJECT_DIR"
+
+# Temporary paths registered here are removed on every exit, including a check
+# that stops the build half-way.
+TEMP_PATHS=()
+cleanup_temp_paths() {
+    local path
+    for path in ${TEMP_PATHS[@]+"${TEMP_PATHS[@]}"}; do
+        rm -rf "$path"
+    done
+}
+trap cleanup_temp_paths EXIT
 
 SWIFT_BUILD_ARGS=()
 if $EXTERNAL_TEST; then
@@ -343,6 +389,21 @@ else
     echo "    WARNING: SPM resource bundle not found at $RESOURCE_BUNDLE"
 fi
 
+LAUNCHER_IN_APP=$(find "$APP_BUNDLE/Contents/Resources/VibeUsage_VibeUsage.bundle" -name cli-bootstrap.mjs -print -quit 2>/dev/null || true)
+if [[ -z "$LAUNCHER_IN_APP" ]] || ! cmp -s "$LAUNCHER_IN_APP" "$PROJECT_DIR/VibeUsage/Resources/cli-bootstrap.mjs"; then
+    echo "ERROR: the resource bundle does not carry VibeUsage/Resources/cli-bootstrap.mjs unchanged" >&2
+    exit 1
+fi
+
+NODE_BIN="$APP_BUNDLE/Contents/Helpers/node"
+if ! $EXTERNAL_TEST; then
+    NODE_ARCH_ARGS=()
+    for arch in "${ARCHS[@]+"${ARCHS[@]}"}"; do
+        NODE_ARCH_ARGS+=(--arch "$arch")
+    done
+    "$SCRIPT_DIR/fetch-node.sh" --output "$NODE_BIN" ${NODE_ARCH_ARGS[@]+"${NODE_ARCH_ARGS[@]}"}
+fi
+
 if $EXTERNAL_TEST; then
     echo "==> Packing embedded CLI ($CLI_VERSION at $CLI_COMMIT)..."
     CLI_PACK_DIR=$(mktemp -d)
@@ -376,9 +437,16 @@ iconutil -c icns "$ICONSET_DIR" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 rm -rf "$(dirname "$ICONSET_DIR")"
 echo "    Generated AppIcon.icns"
 
-# Codesign: sign all Sparkle internals inside-out, then framework, then app
-# Extract entitlements first to avoid --preserve-metadata timestamp errors
+# Codesign inside-out: the bundled Node, all Sparkle internals, the framework,
+# then the app. Extract Sparkle's entitlements first to avoid
+# --preserve-metadata timestamp errors.
 echo "==> Codesigning ($SIGN_IDENTITY)..."
+if [[ -f "$NODE_BIN" ]]; then
+    # Replaces the Node.js project's own signature (its get-task-allow would fail
+    # notarization) with ours and only the two JIT entitlements.
+    codesign "${codesign_args[@]}" --identifier "ai.vibecafe.vibe-usage.node" \
+        --entitlements "$SCRIPT_DIR/node.entitlements" "$NODE_BIN"
+fi
 SPARKLE_FW="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 SPARKLE_BINS=(
     "$SPARKLE_FW/Versions/B/XPCServices/Installer.xpc"
@@ -391,6 +459,7 @@ for BIN in "${SPARKLE_BINS[@]}"; do
     # macOS BSD mktemp requires an explicit template to end with at least six Xs;
     # `-t` sidesteps that by letting mktemp generate the random suffix itself.
     ENT=$(mktemp -t vibe-usage-ent) || { echo "mktemp failed" >&2; exit 1; }
+    TEMP_PATHS+=("$ENT")
     codesign -d --entitlements :- "$BIN" > "$ENT" 2>/dev/null || true
     if [ -s "$ENT" ] && grep -q '<key>' "$ENT" 2>/dev/null; then
         codesign "${codesign_args[@]}" --entitlements "$ENT" "$BIN"
@@ -404,6 +473,58 @@ codesign "${codesign_args[@]}" "$APP_BUNDLE"
 echo "    Signed with: $SIGN_IDENTITY"
 
 codesign --verify --deep --strict "$APP_BUNDLE"
+
+if [[ -f "$NODE_BIN" ]]; then
+    echo "==> Checking the bundled Node..."
+    NODE_ENTITLEMENTS=$(codesign -d --entitlements - --xml "$NODE_BIN" 2>/dev/null || true)
+    if printf '%s' "$NODE_ENTITLEMENTS" | grep -q 'get-task-allow'; then
+        echo "ERROR: the bundled Node carries get-task-allow; notarization would reject it" >&2
+        exit 1
+    fi
+    if [[ "$SIGN_IDENTITY" != "-" ]] && ! printf '%s' "$NODE_ENTITLEMENTS" | grep -q 'com.apple.security.cs.allow-jit'; then
+        echo "ERROR: the bundled Node is missing allow-jit; it would be killed at start-up" >&2
+        exit 1
+    fi
+    # shellcheck source=bundled-node.env
+    source "$SCRIPT_DIR/bundled-node.env"
+    NODE_CHECK_DIR=$(mktemp -d -t vibe-usage-node-check)
+    TEMP_PATHS+=("$NODE_CHECK_DIR")
+    # The app's own start-up probe, the shipped launcher (in an empty home and
+    # cache, so the official registry is asked and the user's cache is left
+    # alone), and the CLI contract gate run by this signed Node.
+    check_bundled_node() {
+        local label="$1"; shift
+        local probe cli_version
+        probe=$("$@" "$NODE_BIN" -e 'let s=0;for(let i=0;i<2e6;i++)s+=i%7;process.stdout.write(process.version)') \
+            || probe="a failure (exit $?)"
+        if [[ "$probe" != "v$NODE_VERSION" ]]; then
+            echo "ERROR: bundled Node ($label) answered $probe, expected v$NODE_VERSION" >&2
+            exit 1
+        fi
+        mkdir -p "$NODE_CHECK_DIR/$label"
+        cli_version=$(HOME="$NODE_CHECK_DIR/$label" VIBE_USAGE_CONFIG_DIR="$NODE_CHECK_DIR/$label" \
+            "$@" "$NODE_BIN" "$LAUNCHER_IN_APP" --version)
+        echo "    $label: probe $probe, launcher ran CLI $cli_version"
+        "$@" "$NODE_BIN" "$SCRIPT_DIR/check-cli.mjs"
+    }
+    NODE_ARCHS=$(lipo -archs "$NODE_BIN")
+    if [[ " $NODE_ARCHS " == *" $(uname -m) "* ]]; then
+        check_bundled_node "$(uname -m)" env
+    fi
+    # On Apple silicon, run the Intel slice under Rosetta too (only a proxy for
+    # a real Intel Mac: Rosetta's memory protection differs).
+    if [[ "$(uname -m)" == "arm64" && " $NODE_ARCHS " == *" x86_64 "* ]]; then
+        if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            check_bundled_node x86_64-rosetta arch -x86_64
+        elif $NOTARIZE; then
+            echo "ERROR: Rosetta is not installed, so the Intel slice of the bundled Node cannot be checked" >&2
+            exit 1
+        else
+            echo "    WARNING: Rosetta is not installed; the Intel slice was not run."
+        fi
+    fi
+    rm -rf "$NODE_CHECK_DIR"
+fi
 
 if $NOTARIZE; then
     # Zip for notarization submission
@@ -433,7 +554,7 @@ if $NOTARIZE; then
 
     hdiutil create -volname "$APP_NAME" \
         -srcfolder "$DMG_STAGING" \
-        -ov -format UDZO \
+        -ov -format ULMO \
         "$DMG_PATH"
     rm -rf "$DMG_STAGING"
 
@@ -447,9 +568,9 @@ if $NOTARIZE; then
 
     echo ""
     echo "==> Done! Signed + notarized:"
-    echo "    $APP_BUNDLE"
-    echo "    $DMG_PATH (initial download)"
-    echo "    $ZIP_PATH (Sparkle updates)"
+    echo "    $APP_BUNDLE ($(du -sh "$APP_BUNDLE" | awk '{ print $1 }') installed)"
+    echo "    $DMG_PATH (initial download, $(stat -f %z "$DMG_PATH") bytes)"
+    echo "    $ZIP_PATH (Sparkle updates, $(stat -f %z "$ZIP_PATH") bytes)"
 else
     if $EXTERNAL_TEST; then
         echo "==> Creating external-test ZIP..."
@@ -462,7 +583,7 @@ else
     fi
     echo ""
     echo "==> Done! Signed app bundle at:"
-    echo "    $APP_BUNDLE"
+    echo "    $APP_BUNDLE ($(du -sh "$APP_BUNDLE" | awk '{ print $1 }'))"
     echo "    Architectures: $(lipo -archs "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE" 2>/dev/null || true)"
     if $EXTERNAL_TEST; then
         echo "    Build kind: external test (redacted diagnostics enabled)"

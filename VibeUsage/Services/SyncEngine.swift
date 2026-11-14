@@ -1,6 +1,7 @@
 import Foundation
 
-/// Executes `npx @vibe-cafe/vibe-usage sync` (or bunx) and parses the result
+/// Runs `vibe-usage sync` through the chosen runtime (`RuntimeDetector`) and
+/// interprets the result.
 actor SyncEngine {
     static let shared = SyncEngine()
 
@@ -18,7 +19,7 @@ actor SyncEngine {
         var errorDescription: String? {
             switch self {
             case .noRuntime:
-                "未检测到 Node.js 或 Bun，请先安装"
+                RuntimeDetector.unavailableMessage
             case .unauthorized:
                 "API Key 无效，请重新配置"
             case .processFailure(let msg):
@@ -38,6 +39,8 @@ actor SyncEngine {
         var reason: SyncRecord.Reason?
         var httpStatus: Int?
         var exitCode: Int32?
+        var launcherStage: SyncRecord.LauncherStage?
+        var cliFallback: SyncRecord.LauncherStage?
     }
 
     /// `outcome` is nil only when no sync actually ran (one was already in
@@ -49,22 +52,14 @@ actor SyncEngine {
         isRunning = true
         defer { isRunning = false }
 
-        guard let runtime = RuntimeDetector.detect() else {
+        guard let runtime = await RuntimeDetector.detect() else {
             return (.failure(.noRuntime), Outcome(result: .launchFailed, reason: .runtimeMissing))
         }
 
-        var env = ProcessInfo.processInfo.environment
-        let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
-        env["PATH"] = runtimeDir + (env["PATH"].map { ":\($0)" } ?? "")
-        env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
-        #if DEBUG
-        env["VIBE_USAGE_DEV"] = "1"
-        #endif
-
         do {
             let output = try await CLIProcessRunner.run(
-                executable: runtime.executablePath, arguments: runtime.syncArguments,
-                environment: env, timeout: 120
+                executable: runtime.executablePath, arguments: runtime.arguments(["sync"]),
+                environment: runtime.environment(base: ProcessInfo.processInfo.environment), timeout: 120
             )
             return (interpret(output), Self.outcome(for: output))
         } catch {
@@ -78,18 +73,36 @@ actor SyncEngine {
     /// Classifies a finished run into fixed codes. The process text is only
     /// *matched* here; nothing from it is kept except an HTTP status number.
     nonisolated static func outcome(for output: CLIProcessRunner.Output) -> Outcome {
+        // Like the Windows app, a timeout keeps no fallback stage: the
+        // timeout path does not judge what was printed before the kill.
         if output.timedOut { return Outcome(result: .timedOut) }
-        if output.exitCode == 0 { return Outcome(result: .success) }
+        var outcome = classify(
+            stdout: output.stdout,
+            stderr: CLILauncher.withoutNotice(output.stderr),
+            exitCode: output.exitCode
+        )
+        if outcome.result != .launchFailed {
+            outcome.cliFallback = CLILauncher.fallbackStage(in: output.stderr)
+        }
+        return outcome
+    }
 
-        let text = output.stdout + "\n" + output.stderr
+    /// `stderr` has had the cached-CLI notice removed.
+    private nonisolated static func classify(stdout: String, stderr: String, exitCode: Int32) -> Outcome {
+        if exitCode == 0 { return Outcome(result: .success) }
+        if let stage = CLILauncher.failureStage(in: stderr) {
+            return Outcome(result: .launchFailed, reason: .launcherFailed, launcherStage: stage)
+        }
+
+        let text = stdout + "\n" + stderr
         // The CLI prints its own Chinese hint; older builds and the app's
         // earlier check used the English markers.
         if text.contains("API Key 无效") || text.contains("Invalid API key")
             || text.contains("UNAUTHORIZED") {
             return Outcome(result: .failure, reason: .keyRejected)
         }
-        // `npx` / `bun x` failing to fetch or start the package: the CLI's own
-        // code never ran (e.g. the npm registry is unreachable).
+        // `npx` (test hooks) failing to fetch or start the package: the CLI's
+        // own code never ran (e.g. the npm registry is unreachable).
         let lowered = text.lowercased()
         if lowered.contains("npm err!") || lowered.contains("npm error")
             || lowered.range(of: #"(?m)^error: .*(registry|manifest|vibe-usage)"#,
@@ -108,13 +121,13 @@ actor SyncEngine {
         if text.contains("RangeError: Invalid string length") || text.contains("node:internal/readline") {
             return Outcome(result: .failure, reason: .cliCrashed)
         }
-        return Outcome(result: .failure, reason: .other, exitCode: output.exitCode)
+        return Outcome(result: .failure, reason: .other, exitCode: exitCode)
     }
 
     func interpret(_ output: CLIProcessRunner.Output) -> Result<String, SyncError> {
         if output.timedOut { return .failure(.timeout) }
         let stdout = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        let stderr = output.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = CLILauncher.withoutNotice(output.stderr).trimmingCharacters(in: .whitespacesAndNewlines)
         debugLog("[SyncEngine] Exit: \(output.exitCode)")
         debugLog("[SyncEngine] stdout: \(stdout.prefix(500))")
         debugLog("[SyncEngine] stderr: \(stderr.prefix(500))")
@@ -125,7 +138,22 @@ actor SyncEngine {
         if combined.contains("Invalid API key") || combined.contains("UNAUTHORIZED") {
             return .failure(.unauthorized)
         }
+        if let stage = CLILauncher.failureStage(in: stderr), let message = Self.launcherFailureText(stage) {
+            return .failure(.processFailure(message))
+        }
         return .failure(.processFailure(friendlyFailureMessage(combined, exitCode: output.exitCode)))
+    }
+
+    /// Our own copy for a launcher failure the footer can name; `nil` keeps
+    /// the launcher's line (an unexpected error is better shown than hidden).
+    nonisolated static func launcherFailureText(_ stage: SyncRecord.LauncherStage) -> String? {
+        switch stage {
+        case .network: "连不上 npm 源，CLI 没有下载成功"
+        case .registry: "npm 源返回错误，CLI 没有下载成功"
+        case .download: "CLI 下载或校验失败"
+        case .install: "CLI 安装失败"
+        case .other: nil
+        }
     }
 
     private func friendlyFailureMessage(_ message: String, exitCode: Int32) -> String {

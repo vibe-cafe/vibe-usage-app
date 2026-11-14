@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the bundled Node.js only (Contents/Helpers/node); the app and
+  Sparkle keep theirs. Two of the six in Node's own tools/osx-entitlements.plist
+  (approved 2026-11-14, 《Mac 自带 Node 方案》§4.2): V8 must create and run
+  machine code under the hardened runtime. Never add get-task-allow
+  (notarization rejects it), disable-library-validation,
+  allow-dyld-environment-variables or disable-executable-page-protection.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+</dict>
+</plist>
