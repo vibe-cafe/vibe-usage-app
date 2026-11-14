@@ -204,7 +204,7 @@ struct RateLimitCardView: View {
         case .endpointUnreachable: return "\(name) 配额接口连接失败"
         case let .endpointHTTPStatus(status): return "\(name) 配额接口返回错误 \(status)"
         case .endpointUnrecognized: return "\(name) 配额接口返回了无法识别的数据"
-        case .cliRuntimeMissing: return "未找到 Node.js 或 Bun"
+        case .cliRuntimeMissing: return "没有可用的 Node.js 或 Bun"
         case .cliTimedOut: return "配额 CLI 读取超时"
         case .cliFailed: return "配额 CLI 运行失败"
         case .cliUnrecognizedOutput: return "配额 CLI 返回了无法识别的数据"

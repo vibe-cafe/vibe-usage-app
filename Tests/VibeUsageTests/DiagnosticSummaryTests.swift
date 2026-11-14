@@ -33,7 +33,12 @@ struct DiagnosticSummaryTests {
         claude: DiagnosticSummary.Claude? = nil,
         syncRecords: [SyncRecord] = [],
         proxy: DiagnosticSummary.Proxy = DiagnosticSummary.Proxy(),
-        cli: DiagnosticSummary.CLICheck = .started(version: "0.14.11")
+        cli: DiagnosticSummary.CLICheck = .started(version: "0.14.11"),
+        runtime: DiagnosticSummary.Runtime? = DiagnosticSummary.Runtime(kind: .bundledNode, version: "24.22.3"),
+        prefersSystemRuntime: Bool = false,
+        bundledNode: BundledNodeStatus = .ok(version: "24.22.3"),
+        launcherPresent: Bool = true,
+        cachedCLIVersion: String? = "0.14.11"
     ) -> DiagnosticSummary.Input {
         DiagnosticSummary.Input(
             generatedAt: Date(timeIntervalSince1970: 1_793_000_000),
@@ -43,8 +48,12 @@ struct DiagnosticSummaryTests {
             buildKind: "正式版",
             osVersion: "macOS 26.1.0",
             architecture: "arm64",
-            runtime: DiagnosticSummary.Runtime(name: "bun", version: "1.2.19", nodeVersion: nil),
+            runtime: runtime,
+            prefersSystemRuntime: prefersSystemRuntime,
+            bundledNode: bundledNode,
             cli: cli,
+            launcherPresent: launcherPresent,
+            cachedCLIVersion: cachedCLIVersion,
             keyConfigured: true,
             deviceTag: DiagnosticCollector.deviceTag(hostname: Self.fakeHostname),
             proxy: proxy,
@@ -179,8 +188,9 @@ struct DiagnosticSummaryTests {
 
         #expect(lines.first?.hasPrefix("Vibe Usage 诊断报告 v1 · ") == true)
         #expect(lines.first?.hasSuffix("（UTC+8）") == true)
-        #expect(report.contains("环境：macOS 26.1.0 arm64 · App 0.7.4（40）正式版 · 运行环境：bun 1.2.19"))
-        #expect(report.contains("CLI：启动正常 · 0.14.11 · 最近一次同步：成功"))
+        #expect(report.contains("环境：macOS 26.1.0 arm64 · App 0.7.4（40）正式版 · 运行环境：App 自带 Node 24.22.3"))
+        #expect(lines.contains("自带 Node：能启动（24.22.3）"))
+        #expect(report.contains("CLI：启动正常 · 0.14.11 · 启动脚本正常 · 本机缓存最新 0.14.11 · 最近一次同步：成功"))
         #expect(report.contains("账号：已配置 Key · 最近一次同步未被服务器拒绝 · 设备标签 "))
         #expect(report.contains("后台：App 定时同步（每 30 分钟）已开启"))
         #expect(report.contains("定时 · 成功 · 18s"))
@@ -196,12 +206,12 @@ struct DiagnosticSummaryTests {
                                   result: .failure, reason: .keyRejected)]
         let report = DiagnosticSummary.render(input(syncRecords: records, cli: .runtimeMissing))
         #expect(report.contains("最近一次同步被服务器拒绝（Key 无效）"))
-        #expect(report.contains("CLI：启动阶段失败（未找到 Node.js 或 Bun） · 最近一次同步：失败（Key 被服务器拒绝）"))
+        #expect(report.contains("CLI：启动阶段失败（没有可用的 Node.js 或 Bun） · 启动脚本正常 · 本机缓存最新 0.14.11 · 最近一次同步：失败（Key 被服务器拒绝）"))
 
         let launch = [SyncRecord(startedAt: Date(), duration: 0, trigger: .scheduled,
                                  result: .launchFailed, reason: .runtimeMissing)]
         #expect(DiagnosticSummary.render(input(syncRecords: launch, cli: .timedOut(seconds: 20)))
-            .contains("CLI：版本检查超时（20s） · 最近一次同步：CLI 启动阶段失败（未找到 Node.js 或 Bun）"))
+            .contains("CLI：版本检查超时（20s） · 启动脚本正常 · 本机缓存最新 0.14.11 · 最近一次同步：CLI 启动阶段失败（没有可用的 Node.js 或 Bun）"))
     }
 
     /// 「最近一次」 means the newest record, and only a success or an explicit
@@ -250,9 +260,9 @@ struct DiagnosticSummaryTests {
 
         // The CLI line reuses the record's own classification.
         let expectedCLI: [(SyncRecord, String)] = [
-            (record(.timedOut), "CLI：启动正常 · 0.14.11 · 最近一次同步：超时，120s 时被 App 结束"),
+            (record(.timedOut), "CLI：启动正常 · 0.14.11 · 启动脚本正常 · 本机缓存最新 0.14.11 · 最近一次同步：超时，120s 时被 App 结束"),
             (record(.launchFailed, .launcherFailed),
-             "CLI：启动正常 · 0.14.11 · 最近一次同步：CLI 启动阶段失败（下载或启动 CLI 失败）"),
+             "CLI：启动正常 · 0.14.11 · 启动脚本正常 · 本机缓存最新 0.14.11 · 最近一次同步：CLI 启动阶段失败（下载或启动 CLI 失败）"),
         ]
         for (latest, cliLine) in expectedCLI {
             let report = DiagnosticSummary.render(input(syncRecords: [latest, olderRejection]))
@@ -480,5 +490,137 @@ struct DiagnosticSummaryTests {
             == .init(result: .failure, reason: .cliCrashed))
         #expect(outcome("", "something unexpected", exit: 3)
             == .init(result: .failure, reason: .other, exitCode: 3))
+    }
+
+    // MARK: - Bundled Node and the launcher (《Mac 自带 Node 方案》§2.6)
+
+    @Test
+    func runtimeLineNamesTheKindAndThePreference() {
+        func line(_ runtime: DiagnosticSummary.Runtime?, prefersSystem: Bool = false) -> String {
+            DiagnosticSummary.runtimeText(runtime, prefersSystem: prefersSystem)
+        }
+        #expect(line(.init(kind: .bundledNode, version: "24.22.3")) == "App 自带 Node 24.22.3")
+        #expect(line(.init(kind: .systemNode, version: "22.19.0")) == "系统 Node 22.19.0")
+        #expect(line(.init(kind: .bun, version: nil)) == "Bun（版本未知）")
+        #expect(line(.init(kind: .npx, version: "10.9.3", nodeVersion: "22.19.0")) == "npx 10.9.3（Node 22.19.0）")
+        #expect(line(.init(kind: .systemNode, version: "22.19.0"), prefersSystem: true)
+            == "系统 Node 22.19.0（已设为优先用系统运行环境）")
+        #expect(line(nil) == "自带 Node 无法启动，也未找到 Node.js 或 Bun")
+        #expect(line(nil, prefersSystem: true) == "已设为优先用系统运行环境，但未找到 Node.js 或 Bun")
+    }
+
+    @Test
+    func bundledNodeLineUsesFixedReasonsOnly() {
+        let expected: [(BundledNodeStatus, String)] = [
+            (.ok(version: "24.22.3"), "自带 Node：能启动（24.22.3）"),
+            (.missing, "自带 Node：不能启动（文件缺失）"),
+            (.launchFailed, "自带 Node：不能启动（无法启动）"),
+            (.killed, "自带 Node：不能启动（被系统结束）"),
+            (.timedOut, "自带 Node：不能启动（超时）"),
+            (.failed, "自带 Node：不能启动（运行出错）"),
+        ]
+        for (status, text) in expected {
+            let report = DiagnosticSummary.render(input(bundledNode: status))
+            #expect(report.components(separatedBy: "\n").contains(text), "\(status)")
+        }
+    }
+
+    @Test
+    func cliLineReportsTheLauncherAndItsCache() {
+        let missing = DiagnosticSummary.render(input(launcherPresent: false, cachedCLIVersion: nil))
+        #expect(missing.contains("CLI：启动正常 · 0.14.11 · 启动脚本缺失 · 本机没有缓存的 CLI"))
+        let cached = DiagnosticSummary.render(input(cachedCLIVersion: "0.14.12"))
+        #expect(cached.contains("启动脚本正常 · 本机缓存最新 0.14.12"))
+    }
+
+    @Test
+    func syncLinesNameTheLauncherStageAndTheCachedFallback() {
+        func record(_ result: SyncRecord.Result, _ reason: SyncRecord.Reason? = nil,
+                    stage: SyncRecord.LauncherStage? = nil,
+                    fallback: SyncRecord.LauncherStage? = nil) -> SyncRecord {
+            SyncRecord(startedAt: Date(), duration: 9, trigger: .scheduled, result: result,
+                       reason: reason, launcherStage: stage, cliFallback: fallback)
+        }
+        let failures: [(SyncRecord.LauncherStage, String)] = [
+            (.network, "CLI 启动阶段失败（启动脚本连不上 npm 源）"),
+            (.registry, "CLI 启动阶段失败（npm 源返回错误）"),
+            (.download, "CLI 启动阶段失败（下载或校验 CLI 失败）"),
+            (.install, "CLI 启动阶段失败（安装 CLI 失败）"),
+            (.other, "CLI 启动阶段失败（启动脚本其他错误）"),
+        ]
+        for (stage, text) in failures {
+            #expect(DiagnosticSummary.syncResultText(record(.launchFailed, .launcherFailed, stage: stage)) == text)
+        }
+        let fallbacks: [(SyncRecord.LauncherStage, String)] = [
+            (.network, "成功 · 用了本机缓存的 CLI（连不上 npm 源）"),
+            (.registry, "成功 · 用了本机缓存的 CLI（npm 源返回错误）"),
+            (.download, "成功 · 用了本机缓存的 CLI（新版下载或校验失败）"),
+            (.install, "成功 · 用了本机缓存的 CLI（新版安装失败）"),
+            (.other, "成功 · 用了本机缓存的 CLI（原因未知）"),
+        ]
+        for (stage, text) in fallbacks {
+            #expect(DiagnosticSummary.syncResultText(record(.success, fallback: stage)) == text)
+        }
+        let report = DiagnosticSummary.render(input(syncRecords: [
+            record(.failure, .serverError, fallback: .network),
+        ]))
+        #expect(report.contains("定时 · 失败（服务器错误 未知状态码） · 用了本机缓存的 CLI（连不上 npm 源） · 9.0s"))
+    }
+
+    /// Records written before these fields existed still load.
+    @Test
+    func olderSyncRecordsDecodeWithoutTheNewFields() throws {
+        let old = #"[{"startedAt":800000000,"duration":3,"trigger":"manual","result":"launchFailed","reason":"launcherFailed"}]"#
+        let records = try JSONDecoder().decode([SyncRecord].self, from: Data(old.utf8))
+        #expect(records.first?.launcherStage == nil)
+        #expect(records.first?.cliFallback == nil)
+        #expect(DiagnosticSummary.syncResultText(records[0]) == "CLI 启动阶段失败（下载或启动 CLI 失败）")
+    }
+
+    /// The launcher's exact lines (`cli-bootstrap.mjs`, the Windows tests'
+    /// fixtures): the notice never makes a run a failure or hides the CLI's
+    /// own error, and only `vibe-usage launcher:` means the CLI never ran.
+    @Test
+    func launcherOutputClassifiesLikeTheWindowsApp() {
+        func outcome(_ stdout: String = "", _ stderr: String = "", exit: Int32 = 1) -> SyncEngine.Outcome {
+            SyncEngine.outcome(for: .init(stdout: stdout, stderr: stderr, exitCode: exit, timedOut: false))
+        }
+        let notice = "vibe-usage launcher notice: stage=network; running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (fetch failed: ETIMEDOUT)"
+
+        #expect(outcome("已同步 3 buckets", notice + "\n", exit: 0)
+            == .init(result: .success, cliFallback: .network))
+        #expect(outcome("", "  \(notice)\r\n✗ 同步失败: HTTP 502: bad gateway")
+            == .init(result: .failure, reason: .serverError, httpStatus: 502, cliFallback: .network))
+        // The notice's own "ETIMEDOUT" must not turn a key rejection into a network failure.
+        #expect(outcome("", notice + "\n✗ API Key 无效，请重新配置")
+            == .init(result: .failure, reason: .keyRejected, cliFallback: .network))
+        #expect(outcome("", notice + "\nsomething unexpected", exit: 4)
+            == .init(result: .failure, reason: .other, exitCode: 4, cliFallback: .network))
+        for word in ["registry", "download", "install"] {
+            let stderr = "vibe-usage launcher notice: stage=\(word); running cached @vibe-cafe/vibe-usage@0.14.11 because latest is unavailable (x)"
+            #expect(outcome("", stderr, exit: 0).cliFallback == SyncRecord.LauncherStage(rawValue: word))
+        }
+        #expect(outcome("", "vibe-usage launcher notice: stage=someday; …", exit: 0).cliFallback == .other)
+
+        let failures: [(String, SyncRecord.LauncherStage)] = [
+            ("vibe-usage launcher: TypeError: fetch failed\n    at node:internal/deps/undici:1:1\n  cause: Error: connect ETIMEDOUT 104.16.0.35:443", .network),
+            ("vibe-usage launcher: TimeoutError: The operation was aborted due to timeout", .network),
+            ("vibe-usage launcher: registry returned 503 for @vibe-cafe/vibe-usage@latest", .registry),
+            ("vibe-usage launcher: registry answered without a version/tarball for @vibe-cafe/vibe-usage@latest", .registry),
+            ("vibe-usage launcher: download failed (404) for @vibe-cafe/vibe-usage@0.14.9", .download),
+            ("vibe-usage launcher: integrity mismatch for @vibe-cafe/vibe-usage@0.14.9", .download),
+            ("vibe-usage launcher: could not install @vibe-cafe/vibe-usage@0.14.9: EACCES", .install),
+            ("vibe-usage launcher: @vibe-cafe/vibe-usage@0.14.9 did not contain src/index.js", .install),
+            ("vibe-usage launcher: Error: cli failed to load", .other),
+        ]
+        for (stderr, stage) in failures {
+            #expect(outcome("", stderr) == .init(result: .launchFailed, reason: .launcherFailed, launcherStage: stage), "\(stderr)")
+        }
+        // #34 on Windows: a crash inside the CLI's run() carries no prefix.
+        #expect(outcome("", "Error: cli crashed\n    at run (file:///x/src/index.js:1:1)", exit: 1)
+            == .init(result: .failure, reason: .other, exitCode: 1))
+        // A timeout is the app's own verdict, as before.
+        #expect(SyncEngine.outcome(for: .init(stdout: "", stderr: notice, exitCode: 15, timedOut: true))
+            == .init(result: .timedOut))
     }
 }

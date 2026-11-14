@@ -236,6 +236,9 @@ final class AppState {
 
     // MARK: - Config
     var isConfigured: Bool = false
+    /// False only after a sync found no usable runtime (bundled Node failed its
+    /// probe and no system Node.js or Bun exists). Learned from the sync, not
+    /// at launch, so the bundled Node's probe never runs on the main thread.
     var runtimeAvailable: Bool = true
 
     // MARK: - Subscription Quotas
@@ -373,9 +376,6 @@ final class AppState {
         self.config = loadedConfig
         self.isConfigured = loadedConfig?.apiKey != nil
 
-        let runtime = RuntimeDetector.detect()
-        self.runtimeAvailable = runtime != nil
-
         if isConfigured {
             startScheduler()
         }
@@ -469,8 +469,11 @@ final class AppState {
                 result: outcome.result,
                 reason: outcome.reason,
                 httpStatus: outcome.httpStatus,
-                exitCode: outcome.exitCode
+                exitCode: outcome.exitCode,
+                launcherStage: outcome.launcherStage,
+                cliFallback: outcome.cliFallback
             ))
+            runtimeAvailable = outcome.reason != .runtimeMissing
         }
 
         switch result {

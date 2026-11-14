@@ -24,7 +24,8 @@ struct SyncRecord: Codable, Equatable, Sendable {
         /// The app's 120s deadline ended the CLI.
         case timedOut
         /// The CLI never ran: no runtime, the process could not start, or the
-        /// package launcher (`bun x` / `npx`) failed before the CLI's own code.
+        /// launcher (`cli-bootstrap.mjs`, or `npx` for the test hooks) failed
+        /// before the CLI's own code.
         case launchFailed
     }
 
@@ -39,6 +40,20 @@ struct SyncRecord: Codable, Equatable, Sendable {
         case other
     }
 
+    /// The step at which `cli-bootstrap.mjs` could not get `latest` — the same
+    /// words the launcher prints and the Windows app records.
+    enum LauncherStage: String, Codable, Sendable {
+        /// The npm registry could not be reached (network error or timeout).
+        case network
+        /// The registry answered with an error or without a version.
+        case registry
+        /// Downloading or verifying the package failed.
+        case download
+        /// Unpacking or placing the package failed.
+        case install
+        case other
+    }
+
     var startedAt: Date
     var duration: TimeInterval
     var trigger: Trigger
@@ -48,6 +63,14 @@ struct SyncRecord: Codable, Equatable, Sendable {
     var httpStatus: Int?
     /// Only for `.other`: the process exit code.
     var exitCode: Int32?
+    /// Only for `.launcherFailed` from `cli-bootstrap.mjs`: the stage its fixed
+    /// message names. Approved 2026-11-14 with 《Mac 自带 Node 方案》§2.6.
+    var launcherStage: LauncherStage?
+    /// The launcher could not get `latest` at this stage and ran the newest
+    /// cached CLI instead; `result` is that CLI's own outcome. Only the stage
+    /// word is kept, never the notice text or the version (§2.6, same field
+    /// as the Windows app's `cliFallback`). Older records simply lack it.
+    var cliFallback: LauncherStage?
 }
 
 /// The last `limit` sync summaries in the app's own preferences, newest first.
