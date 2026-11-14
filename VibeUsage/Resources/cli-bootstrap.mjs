@@ -73,6 +73,28 @@ function fail(message) {
   process.exit(1);
 }
 
+/**
+ * An unquoted npmrc value ends at the first `#` or `;` not escaped with `\`
+ * (an inline comment); `\#`, `\;` and `\\` stand for the character itself.
+ * The same walk as npm's `ini` parser, so `registry=https://… # 国内镜像` reads
+ * as the address alone.
+ */
+function stripInlineComment(value) {
+  let out = '';
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c === '\\' && i + 1 < value.length) {
+      const next = value[++i];
+      out += next === '#' || next === ';' || next === '\\' ? next : c + next;
+    } else if (c === '#' || c === ';') {
+      break;
+    } else {
+      out += c;
+    }
+  }
+  return out.trim();
+}
+
 /** `key=value` lines of an npmrc; the last assignment of a key wins, as in npm. */
 function parseNpmrc(text) {
   const settings = new Map();
@@ -84,6 +106,8 @@ function parseNpmrc(text) {
     let value = line.slice(eq + 1).trim();
     if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
       value = value.slice(1, -1);
+    } else {
+      value = stripInlineComment(value);
     }
     settings.set(line.slice(0, eq).trim(), value);
   }
@@ -122,11 +146,12 @@ function hasCredentials(settings, host) {
  *
  * Only a plain `https:` URL is followed. The launcher sends no credentials, so a
  * registry the file holds credentials for (a private company registry) would
- * only answer 401 and is skipped; so are URLs with embedded credentials or an
- * unexpanded `${…}` placeholder, and plain `http:`, whose answer anyone on the
- * route could replace — including the integrity it carries. Anything skipped,
- * unreadable or absent means registry.npmjs.org, as before. Proxy settings in
- * the file are not read.
+ * only answer 401 and is skipped; so are URLs with embedded credentials and
+ * plain `http:`, whose answer anyone on the route could replace — including the
+ * integrity it carries. Environment variables are not expanded the way npm
+ * expands them: a value containing `${` counts as invalid and means the
+ * official registry. Anything skipped, unreadable or absent means
+ * registry.npmjs.org, as before. Proxy settings in the file are not read.
  */
 function registryBase() {
   let settings;

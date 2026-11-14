@@ -247,6 +247,17 @@ fi
 
 cd "$PROJECT_DIR"
 
+# Temporary paths registered here are removed on every exit, including a check
+# that stops the build half-way.
+TEMP_PATHS=()
+cleanup_temp_paths() {
+    local path
+    for path in ${TEMP_PATHS[@]+"${TEMP_PATHS[@]}"}; do
+        rm -rf "$path"
+    done
+}
+trap cleanup_temp_paths EXIT
+
 SWIFT_BUILD_ARGS=()
 if $EXTERNAL_TEST; then
     SWIFT_BUILD_ARGS=(-Xswiftc -D -Xswiftc VIBE_USAGE_EXTERNAL_TEST)
@@ -448,6 +459,7 @@ for BIN in "${SPARKLE_BINS[@]}"; do
     # macOS BSD mktemp requires an explicit template to end with at least six Xs;
     # `-t` sidesteps that by letting mktemp generate the random suffix itself.
     ENT=$(mktemp -t vibe-usage-ent) || { echo "mktemp failed" >&2; exit 1; }
+    TEMP_PATHS+=("$ENT")
     codesign -d --entitlements :- "$BIN" > "$ENT" 2>/dev/null || true
     if [ -s "$ENT" ] && grep -q '<key>' "$ENT" 2>/dev/null; then
         codesign "${codesign_args[@]}" --entitlements "$ENT" "$BIN"
@@ -476,6 +488,7 @@ if [[ -f "$NODE_BIN" ]]; then
     # shellcheck source=bundled-node.env
     source "$SCRIPT_DIR/bundled-node.env"
     NODE_CHECK_DIR=$(mktemp -d -t vibe-usage-node-check)
+    TEMP_PATHS+=("$NODE_CHECK_DIR")
     # The app's own start-up probe, the shipped launcher (in an empty home and
     # cache, so the official registry is asked and the user's cache is left
     # alone), and the CLI contract gate run by this signed Node.
