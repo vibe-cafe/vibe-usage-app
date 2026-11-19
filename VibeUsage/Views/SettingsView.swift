@@ -3,16 +3,17 @@ import ServiceManagement
 
 // MARK: - Manifest
 
-/// The Settings window's categories, in toolbar order. This enum is the only
-/// place a category is declared: `SettingsWindowController` builds one toolbar
-/// tab per case and `SettingsTabContent` maps each case to its page, so adding
-/// a category is one case here plus its page.
-enum SettingsTab: String, CaseIterable, Identifiable {
+/// The sidebar's categories, top to bottom. This enum is the only place a
+/// category is declared: the sidebar lists `SettingsSidebar.categories` and
+/// `SettingsDetail` maps each case to its page, so adding a category is one
+/// case here plus its page. Quota products are not categories: the sidebar's
+/// 提供商 group lists them from the product catalog.
+enum SettingsCategory: String, CaseIterable, Identifiable {
     case general
     case account
-    case quota
     case dataSources
     case about
+    case debug
 
     var id: String { rawValue }
 
@@ -20,9 +21,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "通用"
         case .account: "账号与同步"
-        case .quota: "订阅配额"
         case .dataSources: "数据来源"
         case .about: "关于与诊断"
+        case .debug: "调试"
         }
     }
 
@@ -30,40 +31,207 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "gearshape"
         case .account: "person.crop.circle"
-        case .quota: "gauge.with.dots.needle.50percent"
         case .dataSources: "folder"
         case .about: "info.circle"
+        case .debug: "ladybug"
         }
     }
 
-    /// Every page has the same size, so switching tabs never resizes the
-    /// window.
-    static let contentSize = CGSize(width: 620, height: 440)
+    /// 调试 holds the test-build log export, so it exists only where that
+    /// export does.
+    var isAvailable: Bool {
+        switch self {
+        case .debug:
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            return true
+            #else
+            return false
+            #endif
+        case .general, .account, .dataSources, .about:
+            return true
+        }
+    }
 }
 
-/// Where an open Settings window should point when another surface asks for a
-/// specific place (a grey quota tab in the panel opens 订阅配额 on its product).
+/// One sidebar row: a category page or a quota product's page.
+enum SettingsDestination: Hashable {
+    case category(SettingsCategory)
+    case provider(ProviderRateLimit.Provider)
+
+    /// The window title while this page is open.
+    var title: String {
+        switch self {
+        case .category(let category): category.title
+        case .provider(let provider): provider.displayName
+        }
+    }
+
+    /// Category raw value or provider id (they never collide), for the
+    /// DEBUG launch hook.
+    init?(rawValue: String) {
+        if let category = SettingsCategory(rawValue: rawValue) {
+            self = .category(category)
+        } else if let provider = ProviderRateLimit.Provider(rawValue: rawValue) {
+            self = .provider(provider)
+        } else {
+            return nil
+        }
+    }
+}
+
+/// What the sidebar lists. Both halves come from a single source: categories
+/// from `SettingsCategory`, providers from the panel's own order
+/// (`AppState.quotaTabOrder`: enabled products first, each group in the
+/// persisted `quotaProductOrder`), so the sidebar and the panel's tab strip
+/// always show the same sequence.
+@MainActor
+enum SettingsSidebar {
+    static var categories: [SettingsCategory] {
+        SettingsCategory.allCases.filter(\.isAvailable)
+    }
+
+    static func providers(_ appState: AppState) -> [ProviderRateLimit.Provider] {
+        appState.quotaTabOrder
+    }
+
+    static func enabledSummary(_ appState: AppState) -> String {
+        "\(providers(appState).filter(appState.isQuotaProviderSelected).count) 个已开启"
+    }
+
+    /// Translates a List `onMove` into the panel's reorder command. `onMove`
+    /// reports the destination as an offset in the list *before* the move;
+    /// the row at that offset is the one the dragged product lands in front
+    /// of, and an offset past the end means "after the last row".
+    static func moveRequest(
+        order: [ProviderRateLimit.Provider],
+        from source: IndexSet,
+        to destination: Int
+    ) -> (provider: ProviderRateLimit.Provider, before: ProviderRateLimit.Provider?)? {
+        guard let index = source.first, order.indices.contains(index) else { return nil }
+        let target = destination < order.count ? order[destination] : nil
+        return (order[index], target)
+    }
+}
+
+/// Where an open Settings window points. Kept by the window controller for
+/// the app's lifetime, so reopening Settings returns to the last page and
+/// another surface can send it to a specific one (a grey quota tab opens that
+/// product's page).
 @MainActor
 @Observable
 final class SettingsNavigation {
-    var quotaProvider: ProviderRateLimit.Provider?
+    var selection: SettingsDestination? = .category(.general)
 }
 
-/// Maps each manifest case to its page.
-struct SettingsTabContent: View {
-    let tab: SettingsTab
+/// The window: the category / provider sidebar and the selected page.
+struct SettingsRootView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(SettingsNavigation.self) private var navigation
+
+    static let contentSize = CGSize(width: 740, height: 480)
+    static let sidebarWidth: CGFloat = 210
 
     var body: some View {
-        Group {
-            switch tab {
-            case .general: GeneralSettingsView()
-            case .account: AccountSettingsView()
-            case .quota: QuotaSettingsView()
-            case .dataSources: DataSourceSettingsView()
-            case .about: AboutSettingsView()
+        @Bindable var navigation = navigation
+        NavigationSplitView(columnVisibility: .constant(.all)) {
+            List(selection: $navigation.selection) {
+                Section {
+                    ForEach(SettingsSidebar.categories) { category in
+                        Label(category.title, systemImage: category.systemImage)
+                            .tag(SettingsDestination.category(category))
+                    }
+                }
+
+                Section {
+                    ForEach(SettingsSidebar.providers(appState), id: \.self) { provider in
+                        ProviderSidebarRow(provider: provider)
+                            .tag(SettingsDestination.provider(provider))
+                    }
+                    .onMove { source, destination in
+                        guard let move = SettingsSidebar.moveRequest(
+                            order: SettingsSidebar.providers(appState),
+                            from: source,
+                            to: destination
+                        ) else { return }
+                        appState.moveQuotaProduct(move.provider, before: move.before)
+                    }
+                } header: {
+                    HStack {
+                        Text("提供商")
+                        Spacer()
+                        Text(SettingsSidebar.enabledSummary(appState))
+                            .fontWeight(.regular)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            // The column-width modifier alone leaves the hosted split view at
+            // its default (~145pt), which truncates the longer product names.
+            .frame(minWidth: Self.sidebarWidth)
+            .navigationSplitViewColumnWidth(min: Self.sidebarWidth, ideal: Self.sidebarWidth, max: Self.sidebarWidth)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            SettingsDetail(destination: navigation.selection ?? .category(.general))
+        }
+        .frame(width: Self.contentSize.width, height: Self.contentSize.height)
+    }
+}
+
+/// A provider in the sidebar: off products are greyed like their panel tab,
+/// on products carry a dot — green, or amber when the last read did not
+/// produce quota data (`quotaTabShowsWarning`, the panel's warning dot).
+private struct ProviderSidebarRow: View {
+    @Environment(AppState.self) private var appState
+    let provider: ProviderRateLimit.Provider
+
+    var body: some View {
+        let isEnabled = appState.isQuotaProviderSelected(provider)
+        HStack(spacing: 8) {
+            ProviderIcon(provider: provider)
+                .frame(width: 16, height: 16)
+                .saturation(isEnabled ? 1 : 0)
+                .opacity(isEnabled ? 1 : 0.45)
+            Text(provider.displayName)
+                .foregroundStyle(isEnabled ? .primary : .secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if isEnabled {
+                Circle()
+                    .fill(appState.quotaTabShowsWarning(provider) ? QuotaUtilizationPalette.warning : Color.green)
+                    .frame(width: 7, height: 7)
             }
         }
-        .frame(width: SettingsTab.contentSize.width, height: SettingsTab.contentSize.height)
+    }
+}
+
+/// Maps the sidebar selection to its page; the page title becomes the window
+/// title.
+private struct SettingsDetail: View {
+    @Environment(AppState.self) private var appState
+    let destination: SettingsDestination
+
+    var body: some View {
+        switch destination {
+        case .category(let category):
+            categoryPage(category)
+                .navigationTitle(category.title)
+        case .provider(let provider):
+            if let product = appState.quotaProducts.first(where: { $0.provider == provider }) {
+                QuotaProductDetailView(product: product)
+                    .navigationTitle(product.displayName)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func categoryPage(_ category: SettingsCategory) -> some View {
+        switch category {
+        case .general: GeneralSettingsView()
+        case .account: AccountSettingsView()
+        case .dataSources: DataSourceSettingsView()
+        case .about: AboutSettingsView()
+        case .debug: DebugSettingsView()
+        }
     }
 }
 
@@ -110,8 +278,8 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            // Read once per window, as the single-page form did: re-reading on
-            // every tab switch could flip the switch back and re-run
+            // Read once per page visit, like each opening of the former
+            // single-page form; `onAppear` firing twice must not re-run
             // `setAutoStart` through `onChange`.
             guard !hasLoaded else { return }
             hasLoaded = true
@@ -339,8 +507,8 @@ struct DataSourceSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear {
-            // Once per window, like the single-page form: a tab switch must not
-            // overwrite a path the user is still typing.
+            // Once per page visit, like each opening of the former
+            // single-page form.
             guard !hasLoaded else { return }
             hasLoaded = true
             codexExtraHome = ConfigManager.load()?.codexExtraHome ?? ""
@@ -542,9 +710,6 @@ struct AboutSettingsView: View {
     @State private var isGeneratingDiagnostics = false
     @State private var copiedDiagnosticSummary: String?
     @State private var isDiagnosticSummaryExpanded = false
-    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-    @State private var diagnosticExportMessage: String?
-    #endif
 
     var body: some View {
         Form {
@@ -563,10 +728,6 @@ struct AboutSettingsView: View {
 
                 diagnosticSummaryRow
             }
-
-            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-            testDiagnosticsSection
-            #endif
 
             Section {
                 Button(role: .destructive) {
@@ -629,23 +790,48 @@ struct AboutSettingsView: View {
         copiedDiagnosticSummary = summary
     }
 
+    /// The 账号与同步 page reads the config file each time it appears and
+    /// again when `isConfigured` flips, so its key row follows this reset.
+    private func resetConfig() {
+        let configPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".vibe-usage/\(AppConfig.configFileName)")
+        try? FileManager.default.removeItem(at: configPath)
+        // The local sync summaries go with the app's data.
+        appState.syncHistory.clear()
+
+        appState.isConfigured = false
+        appState.buckets = []
+    }
+}
+
+// MARK: - 调试
+
+/// The test-build log export. The category is listed only in DEBUG and
+/// external-test builds (`SettingsCategory.isAvailable`); an ordinary Release
+/// binary contains neither the export nor this page's controls.
+struct DebugSettingsView: View {
     #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-    private var testDiagnosticsSection: some View {
-        Section {
-            Button("导出诊断日志…") {
-                exportDiagnosticLog()
-            }
-            if let diagnosticExportMessage {
-                Text(diagnosticExportMessage)
+    @State private var diagnosticExportMessage: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Button("导出诊断日志…") {
+                    exportDiagnosticLog()
+                }
+                if let diagnosticExportMessage {
+                    Text(diagnosticExportMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("测试诊断")
+            } footer: {
+                Text("日志保存在本机，只包含脱敏后的错误码、Provider、版本与系统信息。")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-        } header: {
-            Text("测试诊断")
-        } footer: {
-            Text("仅测试构建可用。日志保存在本机，只包含脱敏后的错误码、Provider、版本与系统信息。")
-                .font(.caption)
         }
+        .formStyle(.grouped)
     }
 
     private func exportDiagnosticLog() {
@@ -664,18 +850,7 @@ struct AboutSettingsView: View {
             diagnosticExportMessage = "导出失败：\(error.localizedDescription)"
         }
     }
+    #else
+    var body: some View { EmptyView() }
     #endif
-
-    /// The 账号与同步 page re-reads the (now removed) config file when
-    /// `isConfigured` flips, so its key row follows this reset.
-    private func resetConfig() {
-        let configPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".vibe-usage/\(AppConfig.configFileName)")
-        try? FileManager.default.removeItem(at: configPath)
-        // The local sync summaries go with the app's data.
-        appState.syncHistory.clear()
-
-        appState.isConfigured = false
-        appState.buckets = []
-    }
 }

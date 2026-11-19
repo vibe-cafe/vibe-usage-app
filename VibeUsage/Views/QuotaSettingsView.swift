@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// Settings facts per quota product. The list and every detail page are built
-/// from `AppState.quotaProducts`, i.e. the `QuotaProductRegistry` catalog; the
-/// switches below are exhaustive, so a new catalog provider does not compile
-/// until it states which page it gets. Adding a provider is therefore one
-/// catalog entry, plus a page case only when it has something to configure.
+/// Settings facts per quota product. The sidebar's 提供商 rows and every
+/// product page come from the `QuotaProductRegistry` catalog (through
+/// `AppState`); the switches below are exhaustive, so a new catalog provider
+/// does not compile until it states which page it gets. Adding a provider is
+/// therefore one catalog entry, plus a page case only when it has something
+/// to configure.
 enum QuotaSettingsCatalog {
     /// What a product's detail page holds beyond its status rows.
     enum Page: Equatable {
@@ -47,107 +48,49 @@ enum QuotaSettingsCatalog {
             return "本机 API Key，不读对话内容"
         }
     }
-
-    /// Catalog order with ZCode last, the order this list has always had.
-    static func listOrder(_ products: [QuotaProduct]) -> [QuotaProduct] {
-        products.filter { $0.provider != .zCode } + products.filter { $0.provider == .zCode }
-    }
-
-    /// The list row's status line. `quotaProductStatusText` stays the single
-    /// source of truth (the detail page prints it in full); only ZCode's long
-    /// form is shortened to the one fact a row can act on. Wording this map
-    /// does not recognize passes through untouched instead of being invented.
-    static func compactStatus(_ status: String) -> String {
-        if status.contains("已配置") { return "已配置" }
-        if status.contains("需配置") || status.contains("未检测到") { return "待配置" }
-        return status
-    }
-
-    static func rowStatus(for product: QuotaProduct, statusText: String) -> String {
-        page(for: product.provider) == .zCodeAPIKey ? compactStatus(statusText) : statusText
-    }
 }
 
-/// 订阅配额: the product list (switch per product, as before) on the left, the
-/// selected product's page on the right.
-struct QuotaSettingsView: View {
-    @Environment(AppState.self) private var appState
-    @Environment(SettingsNavigation.self) private var navigation
-
-    private var products: [QuotaProduct] {
-        QuotaSettingsCatalog.listOrder(appState.quotaProducts)
-    }
-
-    private var selectedProduct: QuotaProduct? {
-        if let requested = navigation.quotaProvider,
-           let product = products.first(where: { $0.provider == requested }) {
-            return product
-        }
-        return products.first
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                List(selection: Binding(
-                    get: { selectedProduct?.provider },
-                    set: { provider in
-                        // Clicking empty space clears a List selection; keep
-                        // the page on the current product instead.
-                        if let provider { navigation.quotaProvider = provider }
-                    }
-                )) {
-                    ForEach(products) { product in
-                        QuotaProductRow(product: product)
-                            .tag(product.provider)
-                    }
-                }
-                .listStyle(.bordered(alternatesRowBackgrounds: false))
-
-                Button("重新检测本机产品") {
-                    appState.rediscoverQuotaProducts()
-                }
-                .controlSize(.small)
-            }
-            .frame(width: 210)
-            .padding(.leading, 20)
-            .padding(.vertical, 20)
-
-            if let selectedProduct {
-                QuotaProductDetailView(product: selectedProduct)
-            }
-        }
-    }
-}
-
-private struct QuotaProductRow: View {
+/// One product's page: the switch first, then its status and where the data
+/// comes from, then whatever `QuotaSettingsCatalog.page(for:)` says it can
+/// configure.
+struct QuotaProductDetailView: View {
     @Environment(AppState.self) private var appState
     let product: QuotaProduct
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProviderIcon(provider: product.provider)
-                .frame(width: 14, height: 14)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(product.displayName)
-                    .lineLimit(1)
-                Text(QuotaSettingsCatalog.rowStatus(
-                    for: product,
-                    statusText: appState.quotaProductStatusText(product)
-                ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        Form {
+            Section {
+                Toggle("启用", isOn: selectionBinding)
+                    .tint(.green)
+                    .disabled(toggleDisabled)
+
+                LabeledContent("状态") {
+                    HStack(spacing: 8) {
+                        Text(appState.quotaProductStatusText(product))
+                        // Re-runs local detection for every product, as the
+                        // former 「重新检测本机产品」 button did.
+                        Button("重新检测") {
+                            appState.rediscoverQuotaProducts()
+                        }
+                    }
+                }
+
+                if let note = QuotaSettingsCatalog.sourceNote(
+                    for: product.provider,
+                    claudeUsesDesktopBundledCLI: appState.claudeUsesDesktopBundledCLI
+                ) {
+                    LabeledContent("来源", value: note)
+                }
             }
-            Spacer(minLength: 4)
-            Toggle("", isOn: selectionBinding)
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .tint(.green)
-                .disabled(toggleDisabled)
+
+            switch QuotaSettingsCatalog.page(for: product.provider) {
+            case .standard:
+                EmptyView()
+            case .zCodeAPIKey:
+                ZCodeAPIKeySection()
+            }
         }
-        .padding(.vertical, 2)
+        .formStyle(.grouped)
     }
 
     private var selectionBinding: Binding<Bool> {
@@ -166,45 +109,6 @@ private struct QuotaProductRow: View {
     private var toggleDisabled: Bool {
         !appState.isQuotaProviderSelected(product.provider)
             && !appState.canSelectQuotaProvider(product.provider)
-    }
-}
-
-/// One product's page: its status, where the data comes from, and whatever
-/// `QuotaSettingsCatalog.page(for:)` says it can configure.
-private struct QuotaProductDetailView: View {
-    @Environment(AppState.self) private var appState
-    let product: QuotaProduct
-
-    var body: some View {
-        Form {
-            Section {
-                LabeledContent("状态", value: appState.quotaProductStatusText(product))
-                if let note = QuotaSettingsCatalog.sourceNote(
-                    for: product.provider,
-                    claudeUsesDesktopBundledCLI: appState.claudeUsesDesktopBundledCLI
-                ) {
-                    LabeledContent("来源") {
-                        Text(note)
-                            .multilineTextAlignment(.trailing)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            } header: {
-                HStack(spacing: 6) {
-                    ProviderIcon(provider: product.provider)
-                        .frame(width: 14, height: 14)
-                    Text(product.displayName)
-                }
-            }
-
-            switch QuotaSettingsCatalog.page(for: product.provider) {
-            case .standard:
-                EmptyView()
-            case .zCodeAPIKey:
-                ZCodeAPIKeySection()
-            }
-        }
-        .formStyle(.grouped)
     }
 }
 

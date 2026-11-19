@@ -29,8 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the panel (which would start the selected quota reads). The
         // environment hook is compiled out of Release.
         if let raw = ProcessInfo.processInfo.environment["VIBE_USAGE_SETTINGS_UI_TEST"],
-           let tab = SettingsTab(rawValue: raw) {
-            SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel, tab: tab)
+           let destination = SettingsDestination(rawValue: raw) {
+            SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel, destination: destination)
         }
         #endif
     }
