@@ -50,11 +50,16 @@ struct QuotaTabStripView: View {
         let showsWarning = appState.quotaTabShowsWarning(provider)
         return Button {
             // A grey tab has no card to jump to: monitoring is off, so the
-            // useful destination is the place that turns it on.
+            // useful destination is the place that turns it on — that
+            // product's page in Settings.
             if isEnabled {
                 onSelect(provider)
             } else {
-                SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
+                SettingsWindowController.shared.show(
+                    appState: appState,
+                    updaterViewModel: updaterViewModel,
+                    destination: .provider(provider)
+                )
             }
         } label: {
             ProviderIcon(provider: provider)
@@ -120,11 +125,16 @@ struct QuotaTabStripView: View {
 
     // MARK: - Settings
 
-    /// A bare icon at the trailing edge, outside the drag order: the way to the
-    /// full 订阅配额 settings (toggles, per-product status, 「重新检测本机产品」).
+    /// A bare icon at the trailing edge, outside the drag order: opens Settings
+    /// on the page of the product whose card is showing (switch, status,
+    /// 「重新检测」, ZCode's key); the sidebar lists every other product.
     private var settingsIcon: some View {
         Button {
-            SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
+            SettingsWindowController.shared.show(
+                appState: appState,
+                updaterViewModel: updaterViewModel,
+                destination: .provider(appState.selectedQuotaTab)
+            )
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 13))
