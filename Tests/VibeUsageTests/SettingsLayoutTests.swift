@@ -83,6 +83,23 @@ struct SettingsLayoutTests {
         #expect(Array((stored ?? []).prefix(3)) == ["cursor", "codex", "claude-code"])
     }
 
+    @Test func draggingThroughTheViewsHandlerReordersLikeThePanel() {
+        let (state, defaults, suite) = appState(selected: ["codex", "claude-code"])
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // `onMove` in the 提供商 group calls exactly this.
+        let rows = SettingsSidebar.providers(state)
+        SettingsSidebar.applyMove(state, from: [rows.firstIndex(of: .claudeCode)!], to: 0)
+        #expect(Array(SettingsSidebar.providers(state).prefix(2)) == [.claudeCode, .codex])
+
+        // A disabled product dropped among the enabled ones stays in its own
+        // group, as on the panel's tab strip.
+        let grok = SettingsSidebar.providers(state).firstIndex(of: .grok)!
+        SettingsSidebar.applyMove(state, from: [grok], to: 0)
+        #expect(Array(SettingsSidebar.providers(state).prefix(2)) == [.claudeCode, .codex])
+        #expect(SettingsSidebar.providers(state)[2] == .grok)
+    }
+
     @Test func onlyZCodeOpensAConfigurationPage() {
         for provider in QuotaProductRegistry.catalog.map(\.0) {
             let expected: QuotaSettingsCatalog.Page = provider == .zCode ? .zCodeAPIKey : .standard

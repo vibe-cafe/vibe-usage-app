@@ -111,6 +111,14 @@ enum SettingsSidebar {
         let target = destination < order.count ? order[destination] : nil
         return (order[index], target)
     }
+
+    /// What a drag in the 提供商 group does: the panel's own reorder, so the
+    /// stored order and the enabled-first rule stay exactly as the tab strip
+    /// keeps them.
+    static func applyMove(_ appState: AppState, from source: IndexSet, to destination: Int) {
+        guard let move = moveRequest(order: providers(appState), from: source, to: destination) else { return }
+        appState.moveQuotaProduct(move.provider, before: move.before)
+    }
 }
 
 /// Where an open Settings window points. Kept by the window controller for
@@ -130,6 +138,7 @@ struct SettingsRootView: View {
 
     static let contentSize = CGSize(width: 740, height: 480)
     static let sidebarWidth: CGFloat = 210
+    static let summaryTrailingInset: CGFloat = 13
 
     var body: some View {
         @Bindable var navigation = navigation
@@ -148,12 +157,7 @@ struct SettingsRootView: View {
                             .tag(SettingsDestination.provider(provider))
                     }
                     .onMove { source, destination in
-                        guard let move = SettingsSidebar.moveRequest(
-                            order: SettingsSidebar.providers(appState),
-                            from: source,
-                            to: destination
-                        ) else { return }
-                        appState.moveQuotaProduct(move.provider, before: move.before)
+                        SettingsSidebar.applyMove(appState, from: source, to: destination)
                     }
                 } header: {
                     HStack {
@@ -161,6 +165,10 @@ struct SettingsRootView: View {
                         Spacer()
                         Text(SettingsSidebar.enabledSummary(appState))
                             .fontWeight(.regular)
+                            // Section headers run closer to the sidebar edge
+                            // than row content; this lines the count up with
+                            // the rows' status dots.
+                            .padding(.trailing, Self.summaryTrailingInset)
                     }
                 }
             }

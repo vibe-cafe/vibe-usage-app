@@ -10,7 +10,7 @@ enum QuotaSettingsCatalog {
     /// What a product's detail page holds beyond its status rows.
     enum Page: Equatable {
         case standard
-        /// Region picker plus the user-entered key (`ZCodeAPIKeySection`).
+        /// Region picker plus the user-entered key (`ZCodeAPIKeyRows`).
         case zCodeAPIKey
     }
 
@@ -22,6 +22,9 @@ enum QuotaSettingsCatalog {
             return .standard
         }
     }
+
+    /// The one privacy line every product page ends with.
+    static let privacyNote = "未开启时不联网读取配额；额度只在本机显示。"
 
     /// Where the quota is read from, when that is worth saying. `nil` means
     /// the detail page has no 来源 row.
@@ -59,38 +62,59 @@ struct QuotaProductDetailView: View {
 
     var body: some View {
         Form {
-            Section {
-                Toggle("启用", isOn: selectionBinding)
-                    .tint(.green)
-                    .disabled(toggleDisabled)
-
-                LabeledContent("状态") {
-                    HStack(spacing: 8) {
-                        Text(appState.quotaProductStatusText(product))
-                        // Re-runs local detection for every product, as the
-                        // former 「重新检测本机产品」 button did.
-                        Button("重新检测") {
-                            appState.rediscoverQuotaProducts()
-                        }
-                    }
-                }
-
-                if let note = QuotaSettingsCatalog.sourceNote(
-                    for: product.provider,
-                    claudeUsesDesktopBundledCLI: appState.claudeUsesDesktopBundledCLI
-                ) {
-                    LabeledContent("来源", value: note)
-                }
-            }
-
+            // The privacy line closes the page, so it rides on whichever
+            // section is last.
             switch QuotaSettingsCatalog.page(for: product.provider) {
             case .standard:
-                EmptyView()
+                Section {
+                    statusRows
+                } footer: {
+                    privacyFooter
+                }
             case .zCodeAPIKey:
-                ZCodeAPIKeySection()
+                Section {
+                    statusRows
+                }
+                Section {
+                    ZCodeAPIKeyRows()
+                } header: {
+                    Text("API Key")
+                } footer: {
+                    privacyFooter
+                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var privacyFooter: some View {
+        Text(QuotaSettingsCatalog.privacyNote)
+            .font(.caption)
+    }
+
+    @ViewBuilder
+    private var statusRows: some View {
+        Toggle("启用", isOn: selectionBinding)
+            .tint(.green)
+            .disabled(toggleDisabled)
+
+        LabeledContent("状态") {
+            HStack(spacing: 8) {
+                Text(appState.quotaProductStatusText(product))
+                // Re-runs local detection for every product, as the
+                // former 「重新检测本机产品」 button did.
+                Button("重新检测") {
+                    appState.rediscoverQuotaProducts()
+                }
+            }
+        }
+
+        if let note = QuotaSettingsCatalog.sourceNote(
+            for: product.provider,
+            claudeUsesDesktopBundledCLI: appState.claudeUsesDesktopBundledCLI
+        ) {
+            LabeledContent("来源", value: note)
+        }
     }
 
     private var selectionBinding: Binding<Bool> {
@@ -114,7 +138,7 @@ struct QuotaProductDetailView: View {
 
 /// ZCode's region and user-entered key. Each region has its own Keychain item;
 /// switching region clears the field and lets `AppState` re-read that item.
-private struct ZCodeAPIKeySection: View {
+private struct ZCodeAPIKeyRows: View {
     @Environment(AppState.self) private var appState
 
     @State private var apiKey = ""
@@ -123,7 +147,7 @@ private struct ZCodeAPIKeySection: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        Section {
+        Group {
             Picker("区域", selection: Binding(
                 get: { appState.zCodeQuotaRegion },
                 set: { region in
@@ -173,8 +197,6 @@ private struct ZCodeAPIKeySection: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-        } header: {
-            Text("API Key")
         }
     }
 
