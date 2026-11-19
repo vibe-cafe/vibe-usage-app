@@ -54,7 +54,12 @@ struct QuotaTabStripView: View {
             if isEnabled {
                 onSelect(provider)
             } else {
-                SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
+                SettingsWindowController.shared.show(
+                    appState: appState,
+                    updaterViewModel: updaterViewModel,
+                    tab: .quota,
+                    quotaProvider: provider
+                )
             }
         } label: {
             ProviderIcon(provider: provider)
@@ -121,10 +126,14 @@ struct QuotaTabStripView: View {
     // MARK: - Settings
 
     /// A bare icon at the trailing edge, outside the drag order: the way to the
-    /// full 订阅配额 settings (toggles, per-product status, 「重新检测本机产品」).
+    /// 订阅配额 settings page (toggles, per-product status, 「重新检测本机产品」).
     private var settingsIcon: some View {
         Button {
-            SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
+            SettingsWindowController.shared.show(
+                appState: appState,
+                updaterViewModel: updaterViewModel,
+                tab: .quota
+            )
         } label: {
             Image(systemName: "gearshape")
                 .font(.system(size: 13))
