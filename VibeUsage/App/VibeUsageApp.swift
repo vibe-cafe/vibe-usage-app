@@ -23,16 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ActivationCoordinator.shared.applyDockPreference()
         appState.initialize()
         menuBarController = MenuBarController(appState: appState, updaterViewModel: updaterViewModel)
-
-        #if DEBUG
-        // UI acceptance: open Settings on one page at launch without opening
-        // the panel (which would start the selected quota reads). The
-        // environment hook is compiled out of Release.
-        if let raw = ProcessInfo.processInfo.environment["VIBE_USAGE_SETTINGS_UI_TEST"],
-           let destination = SettingsDestination(rawValue: raw) {
-            SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel, destination: destination)
-        }
-        #endif
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
