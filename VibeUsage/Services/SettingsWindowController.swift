@@ -80,6 +80,14 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         ActivationCoordinator.shared.settingsDidClose()
+        // Drop the closed window's content so nothing it showed (the 通用
+        // preview's desktop picture included) stays in memory; the next
+        // `show` builds a fresh window anyway.
+        guard let closing = notification.object as? NSWindow else { return }
+        DispatchQueue.main.async { [weak self] in
+            closing.contentViewController = nil
+            if self?.window === closing { self?.window = nil }
+        }
     }
 
     // MARK: - Window buttons

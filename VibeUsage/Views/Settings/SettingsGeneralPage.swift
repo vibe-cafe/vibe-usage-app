@@ -57,25 +57,38 @@ struct SettingsGeneralPage: View {
     }
 }
 
-/// A slice of the top of a screen: the menu bar at its real height with our
-/// status item and the clock on the right, the desktop below it — the way
-/// System Settings previews Appearance above its controls. The status item is
-/// the real one (`MenuBarLabel` fed by `MenuBarLabel.lines(for:)`): only the
-/// icon until there is usage, then cost and / or Token, stacked in two lines
-/// when both switches are on. Nothing from other apps is drawn.
+/// A slice of the top of a screen: the user's own desktop picture with the
+/// menu bar floating on it — transparent since macOS 26 — our status item and
+/// the clock on the right, the way System Settings previews Wallpaper and
+/// Appearance above their controls. The status item is the real one
+/// (`MenuBarLabel` fed by `MenuBarLabel.lines(for:)`): only the icon until
+/// there is usage, then cost and / or Token, stacked in two lines when both
+/// switches are on. The text turns dark over a bright picture, like the real
+/// menu bar. Nothing from other apps is drawn.
+///
+/// The picture comes from `MenuBarWallpaper` (protected places are never
+/// read; anything unreadable falls back to a drawn gradient) and lives only in
+/// this view's state: it is read when the preview appears and released when
+/// the page changes or the window closes.
 struct MenuBarPreview: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.displayScale) private var displayScale
+    @State private var screen: NSScreen?
+    @State private var wallpaper: MenuBarWallpaper.Strip?
 
-    /// The menu bar's height on this Mac: 24 pt, taller beside a notch. Read
-    /// from the main screen (frame minus visible frame); an auto-hidden menu
-    /// bar reports 0, so 24 is the floor.
-    private static var barHeight: CGFloat {
-        guard let screen = NSScreen.main else { return 24 }
+    private static let desktopHeight: CGFloat = 48
+    private static let width = SettingsTheme.windowSize.width - SettingsTheme.sidebarWidth
+        - SettingsTheme.contentHorizontalInset * 2
+
+    /// The menu bar's height on the window's screen: 24 pt, taller beside a
+    /// notch (frame minus visible frame; an auto-hidden menu bar reports 0).
+    private var barHeight: CGFloat {
+        guard let screen = screen ?? NSScreen.main else { return 24 }
         return max(24, screen.frame.maxY - screen.visibleFrame.maxY)
     }
-    private static let desktopHeight: CGFloat = 48
 
     var body: some View {
+        let height = barHeight + Self.desktopHeight
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Spacer(minLength: 0)
@@ -85,30 +98,54 @@ struct MenuBarPreview: View {
                     .accessibilityHidden(true)
                 MenuBarClock()
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
+            .environment(\.colorScheme, wallpaper?.prefersDarkText == true ? .light : .dark)
             .padding(.horizontal, 12)
-            .frame(height: Self.barHeight)
-            .background { Rectangle().fill(Color.black.opacity(0.34)) }
-            .overlay(alignment: .bottom) { Color.white.opacity(0.06).frame(height: 1) }
+            .frame(height: barHeight)
             Color.clear.frame(height: Self.desktopHeight)
         }
         .frame(maxWidth: .infinity)
         .background {
-            LinearGradient(
-                colors: [Color(settingsHex: 0x3A3A3A), Color(settingsHex: 0x2B2B2B)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+            if let wallpaper {
+                Image(decorative: wallpaper.image, scale: displayScale)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                MenuBarWallpaperFallback()
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(SettingsTheme.line, lineWidth: 1)
         )
-        .environment(\.colorScheme, .dark)
+        .background { WindowScreenReader { screen = $0 } }
+        .task(id: ScreenKey(screen: screen, height: height, scale: displayScale)) {
+            let url = (screen ?? NSScreen.main).flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+            let pixelWidth = Int(Self.width * displayScale)
+            let aspect = Self.width / height
+            let fraction = barHeight / height
+            wallpaper = await Task.detached(priority: .utility) {
+                MenuBarWallpaper.loadStrip(url: url, pixelWidth: pixelWidth, aspect: aspect, menuBarFraction: fraction)
+            }.value
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("菜单栏预览")
         .accessibilityValue(MenuBarLabel.lines(for: appState).joined(separator: "，"))
+    }
+
+    /// Re-read only when the screen, the preview's height or the scale changes.
+    private struct ScreenKey: Equatable {
+        let displayID: UInt32?
+        let height: CGFloat
+        let scale: CGFloat
+
+        init(screen: NSScreen?, height: CGFloat, scale: CGFloat) {
+            displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            self.height = height
+            self.scale = scale
+        }
     }
 }
 
