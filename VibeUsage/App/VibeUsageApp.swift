@@ -23,6 +23,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ActivationCoordinator.shared.applyDockPreference()
         appState.initialize()
         menuBarController = MenuBarController(appState: appState, updaterViewModel: updaterViewModel)
+        #if DEBUG
+        // Local UI checks and preview builds: open Settings right after launch.
+        if ProcessInfo.processInfo.environment["VIBE_USAGE_SETTINGS_UI_TEST"] == "1" {
+            SettingsWindowController.shared.show(appState: appState, updaterViewModel: updaterViewModel)
+        }
+        #endif
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {

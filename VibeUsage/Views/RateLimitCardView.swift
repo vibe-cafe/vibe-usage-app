@@ -268,8 +268,7 @@ private struct ProviderCard: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            ProviderIcon(provider: snapshot.provider)
-                .frame(width: 14, height: 14)
+            ProviderIcon(provider: snapshot.provider, size: 14)
             Text(snapshot.provider.displayName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white)
@@ -963,47 +962,19 @@ enum QuotaUtilizationPalette {
 
 // MARK: - Provider icon
 
-/// Official provider artwork (28/56 px assets in the app resource bundle) with
-/// a symbol fallback. Shared by the quota cards' headers and the Settings
-/// product rows, so both surfaces resolve the same asset the same way.
+/// The panel's provider mark (tab strip, card headers): the same monochrome
+/// Lobe Icons shape Settings draws (`ProviderGlyph`), at Settings' proportion
+/// — an 18 pt mark in a 22 pt slot — inside a `size` × `size` square, in the
+/// "on" text color. Grey, selected and warning states stay with the caller,
+/// exactly as they were for the former colored app icons.
 struct ProviderIcon: View {
     let provider: ProviderRateLimit.Provider
+    let size: CGFloat
 
     var body: some View {
-        if let nsImage = ProviderIcon.image(for: provider) {
-            Image(nsImage: nsImage)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-        } else {
-            Image(systemName: provider.fallbackSymbolName)
-                .font(.system(size: 12))
-                .foregroundStyle(Color(white: 0.6))
-        }
-    }
-
-    private static var cache: [ProviderRateLimit.Provider: NSImage] = [:]
-
-    private static func image(for provider: ProviderRateLimit.Provider) -> NSImage? {
-        if let cached = cache[provider] { return cached }
-        let resource: String
-        switch provider {
-        case .codex:      resource = "codex-icon"
-        case .claudeCode: resource = "claude-icon"
-        case .kimiCode:   resource = "kimi-icon"
-        case .zCode:      resource = "zcode-icon"
-        case .grok:       resource = "grok-icon"
-        case .cursor:     resource = "cursor-icon"
-        case .antigravity: return nil
-        // No artwork shipped yet: the symbol fallback below renders until an
-        // `opencode-icon` asset joins the bundle.
-        case .opencodeGo:   resource = "opencode-icon"
-        }
-        let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
-            ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
-        guard let url, let img = NSImage(contentsOf: url) else { return nil }
-        cache[provider] = img
-        return img
+        ProviderGlyph(provider: provider, size: size * 18 / 22)
+            .foregroundStyle(SettingsTheme.text)
+            .frame(width: size, height: size)
     }
 }
 
@@ -1037,20 +1008,5 @@ private extension RateLimitWindow {
     var remainingText: String? {
         guard let resetsAt else { return nil }
         return Formatters.formatTimeUntil(resetsAt)
-    }
-}
-
-private extension ProviderRateLimit.Provider {
-    var fallbackSymbolName: String {
-        switch self {
-        case .codex: return "terminal"
-        case .claudeCode: return "sparkles"
-        case .kimiCode: return "moon.stars"
-        case .zCode: return "z.square"
-        case .grok: return "bolt.horizontal.circle"
-        case .cursor: return "cursorarrow.rays"
-        case .antigravity: return "sparkles"
-        case .opencodeGo: return "chevron.left.forwardslash.chevron.right"
-        }
     }
 }

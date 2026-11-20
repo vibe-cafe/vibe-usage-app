@@ -384,8 +384,8 @@ enum ClaudeUsageProbe {
 
     /// Which install the next probe will actually use, or nil when Claude Code
     /// is nowhere to be found. `.desktop` means the machine has Claude Desktop
-    /// but no CLI — the only case where the UI calls the source out, since
-    /// otherwise it is simply the CLI the user installed themselves.
+    /// but no CLI. (Settings used to call that case out; the source column was
+    /// removed on 2026-11-20.)
     static func primarySourceKind(
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment
