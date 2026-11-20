@@ -60,12 +60,7 @@ struct SettingsDirectoriesPage: View {
                 }
             }
 
-            Text("隔离运行时目录")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(SettingsTheme.text)
-                .padding(.horizontal, 2)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
+            SettingsSectionTitle(title: "隔离运行时目录")
 
             SettingsCard {
                 ForEach(Array(SettingsModel.extraRootSources.enumerated()), id: \.element.id) { index, source in

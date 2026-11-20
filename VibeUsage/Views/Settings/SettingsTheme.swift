@@ -179,6 +179,21 @@ extension SettingsPageHeader where Detail == EmptyView, Trailing == EmptyView {
     }
 }
 
+/// A group title above a card: one step smaller than the card's text,
+/// semibold, secondary color (the About page Hogan liked, 2026-11-20).
+struct SettingsSectionTitle: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(SettingsTheme.secondaryText)
+            .padding(.horizontal, 2)
+            .padding(.top, 18)
+            .padding(.bottom, 7)
+    }
+}
+
 /// The grey 「高级」 chip after 「数据目录」.
 struct SettingsAdvancedTag: View {
     var body: some View {

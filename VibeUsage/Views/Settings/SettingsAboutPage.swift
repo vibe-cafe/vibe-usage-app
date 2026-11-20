@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// 关于: version and update check, the redacted diagnostic summary, and (test
-/// builds only) the diagnostic log export.
+/// 关于, laid out like the About page Hogan liked (CodexBar's, 2026-11-20:
+/// 「我觉得这个设计还不错啊」): an identity card (icon, name, version), then
+/// 更新, 诊断 and 链接 groups, and the copyright line.
 struct SettingsAboutPage: View {
     @Environment(SettingsModel.self) private var model
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -9,18 +10,21 @@ struct SettingsAboutPage: View {
     var body: some View {
         SettingsPageScroll {
             SettingsPageHeader(title: SettingsPage.about.title)
+            identityCard
+
+            SettingsSectionTitle(title: "更新")
             SettingsCard {
                 SettingsRow {
-                    SettingsRowLabel(title: "版本")
+                    SettingsRowLabel(title: "版本 \(SettingsVersion.full)")
                     Spacer(minLength: 8)
-                    Text(SettingsVersion.full)
-                        .font(SettingsTheme.mono)
-                        .foregroundStyle(SettingsTheme.text)
-                    Button("检查更新") { updaterViewModel.checkForUpdates() }
+                    Button("检查更新…") { updaterViewModel.checkForUpdates() }
                         .buttonStyle(.settings)
                         .disabled(!updaterViewModel.canCheckForUpdates)
                 }
-                SettingsSeparator()
+            }
+
+            SettingsSectionTitle(title: "诊断")
+            SettingsCard {
                 diagnosticSummaryRow
                 #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                 SettingsSeparator()
@@ -44,16 +48,52 @@ struct SettingsAboutPage: View {
                 }
                 #endif
             }
-            // Ways out to the web sit under the card as plain text links, the
-            // way System Settings puts 「关于 Apple ID 与隐私…」 under a group —
-            // they are not settings (maintainer 2026-11-20).
-            HStack(spacing: 16) {
-                SettingsTextLink(title: "vibecafe.ai", url: SettingsLinks.vibeCafe)
-                SettingsTextLink(title: "vibe-usage", url: SettingsLinks.cliRepository, showsGitHubMark: true)
-                SettingsTextLink(title: "vibe-usage-app", url: SettingsLinks.appRepository, showsGitHubMark: true)
+
+            SettingsSectionTitle(title: "链接")
+            SettingsCard {
+                SettingsLinkRow(title: "vibe-usage", url: SettingsLinks.cliRepository) {
+                    GitHubMark().fill(style: FillStyle(eoFill: true))
+                }
+                SettingsSeparator()
+                SettingsLinkRow(title: "vibe-usage-app", url: SettingsLinks.appRepository) {
+                    GitHubMark().fill(style: FillStyle(eoFill: true))
+                }
+                SettingsSeparator()
+                SettingsLinkRow(title: "VibeCafé", url: SettingsLinks.vibeCafe) {
+                    Image(systemName: "globe")
+                        .resizable()
+                        .scaledToFit()
+                }
             }
-            .padding(.horizontal, 2)
-            .padding(.top, 10)
+
+            Text("© 2026 VibeCafé · MIT 许可证")
+                .font(SettingsTheme.caption)
+                .foregroundStyle(SettingsTheme.tertiaryText)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 18)
+        }
+    }
+
+    /// Icon, name and version, centered.
+    private var identityCard: some View {
+        SettingsCard {
+            VStack(spacing: 0) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 68, height: 68)
+                    .accessibilityHidden(true)
+                Text(AppConfig.displayName)
+                    .font(SettingsTheme.pageTitle)
+                    .foregroundStyle(SettingsTheme.text)
+                    .padding(.top, 8)
+                Text("版本 \(SettingsVersion.full)")
+                    .font(SettingsTheme.caption)
+                    .foregroundStyle(SettingsTheme.secondaryText)
+                    .padding(.top, 3)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
         }
     }
 
@@ -118,52 +158,46 @@ enum SettingsLinks {
     static let appRepository = URL(string: "https://github.com/vibe-cafe/vibe-usage-app")!
 }
 
-/// A small text link in the system link color: no frame, no arrow;
-/// underlined with a pointing-hand cursor while hovered. Opens in the default
-/// browser.
-struct SettingsTextLink: View {
+/// One row of the 链接 card: a monochrome mark, the name, a grey ↗ at the
+/// end. The whole row is the link (default browser) and lightens slightly
+/// under the pointer; no framed button.
+struct SettingsLinkRow<Mark: View>: View {
     let title: String
     let url: URL
-    var showsGitHubMark = false
+    @ViewBuilder var mark: Mark
     @State private var isHovered = false
 
     var body: some View {
         Button {
             NSWorkspace.shared.open(url)
         } label: {
-            HStack(spacing: 4) {
-                if showsGitHubMark {
-                    GitHubMark()
-                        .fill(style: FillStyle(eoFill: true))
-                        .frame(width: 11, height: 11)
-                        .accessibilityHidden(true)
-                }
+            HStack(spacing: 10) {
+                mark
+                    .foregroundStyle(SettingsTheme.text)
+                    .frame(width: 15, height: 15)
+                    .frame(width: 18, height: 18)
+                    .accessibilityHidden(true)
                 Text(title)
-                    .underline(isHovered)
+                    .font(SettingsTheme.label)
+                    .foregroundStyle(SettingsTheme.text)
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(SettingsTheme.tertiaryText)
             }
-            .font(SettingsTheme.caption)
-            .foregroundStyle(Color(nsColor: .linkColor))
+            .padding(.leading, 14)
+            .padding(.trailing, 14)
+            .frame(minHeight: 44)
+            .background {
+                Rectangle().fill(Color.white.opacity(isHovered ? 0.04 : 0))
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .modifier(LinkCursor())
         .help(url.absoluteString)
         .accessibilityAddTraits(.isLink)
-        .accessibilityLabel(showsGitHubMark ? "GitHub \(title)" : title)
-    }
-}
-
-/// The pointing hand over a link (`pointerStyle(.link)` where available).
-private struct LinkCursor: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 15.0, *) {
-            content.pointerStyle(.link)
-        } else {
-            content.onHover { inside in
-                (inside ? NSCursor.pointingHand : NSCursor.arrow).set()
-            }
-        }
+        .accessibilityHint("在浏览器中打开")
     }
 }
 
