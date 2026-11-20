@@ -12,11 +12,8 @@ struct SettingsGeneralPage: View {
                 SettingsRow {
                     SettingsRowLabel(title: "菜单栏显示费用")
                     Spacer(minLength: 8)
-                    MenuBarPreview(
-                        cost: appState.showCostInMenuBar ? Formatters.formatCost(appState.menuBarCost) : nil,
-                        tokens: appState.showTokensInMenuBar ? Formatters.formatNumber(appState.menuBarTokens) : nil
-                    )
-                    .padding(.trailing, 6)
+                    MenuBarPreview()
+                        .padding(.trailing, 6)
                     Toggle("菜单栏显示费用", isOn: Binding(
                         get: { appState.showCostInMenuBar },
                         set: { appState.showCostInMenuBar = $0 }
@@ -58,43 +55,25 @@ struct SettingsGeneralPage: View {
     }
 }
 
-/// A small dark chip that mirrors the status item: the icon, then the cost
-/// and Token figures the two switches turn on, so the effect is visible
-/// without looking up at the menu bar.
+/// The status item, drawn by the status item's own view (`MenuBarLabel`)
+/// with the same rule for what it shows: only the icon until there is usage,
+/// then cost and / or Token — stacked in two lines when both switches are on.
+/// It sits on a dark strip the height of the menu bar.
 struct MenuBarPreview: View {
-    let cost: String?
-    let tokens: String?
+    @Environment(AppState.self) private var appState
 
     var body: some View {
-        HStack(spacing: 6) {
-            Self.icon
-                .resizable()
-                .renderingMode(.template)
-                .interpolation(.high)
-                .frame(width: 13, height: 13)
-            if let cost { Text(cost) }
-            if let tokens { Text(tokens) }
-        }
-        .font(SettingsTheme.mono)
-        .foregroundStyle(SettingsTheme.menuBarText)
-        .padding(.horizontal, 9)
-        .frame(height: 24)
-        .background(SettingsTheme.menuBarFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(alignment: .top) {
-            Color.white.opacity(0.12)
-                .frame(height: 0.5)
-                .padding(.horizontal, 6)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("菜单栏预览")
-    }
-
-    private static var icon: Image {
-        if let url = Bundle.appResources.url(forResource: "menubar-icon", withExtension: "png"),
-           let image = NSImage(contentsOf: url) {
-            image.isTemplate = true
-            return Image(nsImage: image)
-        }
-        return Image(systemName: "chart.bar.fill")
+        MenuBarLabel(icon: MenuBarLabel.statusIcon, lines: MenuBarLabel.lines(for: appState))
+            .padding(.horizontal, 5)
+            .frame(height: 24)
+            .background(SettingsTheme.menuBarFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(alignment: .top) {
+                Color.white.opacity(0.12)
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 6)
+            }
+            .environment(\.colorScheme, .dark)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("菜单栏预览")
     }
 }

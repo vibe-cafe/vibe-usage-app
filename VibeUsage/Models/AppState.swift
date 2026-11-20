@@ -361,6 +361,11 @@ final class AppState {
         if ProcessInfo.processInfo.environment["VIBE_USAGE_QUOTA_UI_TEST"] == "1" {
             self.isConfigured = true
             self.hasLoadedUsageData = true
+            // Preview builds can show fixed sample usage so the menu bar and
+            // the Settings preview have figures to display.
+            if ProcessInfo.processInfo.environment["VIBE_USAGE_SAMPLE_USAGE"] == "1" {
+                self.buckets = Self.sampleUsageBuckets()
+            }
             if !selectedQuotaProviders.isEmpty {
                 startRateLimitCoordinator()
             }
@@ -807,6 +812,29 @@ final class AppState {
         rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
+
+    #if DEBUG
+    /// Two buckets in the current hour totalling $230.20 and 364.1M Token.
+    /// Debug-only preview data behind `VIBE_USAGE_SAMPLE_USAGE`.
+    static func sampleUsageBuckets(now: Date = Date()) -> [UsageBucket] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let hour = calendar.dateInterval(of: .hour, for: now)?.start ?? now
+        let start = ISO8601DateFormatter().string(from: hour)
+        return [
+            UsageBucket(
+                source: "claude-code", model: "claude-opus-5-5", project: "vibe-usage-app", hostname: "preview",
+                bucketStart: start, inputTokens: 2_100_000, outputTokens: 900_000, cacheCreationInputTokens: nil,
+                cachedInputTokens: 260_000_000, reasoningOutputTokens: 0, totalTokens: 263_000_000, estimatedCost: 180.15
+            ),
+            UsageBucket(
+                source: "codex", model: "gpt-6.2-sol", project: "vibe-usage", hostname: "preview",
+                bucketStart: start, inputTokens: 1_500_000, outputTokens: 600_000, cacheCreationInputTokens: nil,
+                cachedInputTokens: 99_000_000, reasoningOutputTokens: 0, totalTokens: 101_100_000, estimatedCost: 50.05
+            ),
+        ]
+    }
+    #endif
 
     // MARK: - Private
 

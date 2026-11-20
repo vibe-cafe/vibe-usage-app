@@ -35,9 +35,58 @@ enum MenuBarPanelGeometry {
 /// Using NSHostingView for the status item content is the best-practice workaround
 /// for proper vertical centering of multi-line text — attributedTitle and
 /// hand-composed NSImages both fight the menu-bar's implicit vertical metrics.
-private struct MenuBarLabel: View {
+///
+/// Settings' 通用 page draws its menu-bar preview with this same view and
+/// `lines(for:)`, so the preview cannot drift from the real status item.
+struct MenuBarLabel: View {
     let icon: NSImage
     let lines: [String]
+
+    private static let iconSize = NSSize(width: 18, height: 18)
+
+    /// The status item's template icon.
+    static let statusIcon: NSImage = {
+        if let url = Bundle.appResources.url(forResource: "menubar-icon", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            img.size = iconSize
+            img.isTemplate = true
+            return img
+        }
+        let fallback = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: nil)!
+        fallback.size = iconSize
+        fallback.isTemplate = true
+        return fallback
+    }()
+
+    /// The text next to the icon: nothing until there is usage to show, then
+    /// the cost and the Token total, each only while its switch is on — two
+    /// switches on means two stacked lines.
+    static func lines(
+        isConfigured: Bool,
+        hasUsage: Bool,
+        showCost: Bool,
+        showTokens: Bool,
+        cost: () -> Double,
+        tokens: () -> Int
+    ) -> [String] {
+        guard isConfigured, hasUsage else { return [] }
+        var lines: [String] = []
+        if showCost { lines.append(Formatters.formatCost(cost())) }
+        if showTokens { lines.append(Formatters.formatNumber(tokens())) }
+        return lines
+    }
+
+    @MainActor
+    static func lines(for appState: AppState) -> [String] {
+        lines(
+            isConfigured: appState.isConfigured,
+            hasUsage: !appState.buckets.isEmpty,
+            showCost: appState.showCostInMenuBar,
+            showTokens: appState.showTokensInMenuBar,
+            cost: { appState.menuBarCost },
+            tokens: { appState.menuBarTokens }
+        )
+    }
 
     var body: some View {
         HStack(spacing: 7) {
@@ -186,22 +235,6 @@ final class MenuBarController: NSObject {
 
     // MARK: - Status item
 
-    private static let iconSize = NSSize(width: 18, height: 18)
-
-    /// Raw icon (template) used as the SwiftUI status-item label.
-    private static let iconRaw: NSImage = {
-        if let url = Bundle.appResources.url(forResource: "menubar-icon", withExtension: "png"),
-           let img = NSImage(contentsOf: url) {
-            img.size = iconSize
-            img.isTemplate = true
-            return img
-        }
-        let fallback = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: nil)!
-        fallback.size = iconSize
-        fallback.isTemplate = true
-        return fallback
-    }()
-
     private func configureStatusItem() {
         guard let button = statusItem.button else { return }
 
@@ -211,7 +244,7 @@ final class MenuBarController: NSObject {
         button.target = self
         button.action = #selector(handleClick(_:))
 
-        let host = PassthroughHostingView(rootView: MenuBarLabel(icon: Self.iconRaw, lines: []))
+        let host = PassthroughHostingView(rootView: MenuBarLabel(icon: MenuBarLabel.statusIcon, lines: []))
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([
@@ -235,24 +268,12 @@ final class MenuBarController: NSObject {
 
     private func refreshStatusItem() {
         guard hostingView != nil else { return }
-        let lines = menuBarLines()
-        hostingView.rootView = MenuBarLabel(icon: Self.iconRaw, lines: lines)
+        let lines = MenuBarLabel.lines(for: appState)
+        hostingView.rootView = MenuBarLabel(icon: MenuBarLabel.statusIcon, lines: lines)
         // Force SwiftUI layout so fittingSize is current, then size the status item accordingly.
         hostingView.layoutSubtreeIfNeeded()
         let width = hostingView.fittingSize.width
         statusItem.length = width > 0 ? width : NSStatusItem.variableLength
-    }
-
-    private func menuBarLines() -> [String] {
-        guard appState.isConfigured, !appState.buckets.isEmpty else { return [] }
-        var lines: [String] = []
-        if appState.showCostInMenuBar {
-            lines.append(Formatters.formatCost(appState.menuBarCost))
-        }
-        if appState.showTokensInMenuBar {
-            lines.append(Formatters.formatNumber(appState.menuBarTokens))
-        }
-        return lines
     }
 
     // MARK: - Click handling

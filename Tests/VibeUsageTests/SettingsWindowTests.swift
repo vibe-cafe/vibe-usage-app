@@ -332,3 +332,41 @@ struct SettingsWindowTests {
         }
     }
 }
+
+/// The Settings 通用 preview and the status item share one rule for what the
+/// menu bar shows.
+struct MenuBarLabelLinesTests {
+    private func lines(configured: Bool = true, usage: Bool = true, cost: Bool, tokens: Bool) -> [String] {
+        MenuBarLabel.lines(
+            isConfigured: configured, hasUsage: usage, showCost: cost, showTokens: tokens,
+            cost: { 230.2 }, tokens: { 364_100_000 }
+        )
+    }
+
+    @Test
+    func iconOnlyUntilThereIsUsageToShow() {
+        #expect(lines(usage: false, cost: true, tokens: true).isEmpty)
+        #expect(lines(configured: false, cost: true, tokens: true).isEmpty)
+        #expect(lines(cost: false, tokens: false).isEmpty)
+    }
+
+    @Test
+    func eachSwitchAddsOneLineCostFirst() {
+        let cost = Formatters.formatCost(230.2)
+        let tokens = Formatters.formatNumber(364_100_000)
+        #expect(lines(cost: true, tokens: false) == [cost])
+        #expect(lines(cost: false, tokens: true) == [tokens])
+        #expect(lines(cost: true, tokens: true) == [cost, tokens])
+    }
+
+    @Test
+    func valuesAreNotComputedForSwitchedOffLines() {
+        var costRead = false
+        var tokensRead = false
+        _ = MenuBarLabel.lines(
+            isConfigured: true, hasUsage: true, showCost: false, showTokens: false,
+            cost: { costRead = true; return 0 }, tokens: { tokensRead = true; return 0 }
+        )
+        #expect(!costRead && !tokensRead)
+    }
+}
