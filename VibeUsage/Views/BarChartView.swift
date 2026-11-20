@@ -192,6 +192,7 @@ struct BarChartView: View {
                                 .background(state.chartMode == mode ? Color(white: 0.28) : Color.clear)
                                 .foregroundStyle(state.chartMode == mode ? Color.white : Color(white: 0.5))
                                 .clipShape(Capsule())
+                                .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
                     }

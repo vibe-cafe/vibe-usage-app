@@ -3,6 +3,30 @@ import Testing
 @testable import VibeUsage
 
 struct QuotaCLIBridgeTests {
+    @Test @MainActor
+    func agyInstallAndLoginFailuresReachAllThreeSurfaces() throws {
+        let product = QuotaProduct(provider: .antigravity, availability: .ready, isDetected: true)
+        for (cliStatus, shortText, cardText) in [
+            ("missing_credentials", "需要 agy 命令行", "请安装 agy 命令行并登录后重试"),
+            ("unauthorized", "需要登录", "请在 agy 中登录后重试"),
+            ("expired_credentials", "需要登录", "请在 agy 中登录后重试"),
+        ] {
+            let envelope = try QuotaCLIBridge.decode("""
+            {"schemaVersion":1,"products":[{"id":"antigravity","status":"\(cliStatus)","meters":[],
+            "source":"live","fetchedAt":"2026-11-20T00:00:00Z","message":"private fixture"}]}
+            """)
+            let snapshot = try #require(QuotaCLIBridge.snapshots(from: envelope).first)
+            #expect(snapshot.status == .unauthorized)
+            #expect(SettingsQuotaStatus.status(
+                for: product, zCodeKeyConfigured: false, warningSnapshot: snapshot
+            ) == (.warning, shortText))
+            #expect(RateLimitCardView.agyAuthorizationText(for: snapshot) == cardText)
+            #expect(DiagnosticSummary.quotaText(
+                snapshot: snapshot, isSelected: true, isDetected: true, isRefreshing: false, now: Date()
+            ) == "已开启 · 本机已检测 · \(cardText)")
+        }
+    }
+
     @Test
     func cursorAndAntigravityPreserveAllQuotaWindowsAndResets() throws {
         for id in ["cursor", "antigravity"] {

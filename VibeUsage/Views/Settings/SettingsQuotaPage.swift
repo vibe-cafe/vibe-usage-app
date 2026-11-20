@@ -213,7 +213,7 @@ struct QuotaProductRow: View {
                     .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                status
+                QuotaStatusCell(value: statusValue, isOn: isOn)
             }
             .contentShape(Rectangle())
             .onTapGesture { if isConfigurable { toggleExpanded() } }
@@ -276,22 +276,11 @@ struct QuotaProductRow: View {
     }
 
     private var statusValue: (kind: SettingsStatusKind, text: String) {
-        SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: appState.zCodeAPIKeyConfigured)
-    }
-
-    private var status: some View {
-        let value = statusValue
-        return HStack(spacing: 7) {
-            SettingsStatusDot(kind: value.kind, dimmed: !isOn)
-            Text(value.text)
-                .font(SettingsTheme.body)
-                .foregroundStyle(
-                    value.kind == .warning ? SettingsTheme.amber
-                        : (isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
-                )
-                .lineLimit(1)
-        }
-        .frame(width: Self.statusWidth, alignment: .leading)
+        SettingsQuotaStatus.status(
+            for: product,
+            zCodeKeyConfigured: appState.zCodeAPIKeyConfigured,
+            warningSnapshot: appState.quotaWarningSnapshot(for: provider)
+        )
     }
 
     private func toggleExpanded() {
@@ -351,6 +340,30 @@ struct DisclosureTriangle: View {
     }
 }
 
+private struct QuotaStatusCell: View {
+    let value: (kind: SettingsStatusKind, text: String)
+    let isOn: Bool
+
+    private var textColor: Color {
+        switch value.kind {
+        case .warning: SettingsTheme.amber
+        case .error: SettingsTheme.red
+        case .ok, .none: isOn ? SettingsTheme.text : SettingsTheme.secondaryText
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 7) {
+            SettingsStatusDot(kind: value.kind, dimmed: !isOn)
+            Text(value.text)
+                .font(SettingsTheme.body)
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+        }
+        .frame(width: QuotaProductRow.statusWidth, alignment: .leading)
+    }
+}
+
 /// What follows the pointer while a row is dragged: the row, lifted.
 private struct QuotaDragPreview: View {
     let provider: ProviderRateLimit.Provider
@@ -366,13 +379,7 @@ private struct QuotaDragPreview: View {
                 .font(SettingsTheme.label)
                 .foregroundStyle(SettingsTheme.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 7) {
-                SettingsStatusDot(kind: status.kind)
-                Text(status.text)
-                    .font(SettingsTheme.body)
-                    .foregroundStyle(status.kind == .warning ? SettingsTheme.amber : SettingsTheme.text)
-            }
-            .frame(width: QuotaProductRow.statusWidth, alignment: .leading)
+            QuotaStatusCell(value: status, isOn: isOn)
             Capsule()
                 .fill(isOn ? SettingsTheme.green : SettingsTheme.switchTrack)
                 .overlay(alignment: isOn ? .trailing : .leading) {

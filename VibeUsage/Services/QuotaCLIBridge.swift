@@ -123,10 +123,18 @@ enum QuotaCLIBridge {
             else { throw ProtocolError.unknownProduct(product.id) }
 
             let status: ProviderRateLimit.Status
+            // A cached answer follows a failed live read. Only the structured
+            // status and source are safe to show, never the CLI's message.
+            var liveFailure: ProviderRateLimit.LiveFailure? = product.source == "cache" ? .cliReportedFailure : nil
             switch product.status {
             case "ok": status = product.meters.isEmpty ? .noData : .ok
             case "no_data", "unsupported": status = .noData
-            case "missing_credentials", "expired_credentials", "unauthorized": status = .unauthorized
+            case "missing_credentials":
+                status = .unauthorized
+                if provider == .antigravity { liveFailure = .credentialsNotFound }
+            case "expired_credentials", "unauthorized":
+                status = .unauthorized
+                if provider == .antigravity { liveFailure = .credentialsRejected }
             case "retryable_error": status = .retryableError
             default: status = .error("无法识别本地配额状态")
             }
@@ -155,11 +163,7 @@ enum QuotaCLIBridge {
                 dataAsOf: product.dataAsOf,
                 emptyReason: product.emptyReason == "noWindow" ? .noWindow : nil,
                 source: source(product.source),
-                // The CLI answers from its cache only after the live read
-                // reported `retryable_error`, so a cached answer is itself the
-                // statement that live failed. Its reason exists only in
-                // `message`, free text that is never shown.
-                liveFailure: product.source == "cache" ? .cliReportedFailure : nil
+                liveFailure: liveFailure
             )
         }
     }

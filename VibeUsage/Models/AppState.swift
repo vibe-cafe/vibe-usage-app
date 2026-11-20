@@ -619,11 +619,17 @@ final class AppState {
     /// something other than `.ok`, and which is not mid-refresh (a spinner is
     /// not a problem). A product with no snapshot yet says nothing.
     func quotaTabShowsWarning(_ provider: ProviderRateLimit.Provider) -> Bool {
+        quotaWarningSnapshot(for: provider) != nil
+    }
+
+    /// The Settings row describes the very same snapshot that lights the tab.
+    func quotaWarningSnapshot(for provider: ProviderRateLimit.Provider) -> ProviderRateLimit? {
         guard isQuotaProviderSelected(provider),
               !isRateLimitRefreshing(provider),
-              let snapshot = rateLimits.first(where: { $0.provider == provider })
-        else { return false }
-        return snapshot.status != .ok
+              let snapshot = rateLimits.first(where: { $0.provider == provider }),
+              snapshot.status != .ok
+        else { return nil }
+        return snapshot
     }
 
     /// Switch the visible card. Selecting a tab never changes a product's

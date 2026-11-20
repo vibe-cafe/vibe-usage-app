@@ -24,6 +24,35 @@ struct SettingsWindowTests {
         }
     }
 
+    @Test
+    func quotaWarningDescribesTheSettledRead() {
+        let product = QuotaProduct(provider: .opencodeGo, availability: .ready, isDetected: true)
+        func status(
+            _ status: ProviderRateLimit.Status,
+            emptyReason: ProviderRateLimit.EmptyReason? = nil,
+            failure: ProviderRateLimit.LiveFailure? = nil
+        ) -> (SettingsStatusKind, String) {
+            SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: .init(
+                provider: product.provider, status: status, emptyReason: emptyReason, liveFailure: failure
+            ))
+        }
+
+        #expect(status(.unauthorized) == (.warning, "需要登录"))
+        #expect(status(.noData, emptyReason: .notEntitled, failure: .credentialsRejected) == (.warning, "未订阅"))
+        #expect(status(.noData, emptyReason: .sessionWithoutPlanLimits) == (.warning, "无订阅额度"))
+        #expect(status(.noData, emptyReason: .limitReached) == (.warning, "额度已用满"))
+        #expect(status(.noData, emptyReason: .noWindow) == (.warning, "暂无额度窗口"))
+        for failure in [ProviderRateLimit.LiveFailure.credentialsNotFound, .credentialsRejected] {
+            #expect(status(.noData, failure: failure) == (.warning, "需要登录"))
+            #expect(status(.retryableError, failure: failure) == (.warning, "需要登录"))
+        }
+        #expect(status(.noData) == (.warning, "暂无配额数据"))
+        #expect(status(.noData, failure: .endpointUnreachable) == (.warning, "暂无配额数据"))
+        #expect(status(.retryableError, failure: .endpointTimedOut) == (.warning, "读取失败"))
+        #expect(status(.error("fixture")) == (.error, "读取失败"))
+        #expect(status(.disabled) == (.warning, "未启用"))
+    }
+
     // MARK: - Navigation
 
     @Test @MainActor

@@ -389,7 +389,7 @@ enum DiagnosticSummary {
             parts.append(text.title)
             parts.append(text.detail)
         case .unauthorized:
-            parts.append("需要重新登录")
+            parts.append(snapshot.provider == .antigravity ? RateLimitCardView.agyAuthorizationText(for: snapshot) : "需要重新登录")
         case .disabled:
             parts.append("未启用")
         case .error:
