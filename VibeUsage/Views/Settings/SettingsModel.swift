@@ -146,11 +146,11 @@ enum SettingsSyncSummary {
         }
     }
 
-    /// Green while syncing works, red after a failure, nothing before linking.
-    static func sidebarDot(status: SyncStatus, isConfigured: Bool) -> SettingsStatusKind? {
-        guard isConfigured else { return nil }
+    /// Red after a failed sync; nothing otherwise (working, syncing, not
+    /// linked) — the sidebar only speaks up when something needs attention.
+    static func sidebarDot(status: SyncStatus) -> SettingsStatusKind? {
         if case .error = status { return .error }
-        return .ok
+        return nil
     }
 
     /// One bar per recorded sync, oldest on the left; `true` is a success.

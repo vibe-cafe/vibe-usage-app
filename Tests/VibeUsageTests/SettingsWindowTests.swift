@@ -147,11 +147,11 @@ struct SettingsWindowTests {
     }
 
     @Test
-    func sidebarDotIsRedOnlyAfterAFailureAndAbsentBeforeLinking() {
-        #expect(SettingsSyncSummary.sidebarDot(status: .idle, isConfigured: false) == nil)
-        #expect(SettingsSyncSummary.sidebarDot(status: .idle, isConfigured: true) == .ok)
-        #expect(SettingsSyncSummary.sidebarDot(status: .syncing, isConfigured: true) == .ok)
-        #expect(SettingsSyncSummary.sidebarDot(status: .error("x"), isConfigured: true) == .error)
+    func sidebarShowsARedDotOnlyAfterAFailure() {
+        #expect(SettingsSyncSummary.sidebarDot(status: .idle) == nil)
+        #expect(SettingsSyncSummary.sidebarDot(status: .success) == nil)
+        #expect(SettingsSyncSummary.sidebarDot(status: .syncing) == nil)
+        #expect(SettingsSyncSummary.sidebarDot(status: .error("x")) == .error)
     }
 
     /// The store keeps the newest first; the bars read oldest to newest.

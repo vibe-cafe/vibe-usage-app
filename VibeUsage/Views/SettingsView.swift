@@ -95,13 +95,8 @@ struct SettingsSidebar: View {
                 Image(systemName: page.systemImage)
                     .font(.system(size: 13, weight: .regular))
                     .frame(width: 16, height: 16)
-                HStack(spacing: 6) {
-                    Text(page.title)
-                        .font(SettingsTheme.label)
-                    if page == .directories {
-                        SettingsAdvancedTag()
-                    }
-                }
+                Text(page.title)
+                    .font(SettingsTheme.label)
                 Spacer(minLength: 4)
                 trailing(page)
             }
@@ -118,21 +113,14 @@ struct SettingsSidebar: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
+    /// The sidebar carries one mark only: a red dot on 数据同步 after a failed
+    /// sync, visible from every page (maintainer 2026-11-20, 「按这三点改」:
+    /// no count, no green dot, no 「高级」 chip in the sidebar).
     @ViewBuilder
     private func trailing(_ page: SettingsPage) -> some View {
-        switch page {
-        case .quotas:
-            Text("\(appState.selectedQuotaProviders.count) / \(appState.quotaProducts.count)")
-                .font(.system(size: 12))
-                .monospacedDigit()
-                .foregroundStyle(SettingsTheme.secondaryText)
-        case .sync:
-            if let dot = SettingsSyncSummary.sidebarDot(status: appState.syncStatus, isConfigured: appState.isConfigured) {
-                SettingsStatusDot(kind: dot)
-                    .padding(.trailing, 4)
-            }
-        case .general, .directories, .about:
-            EmptyView()
+        if page == .sync, let dot = SettingsSyncSummary.sidebarDot(status: appState.syncStatus) {
+            SettingsStatusDot(kind: dot)
+                .padding(.trailing, 4)
         }
     }
 
