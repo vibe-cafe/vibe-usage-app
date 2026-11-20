@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// Monochrome provider marks for the Settings window (the 订阅配额 table and
-/// the 数据目录 page). The colored app icons stay in the menu-bar panel
-/// (`ProviderIcon`); Settings draws one flat shape per product so the column
-/// reads as a single color — on products use the primary text color, off
-/// products the secondary one.
+/// Monochrome provider marks, one flat shape per product, used everywhere a
+/// provider is shown: the Settings window (订阅配额 table, 数据目录 page) and
+/// the menu-bar panel (tab strip and card headers, through `ProviderIcon`).
+/// On products use the primary text color; off products are dimmed by their
+/// surface (secondary color in Settings, the panel's grey tab).
 ///
 /// Source: Lobe Icons, `@lobehub/icons-static-svg` 1.104.0
 /// (https://github.com/lobehub/lobe-icons), MIT License, Copyright (c) 2023

@@ -6,9 +6,10 @@ import SwiftUI
 /// The strip is an index into the card row: clicking a tab asks the row to
 /// scroll to that product (`onSelect`), and the highlighted tab follows the row
 /// as it scrolls (`activeProvider`) — so the strip never claims a product is on
-/// screen when it is not. Products whose monitoring is on come first and keep
-/// their brand color; products that are off stay visible after them, desaturated
-/// (the strip is the product catalog, not a summary of the selection). Tabs are
+/// screen when it is not. Products whose monitoring is on come first at full
+/// brightness; products that are off stay visible after them, dimmed (the strip
+/// is the product catalog, not a summary of the selection). The marks are the
+/// monochrome ones Settings uses (`ProviderIcon`). Tabs are
 /// draggable: the order is persisted (`QuotaSelectionPreferences.orderKey`), and
 /// because enabled products render as their own group, a cross-group drop lands
 /// inside the dragged product's group instead of breaking the "enabled first"
@@ -61,8 +62,7 @@ struct QuotaTabStripView: View {
                 )
             }
         } label: {
-            ProviderIcon(provider: provider)
-                .frame(width: 20, height: 20)
+            ProviderIcon(provider: provider, size: 20)
                 .padding(5)
                 .background(isActive ? Color(white: 0.17) : Color.clear)
                 .overlay(
@@ -70,9 +70,9 @@ struct QuotaTabStripView: View {
                         .stroke(isActive ? Color(white: 0.34) : Color.clear, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 7))
-                // Off products keep their slot but lose their color: the icon
-                // itself carries "on / off", so a greyed tab is a product the
-                // user can look at (and enable) rather than one that is gone.
+                // Off products keep their slot but dim: the mark itself
+                // carries "on / off", so a greyed tab is a product the user
+                // can look at (and enable) rather than one that is gone.
                 .saturation(isEnabled ? 1 : 0)
                 .opacity(isEnabled ? 1 : 0.45)
                 // On, but its last read produced no quota: the dot points at the
@@ -90,8 +90,7 @@ struct QuotaTabStripView: View {
         .help(tabHelp(provider, isEnabled: isEnabled, showsWarning: showsWarning))
         .accessibilityLabel(provider.displayName)
         .draggable(provider.rawValue) {
-            ProviderIcon(provider: provider)
-                .frame(width: 20, height: 20)
+            ProviderIcon(provider: provider, size: 20)
                 .padding(5)
         }
         .dropDestination(for: String.self) { items, _ in

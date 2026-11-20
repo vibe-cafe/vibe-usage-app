@@ -1,6 +1,6 @@
 Vibe Usage — third-party notices
 
-Provider marks in the Settings window (Views/Settings/ProviderGlyph.swift)
+Provider marks in the Settings window and the menu-bar panel (Views/Settings/ProviderGlyph.swift)
 are path data from Lobe Icons (@lobehub/icons-static-svg 1.104.0,
 https://github.com/lobehub/lobe-icons): openai, claude, cursor, kimi, zai,
 grok, opencode, antigravity. The marks remain trademarks of their owners and
