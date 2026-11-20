@@ -1,5 +1,11 @@
 Vibe Usage — third-party notices
 
+The GitHub mark next to the repository links on the Settings 关于 page
+(Views/Settings/SettingsAboutPage.swift) is path data from Simple Icons
+(simple-icons 16.38.0, https://github.com/simple-icons/simple-icons),
+released under CC0 1.0 Universal. The mark is a GitHub trademark and only
+labels links to GitHub.
+
 Provider marks in the Settings window and the menu-bar panel (Views/Settings/ProviderGlyph.swift)
 are path data from Lobe Icons (@lobehub/icons-static-svg 1.104.0,
 https://github.com/lobehub/lobe-icons): openai, claude, cursor, kimi, zai,

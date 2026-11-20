@@ -382,4 +382,11 @@ struct SettingsLinksTests {
             #expect(url.scheme == "https")
         }
     }
+
+    @Test
+    func gitHubMarkFillsItsBox() {
+        let bounds = GitHubMark().path(in: CGRect(x: 0, y: 0, width: 24, height: 24)).boundingRect
+        #expect(bounds.width > 23 && bounds.height > 23)
+        #expect(bounds.minX >= -0.01 && bounds.maxX <= 24.01 && bounds.maxY <= 24.01)
+    }
 }
