@@ -70,6 +70,11 @@ struct QuotaTabStripView: View {
                         .stroke(isActive ? Color(white: 0.34) : Color.clear, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 7))
+                // The whole 30 pt tile takes the click. The monochrome mark is
+                // a path, and a plain button only hit-tests what it draws: an
+                // unselected tab (clear background) otherwise answered only on
+                // the strokes, so switching took several clicks (0.7.7).
+                .contentShape(RoundedRectangle(cornerRadius: 7))
                 // Off products keep their slot but dim: the mark itself
                 // carries "on / off", so a greyed tab is a product the user
                 // can look at (and enable) rather than one that is gone.
