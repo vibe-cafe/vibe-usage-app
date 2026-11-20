@@ -21,6 +21,19 @@ struct SettingsAboutPage: View {
                         .disabled(!updaterViewModel.canCheckForUpdates)
                 }
                 SettingsSeparator()
+                SettingsRow {
+                    SettingsRowLabel(title: "VibeCafé")
+                    Spacer(minLength: 8)
+                    SettingsLinkButton(title: "vibecafe.ai", url: SettingsLinks.vibeCafe)
+                }
+                SettingsSeparator()
+                SettingsRow {
+                    SettingsRowLabel(title: "GitHub")
+                    Spacer(minLength: 8)
+                    SettingsLinkButton(title: "vibe-usage", url: SettingsLinks.cliRepository)
+                    SettingsLinkButton(title: "vibe-usage-app", url: SettingsLinks.appRepository)
+                }
+                SettingsSeparator()
                 diagnosticSummaryRow
                 #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                 SettingsSeparator()
@@ -97,5 +110,35 @@ struct SettingsAboutPage: View {
             .padding(.trailing, 12)
             .padding(.bottom, 12)
         }
+    }
+}
+
+/// Where the 关于 page's links go (maintainer 2026-11-20): the VibeCafé site
+/// and the two public repositories, the CLI and this app.
+enum SettingsLinks {
+    static let vibeCafe = URL(string: "https://vibecafe.ai")!
+    static let cliRepository = URL(string: "https://github.com/vibe-cafe/vibe-usage")!
+    static let appRepository = URL(string: "https://github.com/vibe-cafe/vibe-usage-app")!
+}
+
+/// A settings button that opens a web page in the default browser, marked
+/// with the same ↗ arrow as the panel's 「详情」「排行榜」 links.
+struct SettingsLinkButton: View {
+    let title: String
+    let url: URL
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: 3) {
+                Text(title)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 10, weight: .medium))
+            }
+        }
+        .buttonStyle(.settings)
+        .help(url.absoluteString)
+        .accessibilityHint("在浏览器中打开")
     }
 }

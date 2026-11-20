@@ -370,3 +370,16 @@ struct MenuBarLabelLinesTests {
         #expect(!costRead && !tokensRead)
     }
 }
+
+/// The 关于 page's three links.
+struct SettingsLinksTests {
+    @Test
+    func aboutPageLinksPointAtTheSiteAndBothRepositories() {
+        #expect(SettingsLinks.vibeCafe.absoluteString == "https://vibecafe.ai")
+        #expect(SettingsLinks.cliRepository.absoluteString == "https://github.com/vibe-cafe/vibe-usage")
+        #expect(SettingsLinks.appRepository.absoluteString == "https://github.com/vibe-cafe/vibe-usage-app")
+        for url in [SettingsLinks.vibeCafe, SettingsLinks.cliRepository, SettingsLinks.appRepository] {
+            #expect(url.scheme == "https")
+        }
+    }
+}
