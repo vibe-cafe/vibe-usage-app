@@ -353,7 +353,6 @@ final class AppState {
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
         initializeQuotaProducts()
-        self.claudeUsesDesktopBundledCLI = ClaudeUsageProbe.primarySourceKind() == .desktop
 
         #if DEBUG
         // UI acceptance builds can exercise subscription cards without
@@ -808,15 +807,6 @@ final class AppState {
         rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
-    /// True when Claude quota is read through the copy of Claude Code that
-    /// Claude Desktop bundles, i.e. this machine has Desktop but no CLI of its
-    /// own. Settings calls that out, because it is the one case where the data
-    /// comes from somewhere the user did not install directly. With a CLI
-    /// present there is nothing to explain, so the note stays hidden.
-    ///
-    /// Resolved once at launch: it depends only on which binaries exist on
-    /// disk, and re-scanning on every Settings redraw would buy nothing.
-    private(set) var claudeUsesDesktopBundledCLI = false
 
     // MARK: - Private
 
