@@ -139,6 +139,17 @@ struct SettingsWindowTests {
     // MARK: - 订阅配额 status column
 
     @Test
+    func unauthorizedZCodeStatusDistinguishesMissingAndInvalidKeys() {
+        let product = QuotaProduct(provider: .zCode, availability: .ready, isDetected: true)
+        let snapshot = ProviderRateLimit(provider: .zCode, status: .unauthorized)
+
+        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: snapshot)
+            == (.warning, "需要 API Key"))
+        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: true, warningSnapshot: snapshot)
+            == (.warning, "API Key 无效"))
+    }
+
+    @Test
     func statusColumnNamesWhatIsMissingBeforeLocalDetection() {
         let zCode = { (detected: Bool) in QuotaProduct(provider: .zCode, availability: .ready, isDetected: detected) }
 

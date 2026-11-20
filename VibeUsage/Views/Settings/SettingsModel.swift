@@ -117,6 +117,8 @@ enum SettingsQuotaStatus {
         if let snapshot = warningSnapshot {
             let needsLogin = snapshot.liveFailure == .credentialsNotFound || snapshot.liveFailure == .credentialsRejected
             switch snapshot.status {
+            case .unauthorized where product.provider == .zCode:
+                return (.warning, zCodeKeyConfigured ? "API Key 无效" : "需要 API Key")
             case .unauthorized:
                 return (.warning, snapshot.needsAgyCLI ? "需要 agy 命令行" : "需要登录")
             case .noData:
