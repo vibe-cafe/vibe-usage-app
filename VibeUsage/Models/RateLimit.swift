@@ -295,6 +295,12 @@ struct ProviderRateLimit: Equatable, Identifiable {
     }
 
     var liveFailure: LiveFailure?
+
+    /// For AGY alone the CLI's missing_credentials means it could not find
+    /// the agy executable. A rejected login means it did find and run agy.
+    var needsAgyCLI: Bool {
+        provider == .antigravity && status == .unauthorized && liveFailure == .credentialsNotFound
+    }
 }
 
 extension ProviderRateLimit.LiveFailure {

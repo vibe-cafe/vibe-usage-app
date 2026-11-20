@@ -127,6 +127,10 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
+    static func agyAuthorizationText(for snapshot: ProviderRateLimit) -> String {
+        snapshot.needsAgyCLI ? "请安装 agy 命令行并登录后重试" : "请在 agy 中登录后重试"
+    }
+
     /// Status line for an enabled product whose card has no meters to draw.
     /// Only ever states what the data channel actually reported: the live
     /// Codex endpoint's own reason (`emptyReason`), local detection, or —
@@ -326,7 +330,7 @@ private struct ProviderCard: View {
             } else if snapshot.provider == .cursor {
                 messageContent(text: "请在 Cursor 中重新登录后重试", action: "重试")
             } else if snapshot.provider == .antigravity {
-                messageContent(text: "请安装 agy 并登录后重试", action: "重试")
+                messageContent(text: RateLimitCardView.agyAuthorizationText(for: snapshot), action: "重试")
             } else if snapshot.provider == .opencodeGo {
                 // The key comes from OpenCode's own auth.json; only OpenCode
                 // can re-issue it, so point there rather than at the card.

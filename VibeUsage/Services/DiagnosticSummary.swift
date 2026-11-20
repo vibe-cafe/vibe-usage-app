@@ -389,7 +389,12 @@ enum DiagnosticSummary {
             parts.append(text.title)
             parts.append(text.detail)
         case .unauthorized:
-            parts.append("需要重新登录")
+            switch snapshot.provider {
+            case .antigravity: parts.append(RateLimitCardView.agyAuthorizationText(for: snapshot))
+            // ZCode has no login: the CLI reports a missing or rejected API key.
+            case .zCode: parts.append("API Key 缺失或无效")
+            default: parts.append("需要重新登录")
+            }
         case .disabled:
             parts.append("未启用")
         case .error:

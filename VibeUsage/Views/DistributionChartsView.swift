@@ -239,6 +239,7 @@ private struct MetricToggleView: View {
                 .padding(.vertical, 3)
                 .background(mode == m ? Color(white: 0.28) : Color.clear)
                 .clipShape(Capsule())
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }

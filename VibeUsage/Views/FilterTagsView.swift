@@ -70,6 +70,7 @@ struct FilterTagsView: View {
                             .foregroundStyle(Color(red: 1.0, green: 0.42, blue: 0.42))
                             .padding(.horizontal, 8)
                             .frame(height: 28)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("清除筛选")
@@ -134,6 +135,7 @@ struct FilterTagsView: View {
                         .padding(.horizontal, 9)
                         .background(isActive ? Color(white: 0.20) : Color.clear)
                         .clipShape(Capsule())
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }

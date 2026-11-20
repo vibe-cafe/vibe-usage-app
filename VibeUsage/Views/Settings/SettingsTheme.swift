@@ -451,6 +451,7 @@ struct SettingsTextField: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 13))
                         .foregroundStyle(SettingsTheme.switchTrack)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .help("清空")

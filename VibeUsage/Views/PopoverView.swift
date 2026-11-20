@@ -139,6 +139,7 @@ struct PopoverView: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(Color(white: 0.6))
@@ -450,6 +451,7 @@ struct PopoverView: View {
                         .font(.system(size: 11))
                 }
                 .foregroundStyle(Color(white: 0.5))
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(appState.syncStatus == .syncing)
@@ -465,6 +467,7 @@ struct PopoverView: View {
                         .font(.system(size: 11))
                 }
                 .foregroundStyle(Color(white: 0.5))
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .padding(.leading, 12)

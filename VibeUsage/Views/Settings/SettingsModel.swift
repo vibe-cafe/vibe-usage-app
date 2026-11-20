@@ -111,8 +111,30 @@ final class SettingsNavigation {
 enum SettingsQuotaStatus {
     static func status(
         for product: QuotaProduct,
-        zCodeKeyConfigured: Bool
+        zCodeKeyConfigured: Bool,
+        warningSnapshot: ProviderRateLimit? = nil
     ) -> (kind: SettingsStatusKind, text: String) {
+        if let snapshot = warningSnapshot {
+            let needsLogin = snapshot.liveFailure == .credentialsNotFound || snapshot.liveFailure == .credentialsRejected
+            switch snapshot.status {
+            case .unauthorized where product.provider == .zCode:
+                return (.warning, zCodeKeyConfigured ? "API Key 无效" : "需要 API Key")
+            case .unauthorized:
+                return (.warning, snapshot.needsAgyCLI ? "需要 agy 命令行" : "需要登录")
+            case .noData:
+                switch snapshot.emptyReason {
+                case .notEntitled: return (.warning, "未订阅")
+                case .sessionWithoutPlanLimits: return (.warning, "无订阅额度")
+                case .limitReached: return (.warning, "额度已用满")
+                case .noWindow: return (.warning, "暂无额度窗口")
+                case nil: return (.warning, needsLogin ? "需要登录" : "暂无配额数据")
+                }
+            case .retryableError: return (.warning, needsLogin ? "需要登录" : "读取失败")
+            case .error: return (.error, "读取失败")
+            case .disabled: return (.warning, "未启用")
+            case .ok: break
+            }
+        }
         if product.provider == .zCode, product.availability == .ready, !zCodeKeyConfigured {
             return (.warning, "需要 API Key")
         }
