@@ -1010,4 +1010,3 @@ private extension RateLimitWindow {
         return Formatters.formatTimeUntil(resetsAt)
     }
 }
-

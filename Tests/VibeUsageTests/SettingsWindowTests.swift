@@ -148,10 +148,27 @@ struct SettingsWindowTests {
 
     @Test
     func sidebarShowsARedDotOnlyAfterAFailure() {
-        #expect(SettingsSyncSummary.sidebarDot(status: .idle) == nil)
-        #expect(SettingsSyncSummary.sidebarDot(status: .success) == nil)
-        #expect(SettingsSyncSummary.sidebarDot(status: .syncing) == nil)
-        #expect(SettingsSyncSummary.sidebarDot(status: .error("x")) == .error)
+        #expect(SettingsSyncSummary.sidebarDot(status: .idle, isConfigured: true) == nil)
+        #expect(SettingsSyncSummary.sidebarDot(status: .success, isConfigured: true) == nil)
+        #expect(SettingsSyncSummary.sidebarDot(status: .syncing, isConfigured: true) == nil)
+        #expect(SettingsSyncSummary.sidebarDot(status: .error("x"), isConfigured: true) == .error)
+    }
+
+    /// 「重置配置」 leaves the last failure in memory; the dot follows the
+    /// 同步 row, which shows 「—」 once nothing is linked.
+    @Test @MainActor
+    func resetClearsTheSidebarDotEvenAfterAFailure() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appState = AppState(quotaDefaults: defaults, zCodeAPIKeyStore: MemoryZCodeKeyStore())
+        appState.isConfigured = true
+        appState.syncStatus = .error("API Key 无效，请重新配置")
+        #expect(SettingsSyncSummary.sidebarDot(status: appState.syncStatus, isConfigured: appState.isConfigured) == .error)
+
+        appState.isConfigured = false  // what resetConfig() leaves behind
+        #expect(SettingsSyncSummary.sidebarDot(status: appState.syncStatus, isConfigured: appState.isConfigured) == nil)
+        #expect(SettingsSyncSummary.line(status: appState.syncStatus, isConfigured: appState.isConfigured, lastSync: nil)
+            == .init(kind: nil, text: "—"))
     }
 
     /// The store keeps the newest first; the bars read oldest to newest.

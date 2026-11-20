@@ -118,7 +118,8 @@ struct SettingsSidebar: View {
     /// no count, no green dot, no 「高级」 chip in the sidebar).
     @ViewBuilder
     private func trailing(_ page: SettingsPage) -> some View {
-        if page == .sync, let dot = SettingsSyncSummary.sidebarDot(status: appState.syncStatus) {
+        if page == .sync,
+           let dot = SettingsSyncSummary.sidebarDot(status: appState.syncStatus, isConfigured: appState.isConfigured) {
             SettingsStatusDot(kind: dot)
                 .padding(.trailing, 4)
         }

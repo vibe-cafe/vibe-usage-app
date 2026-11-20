@@ -26,6 +26,8 @@ struct MenuBarWallpaperTests {
             "/Users/someone/Pictures/Photos Library.photoslibrary/originals/h.heic",
             "/Volumes/USB/i.jpg",
             "/System/Volumes/Data/Users/someone/Desktop/j.jpg",
+            "/Users/someone/Dropbox/Wallpapers/l.jpg",
+            "/Users/someone/Dropbox (Personal)/m.png",
         ]
         for path in protected {
             #expect(!MenuBarWallpaper.isSafeToRead(url(path), home: home), "\(path)")
@@ -73,6 +75,20 @@ struct MenuBarWallpaperTests {
         let file = desktop.appendingPathComponent("photo.png")
         try writePNG(gray: 1, to: file)
 
+        #expect(MenuBarWallpaper.loadStrip(url: file, home: fakeHome, pixelWidth: 100, aspect: 4, menuBarFraction: 0.3) == nil)
+    }
+
+    /// Dropbox's synced folder may sit straight in the home folder.
+    @Test
+    func aPictureInAHomeDropboxFolderFallsBack() throws {
+        let fakeHome = try temporaryHome()
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        let dropbox = fakeHome.appendingPathComponent("Dropbox (Personal)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dropbox, withIntermediateDirectories: true)
+        let file = dropbox.appendingPathComponent("wallpaper.png")
+        try writePNG(gray: 0.5, to: file)
+
+        #expect(!MenuBarWallpaper.isSafeToRead(file, home: fakeHome))
         #expect(MenuBarWallpaper.loadStrip(url: file, home: fakeHome, pixelWidth: 100, aspect: 4, menuBarFraction: 0.3) == nil)
     }
 

@@ -148,7 +148,10 @@ enum SettingsSyncSummary {
 
     /// Red after a failed sync; nothing otherwise (working, syncing, not
     /// linked) — the sidebar only speaks up when something needs attention.
-    static func sidebarDot(status: SyncStatus) -> SettingsStatusKind? {
+    /// Follows the 同步 row: once the account is unlinked or reset the row
+    /// shows 「—」, so a stale failure from before no longer counts.
+    static func sidebarDot(status: SyncStatus, isConfigured: Bool) -> SettingsStatusKind? {
+        guard isConfigured else { return nil }
         if case .error = status { return .error }
         return nil
     }

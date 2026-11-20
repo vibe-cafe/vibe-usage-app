@@ -9,7 +9,8 @@ import SwiftUI
 ///
 /// Privacy rules, all enforced here:
 /// - Never trigger a permission prompt: a picture in a protected place
-///   (Desktop, Documents, Downloads, iCloud Drive and other cloud folders,
+///   (Desktop, Documents, Downloads, iCloud Drive and other cloud folders
+///   including a `~/Dropbox…` folder,
 ///   another app's container, a Photos library, an external volume, the rest
 ///   of `~/Library`) is not read at all — the preview uses the drawn fallback.
 ///   No screen recording, no screenshot API.
@@ -62,7 +63,9 @@ enum MenuBarWallpaper {
                 && parts[1] == "Application Support"
                 && parts[2] == "com.apple.mobileAssetDesktop"
         default:
-            return true
+            // Dropbox can keep its synced folder straight in the home folder
+            // (`~/Dropbox`, `~/Dropbox (Personal)`); reading there may prompt.
+            return !top.hasPrefix("Dropbox")
         }
     }
 

@@ -127,6 +127,28 @@ private struct QuotaTableHeader: View {
 final class QuotaDragState {
     var dragged: ProviderRateLimit.Provider?
     var indicator: (provider: ProviderRateLimit.Provider, after: Bool)?
+    @ObservationIgnored private var endMonitor: Any?
+
+    /// A row started dragging. A successful drop clears the state in
+    /// `performDrop`; a cancelled drag is noticed through the first click or
+    /// key press after it (AppKit's drag loop keeps those events to itself
+    /// until the drag is over), so a later drop never reuses this product.
+    func begin(_ provider: ProviderRateLimit.Provider) {
+        dragged = provider
+        indicator = nil
+        guard endMonitor == nil else { return }
+        endMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            MainActor.assumeIsolated { self?.end() }
+            return event
+        }
+    }
+
+    func end() {
+        dragged = nil
+        indicator = nil
+        if let endMonitor { NSEvent.removeMonitor(endMonitor) }
+        endMonitor = nil
+    }
 }
 
 // MARK: - Row
@@ -241,7 +263,7 @@ struct QuotaProductRow: View {
         }
         .contentShape(Rectangle())
         .onDrag {
-            drag.dragged = provider
+            drag.begin(provider)
             return NSItemProvider(object: provider.rawValue as NSString)
         } preview: {
             QuotaDragPreview(provider: provider, isOn: isOn, status: statusValue)
@@ -377,7 +399,7 @@ private struct QuotaRowDropDelegate: DropDelegate {
     let drag: QuotaDragState
     let enabled: [ProviderRateLimit.Provider]
     let disabled: [ProviderRateLimit.Provider]
-    let move: (ProviderRateLimit.Provider, ProviderRateLimit.Provider?) -> Void
+    let move: @MainActor (ProviderRateLimit.Provider, ProviderRateLimit.Provider?) -> Void
 
     private func target(_ info: DropInfo) -> QuotaReorder.Target {
         QuotaReorder.target(
@@ -406,16 +428,27 @@ private struct QuotaRowDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
+        // Only the line: the drag may just be moving on to the next row.
         if drag.indicator?.provider == row { drag.indicator = nil }
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        defer {
-            drag.indicator = nil
-            drag.dragged = nil
+        let target = target(info)
+        let dragged = drag.dragged
+        drag.end()
+        guard case .before(let destination) = target, let dragged,
+              let item = info.itemProviders(for: [.plainText]).first
+        else { return false }
+        // Move only when the dropped text is the row that started the drag:
+        // plain text dragged in from elsewhere never reorders anything.
+        let expected = dragged.rawValue
+        let move = self.move
+        item.loadObject(ofClass: NSString.self) { object, _ in
+            guard (object as? NSString) as String? == expected else { return }
+            Task { @MainActor in
+                withAnimation(.easeInOut(duration: 0.18)) { move(dragged, destination) }
+            }
         }
-        guard case .before(let target) = target(info), let dragged = drag.dragged else { return false }
-        withAnimation(.easeInOut(duration: 0.18)) { move(dragged, target) }
         return true
     }
 }
