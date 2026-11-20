@@ -51,8 +51,6 @@ enum SettingsTheme {
     static let buttonLine = Color.white.opacity(0.10)
     static let segmentTrack = Color.white.opacity(0.07)
     static let segmentOn = Color(settingsHex: 0x505050)
-    static let menuBarFill = Color(settingsHex: 0x3A3A3A)
-    static let menuBarText = Color(settingsHex: 0xF2F2F2)
 
     // MARK: Type (system font; 15 / 13 / 12 mono / 11)
 
