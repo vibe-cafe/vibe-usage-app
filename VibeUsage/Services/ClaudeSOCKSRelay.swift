@@ -143,6 +143,7 @@ final class ClaudeSOCKSRelay: @unchecked Sendable {
             var buffer = buffered
             if let data { buffer.append(data) }
             if let end = buffer.range(of: Data("\r\n\r\n".utf8)) {
+                guard end.upperBound <= Self.headerLimit else { done(nil, Data()); return }
                 done(String(data: buffer[..<end.lowerBound], encoding: .utf8), Data(buffer[end.upperBound...]))
             } else if error != nil || complete || buffer.count >= Self.headerLimit {
                 done(nil, Data())

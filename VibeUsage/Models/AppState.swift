@@ -382,11 +382,12 @@ final class AppState {
 
         reloadConfig()
 
-        if launchWaitsForProxy, launchProxyWait == nil {
+        // Nothing to send (not linked, no quota product selected): no reason
+        // to look at the proxy at all.
+        if launchWaitsForProxy, launchProxyWait == nil, isConfigured || !selectedQuotaProviders.isEmpty {
             let urls = LoginLaunch.proxyProbeURLs(server: Self.launchProbeURL())
-            let own = SystemProxy.ownProxyEndpoint(ProcessInfo.processInfo.environment)
             launchProxyWait = Task.detached(priority: .utility) {
-                let up = await LoginLaunch.waitForProxy(urls: urls, ownProxy: own)
+                let up = await LoginLaunch.waitForProxy(urls: urls)
                 debugLog("[launch] \(up ? "proxy is up" : "proxy wait ran out") — network reads go ahead")
             }
         }
@@ -498,8 +499,14 @@ final class AppState {
     func triggerSync(_ trigger: SyncRecord.Trigger = .manual) async {
         guard syncStatus != .syncing else { return }
         syncStatus = .syncing
-        // Any sync, manual ones too, waits for a login launch's proxy.
+        // Any sync, manual ones too, waits for a login launch's proxy. A reset
+        // or relink in the meantime drops this one.
+        let account = config?.apiKey
         await waitForLaunchNetwork()
+        guard config?.apiKey == account else {
+            syncStatus = .idle
+            return
+        }
 
         let startedAt = Date()
         let (result, outcome) = await SyncEngine.shared.runSync()

@@ -38,24 +38,27 @@ extension LoginLaunch {
     static let proxyPollInterval: TimeInterval = 2
 
     /// The URLs whose routes tell whether the user's proxy is up: the sync
-    /// server and the vendors the app reads. A PAC often sends the sync
-    /// server direct and only the vendors through the proxy.
+    /// server and every host the app and the CLI read. A PAC often sends the
+    /// sync server direct and only the vendors through the proxy.
     static func proxyProbeURLs(server: URL) -> [URL] {
-        [server] + (SystemProxy.claudeHosts + ["chatgpt.com", "cursor.com", "opencode.ai"])
-            .compactMap { URL(string: "https://\($0)/") }
+        var hosts: [String] = []
+        for host in SystemProxy.claudeHosts + ["chatgpt.com"] + SystemProxy.cliHosts where !hosts.contains(host) {
+            hosts.append(host)
+        }
+        return [server] + hosts.compactMap { URL(string: "https://\($0)/") }
     }
 
-    /// Waits until a proxy the app would use accepts a connection, at most
-    /// `limit`: the user's own proxy variable (`ownProxy`), or the system
-    /// route (PAC included) of any of `urls`. True when one came up, false at
-    /// the limit. With no proxy yet it keeps waiting: many proxy clients set
+    /// Waits until the system route (PAC included) of any of `urls` points at
+    /// a proxy that accepts a connection, at most `limit`. True when one came
+    /// up, false at the limit. A proxy variable in the app's own environment
+    /// does not count: the app's own requests (Codex, OpenCode Go) follow the
+    /// system settings only. With no proxy yet it keeps waiting: many proxy clients set
     /// the system proxy only once they have started, and whether this user
     /// relies on a proxy at all is not known here (that question is a
     /// separate change). A proxy that never answers just runs out the limit;
     /// requests sent to it afterwards fail instead of going direct.
     static func waitForProxy(
         urls: [URL],
-        ownProxy: (host: String, port: Int)? = nil,
         limit: TimeInterval = proxyWaitLimit,
         interval: TimeInterval = proxyPollInterval,
         routes: @escaping @Sendable ([URL]) async -> [SystemProxy.Route] = { urls in
@@ -69,7 +72,7 @@ extension LoginLaunch {
     ) async -> Bool {
         let deadline = now().addingTimeInterval(limit)
         while !Task.isCancelled {
-            var endpoints: [(String, Int)] = ownProxy.map { [($0.host, $0.port)] } ?? []
+            var endpoints: [(String, Int)] = []
             for route in await routes(urls) {
                 switch route {
                 case let .http(host, port), let .socks(host, port):

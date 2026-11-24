@@ -363,18 +363,6 @@ enum SystemProxy {
         return (env, nil)
     }
 
-    /// `host:port` of the proxy the app's own environment names for https
-    /// (the CLI's order), for a reachability check; nil when there is none.
-    static func ownProxyEndpoint(_ base: [String: String]) -> (host: String, port: Int)? {
-        let names = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"]
-        guard let raw = names.lazy.compactMap({ base[$0]?.trimmingCharacters(in: .whitespaces) })
-                .first(where: { !$0.isEmpty }) else { return nil }
-        let text = raw.contains("://") ? raw : "http://\(raw)"
-        guard let url = URL(string: text), let host = url.host, !host.isEmpty else { return nil }
-        let defaults = ["http": 80, "https": 443, "socks5": 1080, "socks5h": 1080, "socks": 1080]
-        return (host, url.port ?? defaults[url.scheme?.lowercased() ?? ""] ?? 80)
-    }
-
     static func hasOwnProxy(_ base: [String: String]) -> Bool {
         (proxyVariableNames + allProxyNames).contains {
             !(base[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
