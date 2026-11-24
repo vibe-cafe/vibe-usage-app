@@ -42,6 +42,8 @@ final class RateLimitCoordinator {
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
+    private let claudeNonessentialTrafficDisabled: @MainActor () async -> Bool
+    private let loadClaudeDesktopRecord: @MainActor () async -> ProviderRateLimit?
     private let fetchOpenCodeGoLive: @MainActor () async throws -> ProviderRateLimit
     private let fetchCLIQuotas: @MainActor (
         [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
@@ -57,6 +59,16 @@ final class RateLimitCoordinator {
         },
         readCodexFallback: @escaping @MainActor () async -> ProviderRateLimit = {
             await RateLimitCoordinator.readCodexSessionFiles()
+        },
+        claudeNonessentialTrafficDisabled: @escaping @MainActor () async -> Bool = {
+            await Task.detached(priority: .utility) {
+                ClaudeNonessentialTraffic.isForcedByPolicy()
+            }.value
+        },
+        loadClaudeDesktopRecord: @escaping @MainActor () async -> ProviderRateLimit? = {
+            await Task.detached(priority: .userInitiated) {
+                ClaudeUsageCache.desktopHistorySnapshot()
+            }.value
         },
         fetchClaudeLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
             try await ClaudeUsageProbe.fetch()
@@ -83,6 +95,8 @@ final class RateLimitCoordinator {
         self.readCodexFallback = readCodexFallback
         self.fetchClaudeLive = fetchClaudeLive
         self.loadClaudeCache = loadClaudeCache
+        self.claudeNonessentialTrafficDisabled = claudeNonessentialTrafficDisabled
+        self.loadClaudeDesktopRecord = loadClaudeDesktopRecord
         self.fetchOpenCodeGoLive = fetchOpenCodeGoLive
         self.fetchCLIQuotas = fetchCLIQuotas
     }
@@ -239,6 +253,34 @@ final class RateLimitCoordinator {
         TestDiagnosticLog.recordQuotaRefreshStarted([.claudeCode])
         #endif
 
+        // The organization's policy forces Claude Code's nonessential traffic
+        // off, which also blocks its usage read: start no Claude Code. Claude
+        // Desktop's own record is offline and outside that policy, so a valid
+        // one still shows, marked with the policy as the live read's reason;
+        // Claude Code's snapshot predates the policy and is not shown.
+        // Otherwise the card says why. Checked on every refresh, so a policy
+        // change takes effect on the next one.
+        if await claudeNonessentialTrafficDisabled() {
+            guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+            debugLog("[rate-limit] claude nonessential traffic forced off by policy — not starting Claude Code")
+            if let record = await loadClaudeDesktopRecord(),
+               !Task.isCancelled, appState.claudeRateLimitEnabled {
+                var shown = record
+                shown.liveFailure = .claudeBlockedByPolicy
+                upsert(shown)
+            } else {
+                guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+                upsertClaudeNonessentialTrafficDisabled()
+            }
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            if let snapshot = currentSnapshot(.claudeCode) {
+                TestDiagnosticLog.recordQuotaResult(snapshot)
+            }
+            #endif
+            lastClaudeFetchAt = Date()
+            return
+        }
+
         // Instant paint from disk, for the same reason Codex does it: the live
         // reading costs a ~2.5s subprocess round trip. Re-read on every refresh:
         // Claude may update its disk cache even when our live probe fails.
@@ -265,7 +307,11 @@ final class RateLimitCoordinator {
             let failure = Self.classify(error)
             let reason = Self.liveFailure(error)
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-            if failure == .notApplicable {
+            if case ClaudeUsageProbe.ProbeError.nonessentialTrafficDisabled = error {
+                // The policy changed between the check above and the probe's
+                // own check. Same answer as above.
+                upsertClaudeNonessentialTrafficDisabled()
+            } else if failure == .notApplicable {
                 // API key / Bedrock / Vertex session: this account has no plan
                 // quota at all, so there is nothing to show and nothing to retry.
                 // Carry that as a reason — otherwise the card is indistinguishable
@@ -297,6 +343,13 @@ final class RateLimitCoordinator {
         }
         #endif
         lastClaudeFetchAt = Date()
+    }
+
+    /// Replaces whatever the Claude card showed — including numbers read
+    /// before the policy arrived — with the policy's own line.
+    private func upsertClaudeNonessentialTrafficDisabled() {
+        upsert(ProviderRateLimit(provider: .claudeCode, status: .noData,
+            fetchedAt: Date(), emptyReason: .nonessentialTrafficDisabled))
     }
 
     /// Refresh Claude only if the last read was over `maxAge` seconds ago.

@@ -40,6 +40,7 @@ struct SettingsWindowTests {
         #expect(status(.unauthorized) == (.warning, "需要登录"))
         #expect(status(.noData, emptyReason: .notEntitled, failure: .credentialsRejected) == (.warning, "未订阅"))
         #expect(status(.noData, emptyReason: .sessionWithoutPlanLimits) == (.warning, "无订阅额度"))
+        #expect(status(.noData, emptyReason: .nonessentialTrafficDisabled) == (.warning, "组织策略不允许"))
         #expect(status(.noData, emptyReason: .limitReached) == (.warning, "额度已用满"))
         #expect(status(.noData, emptyReason: .noWindow) == (.warning, "暂无额度窗口"))
         for failure in [ProviderRateLimit.LiveFailure.credentialsNotFound, .credentialsRejected] {

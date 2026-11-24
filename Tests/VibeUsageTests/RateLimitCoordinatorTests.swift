@@ -606,6 +606,7 @@ struct RateLimitCoordinatorTests {
 
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: {
                 paintedWhileProbing = appState.rateLimits.first { $0.provider == .claudeCode }
                 return live
@@ -635,6 +636,7 @@ struct RateLimitCoordinatorTests {
 
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.noBinary },
             loadClaudeCache: { cached }
         )
@@ -653,6 +655,7 @@ struct RateLimitCoordinatorTests {
         var cached = claudeSnapshot(utilization: 10, dataAsOf: Date(timeIntervalSince1970: 100))
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.limitsUnavailable },
             loadClaudeCache: { cached }
         )
@@ -680,6 +683,7 @@ struct RateLimitCoordinatorTests {
         appState.claudeRateLimitEnabled = true
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.timedOut },
             loadClaudeCache: { nil }
         )
@@ -703,6 +707,7 @@ struct RateLimitCoordinatorTests {
         appState.claudeRateLimitEnabled = true
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.noBinary },
             loadClaudeCache: { nil }
         )
@@ -726,6 +731,7 @@ struct RateLimitCoordinatorTests {
         appState.claudeRateLimitEnabled = true
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.limitsNotApplicable },
             loadClaudeCache: {
                 self.claudeSnapshot(
@@ -742,6 +748,129 @@ struct RateLimitCoordinatorTests {
         // reading like "Claude isn't installed" (issue #39).
         #expect(appState.rateLimits.first { $0.provider == .claudeCode }?.emptyReason
             == .sessionWithoutPlanLimits)
+    }
+
+    /// The organization's policy forces Claude Code's nonessential traffic
+    /// off, which blocks its usage read too, so the coordinator starts
+    /// nothing, paints no cached numbers, and replaces an earlier reading with
+    /// the policy's own line — no retry, no stale percentages. (A user's own
+    /// switch does not lead here; the probe keeps it off and still reads.)
+    @Test @MainActor
+    func claudeNonessentialTrafficOffStartsNothingAndShowsTheSetting() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        appState.rateLimits = [claudeSnapshot(utilization: 40, dataAsOf: Date())]
+        var probed = false
+        var cacheRead = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeNonessentialTrafficDisabled: { true },
+            loadClaudeDesktopRecord: { nil },
+            fetchClaudeLive: {
+                probed = true
+                return self.claudeSnapshot(utilization: 10, dataAsOf: Date())
+            },
+            loadClaudeCache: {
+                cacheRead = true
+                return self.claudeSnapshot(utilization: 20, dataAsOf: Date())
+            }
+        )
+
+        await coordinator.refreshClaude()
+
+        let card = appState.rateLimits.first { $0.provider == .claudeCode }
+        #expect(!probed)
+        #expect(!cacheRead)
+        #expect(card?.status == .noData)
+        #expect(card?.emptyReason == .nonessentialTrafficDisabled)
+        #expect(card?.fiveHour == nil)
+        #expect(card?.liveFailure == nil)
+        #expect(appState.isClaudeRateLimitRefreshing == false)
+    }
+
+    /// Switching the setting off again brings the live numbers back on the
+    /// next refresh, with no leftover reason on the card.
+    @Test @MainActor
+    func claudeCardRecoversWhenNonessentialTrafficIsSwitchedBackOn() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        var disabled = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeNonessentialTrafficDisabled: { disabled },
+            loadClaudeDesktopRecord: { nil },
+            fetchClaudeLive: { self.claudeSnapshot(utilization: 30, dataAsOf: Date()) },
+            loadClaudeCache: { nil }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .claudeCode } }
+
+        await coordinator.refreshClaude()
+        #expect(card()?.status == .ok)
+
+        disabled = true
+        await coordinator.refreshClaude()
+        #expect(card()?.emptyReason == .nonessentialTrafficDisabled)
+        #expect(card()?.fiveHour == nil)
+
+        disabled = false
+        await coordinator.refreshClaude()
+        #expect(card()?.status == .ok)
+        #expect(card()?.emptyReason == nil)
+        #expect(card()?.fiveHour?.utilization == 30)
+    }
+
+    /// Under the policy a valid Claude Desktop record (offline, outside the
+    /// policy) still shows, with the policy as the live read's reason, and
+    /// Claude Code is still not started.
+    @Test @MainActor
+    func claudePolicyStillShowsClaudeDesktopsOwnRecord() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        var probed = false
+        var record = claudeSnapshot(utilization: 55, dataAsOf: Date())
+        record.source = .desktopRecord
+        let desktop = record
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeNonessentialTrafficDisabled: { true },
+            loadClaudeDesktopRecord: { desktop },
+            fetchClaudeLive: {
+                probed = true
+                return self.claudeSnapshot(utilization: 10, dataAsOf: Date())
+            },
+            loadClaudeCache: { self.claudeSnapshot(utilization: 20, dataAsOf: Date()) }
+        )
+
+        await coordinator.refreshClaude()
+
+        let card = appState.rateLimits.first { $0.provider == .claudeCode }
+        #expect(!probed)
+        #expect(card?.status == .ok)
+        #expect(card?.source == .desktopRecord)
+        #expect(card?.fiveHour?.utilization == 55)
+        #expect(card?.liveFailure == .claudeBlockedByPolicy)
+        #expect(card?.emptyReason == nil)
+    }
+
+    /// The probe re-checks the setting itself. If it flips between the
+    /// coordinator's check and the probe's, the card says the same thing.
+    @Test @MainActor
+    func probeRefusingForNonessentialTrafficShowsTheSetting() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.nonessentialTrafficDisabled },
+            loadClaudeCache: { self.claudeSnapshot(utilization: 20, dataAsOf: Date()) }
+        )
+
+        await coordinator.refreshClaude()
+
+        let card = appState.rateLimits.first { $0.provider == .claudeCode }
+        #expect(card?.status == .noData)
+        #expect(card?.emptyReason == .nonessentialTrafficDisabled)
+        #expect(card?.fiveHour == nil)
     }
 
     // MARK: - Live failure reasons (diagnostics 1a)
@@ -763,6 +892,7 @@ struct RateLimitCoordinatorTests {
             appState.claudeRateLimitEnabled = true
             let coordinator = RateLimitCoordinator(
                 appState: appState,
+                claudeNonessentialTrafficDisabled: { false },
                 fetchClaudeLive: { throw error },
                 loadClaudeCache: { nil }
             )
@@ -797,6 +927,7 @@ struct RateLimitCoordinatorTests {
 
         let failing = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.timedOut },
             loadClaudeCache: cache
         )
@@ -805,6 +936,7 @@ struct RateLimitCoordinatorTests {
 
         let succeeding = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: { live },
             loadClaudeCache: cache
         )
@@ -1108,6 +1240,7 @@ struct RateLimitCoordinatorTests {
         let calls = Calls()
         let coordinator = RateLimitCoordinator(
             appState: appState,
+            claudeNonessentialTrafficDisabled: { false },
             fetchClaudeLive: {
                 if calls.next() == 1 { throw ClaudeUsageProbe.ProbeError.timedOut }
                 throw CancellationError()
