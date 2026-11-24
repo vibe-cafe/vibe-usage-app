@@ -43,6 +43,7 @@ final class RateLimitCoordinator {
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
     private let claudeNonessentialTrafficDisabled: @MainActor () async -> Bool
+    private let loadClaudeDesktopRecord: @MainActor () async -> ProviderRateLimit?
     private let fetchOpenCodeGoLive: @MainActor () async throws -> ProviderRateLimit
     private let fetchCLIQuotas: @MainActor (
         [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
@@ -62,6 +63,11 @@ final class RateLimitCoordinator {
         claudeNonessentialTrafficDisabled: @escaping @MainActor () async -> Bool = {
             await Task.detached(priority: .utility) {
                 ClaudeNonessentialTraffic.isForcedByPolicy()
+            }.value
+        },
+        loadClaudeDesktopRecord: @escaping @MainActor () async -> ProviderRateLimit? = {
+            await Task.detached(priority: .userInitiated) {
+                ClaudeUsageCache.desktopHistorySnapshot()
             }.value
         },
         fetchClaudeLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
@@ -90,6 +96,7 @@ final class RateLimitCoordinator {
         self.fetchClaudeLive = fetchClaudeLive
         self.loadClaudeCache = loadClaudeCache
         self.claudeNonessentialTrafficDisabled = claudeNonessentialTrafficDisabled
+        self.loadClaudeDesktopRecord = loadClaudeDesktopRecord
         self.fetchOpenCodeGoLive = fetchOpenCodeGoLive
         self.fetchCLIQuotas = fetchCLIQuotas
     }
@@ -247,13 +254,24 @@ final class RateLimitCoordinator {
         #endif
 
         // The organization's policy forces Claude Code's nonessential traffic
-        // off, which also blocks its usage read: start nothing and paint no
-        // older numbers (they predate the policy), just say so. Checked on
-        // every refresh, so a policy change takes effect on the next one.
+        // off, which also blocks its usage read: start no Claude Code. Claude
+        // Desktop's own record is offline and outside that policy, so a valid
+        // one still shows, marked with the policy as the live read's reason;
+        // Claude Code's snapshot predates the policy and is not shown.
+        // Otherwise the card says why. Checked on every refresh, so a policy
+        // change takes effect on the next one.
         if await claudeNonessentialTrafficDisabled() {
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             debugLog("[rate-limit] claude nonessential traffic forced off by policy — not starting Claude Code")
-            upsertClaudeNonessentialTrafficDisabled()
+            if let record = await loadClaudeDesktopRecord(),
+               !Task.isCancelled, appState.claudeRateLimitEnabled {
+                var shown = record
+                shown.liveFailure = .claudeBlockedByPolicy
+                upsert(shown)
+            } else {
+                guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+                upsertClaudeNonessentialTrafficDisabled()
+            }
             #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             if let snapshot = currentSnapshot(.claudeCode) {
                 TestDiagnosticLog.recordQuotaResult(snapshot)

@@ -204,6 +204,7 @@ struct RateLimitCardView: View {
         case .claudeTimedOut: return "Claude 配额读取超时"
         case .claudeNoResponse: return "Claude 没有响应配额请求"
         case .claudeNoWindows: return "Claude 没有返回额度窗口"
+        case .claudeBlockedByPolicy: return "组织策略关闭了 Claude Code 非必要流量"
         case .credentialsNotFound: return "未找到 \(name) 登录信息"
         case .credentialsRejected: return "\(name) 登录已失效"
         case .endpointTimedOut: return "\(name) 配额接口请求超时"

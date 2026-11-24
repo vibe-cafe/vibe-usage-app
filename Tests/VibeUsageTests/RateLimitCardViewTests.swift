@@ -157,7 +157,8 @@ struct RateLimitCardViewTests {
     func failureCopyIsFixedText() {
         let all: [ProviderRateLimit.LiveFailure] = [
             .claudeBinaryNotFound, .claudeLaunchFailed, .claudeTimedOut, .claudeNoResponse,
-            .claudeNoWindows, .credentialsNotFound, .credentialsRejected, .endpointTimedOut,
+            .claudeNoWindows, .claudeBlockedByPolicy, .credentialsNotFound, .credentialsRejected,
+            .endpointTimedOut,
             .endpointUnreachable, .endpointHTTPStatus(503), .endpointUnrecognized,
             .cliRuntimeMissing, .cliTimedOut, .cliFailed, .cliUnrecognizedOutput,
             .cliSchemaMismatch, .cliNoResult, .cliReportedFailure,

@@ -765,6 +765,7 @@ struct RateLimitCoordinatorTests {
         let coordinator = RateLimitCoordinator(
             appState: appState,
             claudeNonessentialTrafficDisabled: { true },
+            loadClaudeDesktopRecord: { nil },
             fetchClaudeLive: {
                 probed = true
                 return self.claudeSnapshot(utilization: 10, dataAsOf: Date())
@@ -797,6 +798,7 @@ struct RateLimitCoordinatorTests {
         let coordinator = RateLimitCoordinator(
             appState: appState,
             claudeNonessentialTrafficDisabled: { disabled },
+            loadClaudeDesktopRecord: { nil },
             fetchClaudeLive: { self.claudeSnapshot(utilization: 30, dataAsOf: Date()) },
             loadClaudeCache: { nil }
         )
@@ -815,6 +817,39 @@ struct RateLimitCoordinatorTests {
         #expect(card()?.status == .ok)
         #expect(card()?.emptyReason == nil)
         #expect(card()?.fiveHour?.utilization == 30)
+    }
+
+    /// Under the policy a valid Claude Desktop record (offline, outside the
+    /// policy) still shows, with the policy as the live read's reason, and
+    /// Claude Code is still not started.
+    @Test @MainActor
+    func claudePolicyStillShowsClaudeDesktopsOwnRecord() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        var probed = false
+        var record = claudeSnapshot(utilization: 55, dataAsOf: Date())
+        record.source = .desktopRecord
+        let desktop = record
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeNonessentialTrafficDisabled: { true },
+            loadClaudeDesktopRecord: { desktop },
+            fetchClaudeLive: {
+                probed = true
+                return self.claudeSnapshot(utilization: 10, dataAsOf: Date())
+            },
+            loadClaudeCache: { self.claudeSnapshot(utilization: 20, dataAsOf: Date()) }
+        )
+
+        await coordinator.refreshClaude()
+
+        let card = appState.rateLimits.first { $0.provider == .claudeCode }
+        #expect(!probed)
+        #expect(card?.status == .ok)
+        #expect(card?.source == .desktopRecord)
+        #expect(card?.fiveHour?.utilization == 55)
+        #expect(card?.liveFailure == .claudeBlockedByPolicy)
+        #expect(card?.emptyReason == nil)
     }
 
     /// The probe re-checks the setting itself. If it flips between the

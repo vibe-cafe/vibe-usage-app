@@ -283,6 +283,10 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case claudeTimedOut
         case claudeNoResponse
         case claudeNoWindows
+        /// The organization's policy forces Claude Code's nonessential traffic
+        /// off, so the live read was not attempted; the card shows Claude
+        /// Desktop's own (offline) record.
+        case claudeBlockedByPolicy
         // Native HTTP providers (Codex, OpenCode Go)
         case credentialsNotFound
         case credentialsRejected
