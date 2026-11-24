@@ -218,7 +218,7 @@ enum DiagnosticSummary {
         } else {
             system = "无"
         }
-        if system != "无" { system += " · App 按它转交给 CLI 和 Claude 读取（SOCKS 不交给 Claude）" }
+        if system != "无" { system += " · App 按它转交给 CLI 和 Claude 读取（SOCKS 经本机中转交给 Claude）" }
 
         let present = proxyVariableNames.filter { proxy.environmentVariables[$0] == true }
         let absent = proxyVariableNames.filter { proxy.environmentVariables[$0] != true }

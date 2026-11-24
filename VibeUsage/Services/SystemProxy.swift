@@ -324,13 +324,36 @@ enum SystemProxy {
 
     /// For Claude Code: HTTP only (it does not support SOCKS).
     static func claudeEnvironment(base: [String: String]) async -> [String: String] {
+        await claudeLaunch(base: base).environment
+    }
+
+    /// Claude Code's environment, plus the relay it needs when the system
+    /// routes Anthropic's hosts through SOCKS only (`ClaudeSOCKSRelay`; the
+    /// caller stops it when the probe ends). Claude Code speaks only HTTP
+    /// proxies: without the relay it would connect directly. A relay that
+    /// cannot start points Claude Code at the closed port instead.
+    static func claudeLaunch(
+        base: [String: String],
+        routes resolve: ([String]) async -> [(host: String, route: Route)] = { await routes(forHosts: $0) },
+        startRelay: () async throws -> ClaudeSOCKSRelay = { try await ClaudeSOCKSRelay.start() }
+    ) async -> (environment: [String: String], relay: ClaudeSOCKSRelay?) {
         var env = base
-        let hosts = hasOwnProxy(base) ? [] : claudeHosts
-        let variables = proxyVariables(
-            routes: await routes(forHosts: hosts), base: base, allowSOCKS: false, nodeSwitch: false
-        )
+        let routes = hasOwnProxy(base) ? [] : await resolve(claudeHosts)
+        let socksOnly = routes.contains { if case .socks = $0.route { return true }; return false }
+            && !routes.contains { if case .http = $0.route { return true }; return false }
+        if socksOnly {
+            let relay = try? await startRelay()
+            let proxyURL = relay?.proxyURL ?? failClosedURL
+            env["HTTPS_PROXY"] = proxyURL
+            env["HTTP_PROXY"] = proxyURL
+            for name in ["https_proxy", "http_proxy"] where base[name] != nil { env[name] = proxyURL }
+            let direct = routes.filter { $0.route == .direct }.map(\.host)
+            setNoProxy(&env, noProxy(base: base, adding: direct), base: base)
+            return (env, relay)
+        }
+        let variables = proxyVariables(routes: routes, base: base, allowSOCKS: false, nodeSwitch: false)
         env.merge(variables) { _, proxy in proxy }
-        return env
+        return (env, nil)
     }
 
     static func hasOwnProxy(_ base: [String: String]) -> Bool {

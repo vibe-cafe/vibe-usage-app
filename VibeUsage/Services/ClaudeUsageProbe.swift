@@ -91,10 +91,12 @@ enum ClaudeUsageProbe {
     /// terminating the child process.
     static func fetch(now: Date = Date()) async throws -> ProviderRateLimit {
         // Claude Code reads proxy variables, never system settings: hand it
-        // the system proxy for Anthropic's hosts (`SystemProxy`).
-        let environment = await SystemProxy.claudeEnvironment(base: ProcessInfo.processInfo.environment)
+        // the system proxy for Anthropic's hosts (`SystemProxy`), through a
+        // relay for this probe alone when that proxy is SOCKS.
+        let launch = await SystemProxy.claudeLaunch(base: ProcessInfo.processInfo.environment)
+        defer { launch.relay?.stop() }
         return try await fetch(
-            candidates: discoverBinaries(), now: now, timeout: timeout, environment: environment
+            candidates: discoverBinaries(), now: now, timeout: timeout, environment: launch.environment
         )
     }
 
