@@ -19,30 +19,44 @@ struct ClaudeUsageProbeTests {
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--verbose",
-            "--settings", ClaudeUsageProbe.nonessentialTrafficOverrideSettings,
+            "--settings", ClaudeNonessentialTraffic.probeSettings,
         ])
         #expect(!ClaudeUsageProbe.processArguments.contains("--bare"))
     }
 
-    /// Users often set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in
-    /// `~/.claude/settings.json` `env`. The binary re-applies that after spawn,
-    /// so argv must unset it in-memory: empty string (JS-falsy), only that one
-    /// key, and never `"0"` (still truthy). The probe must not persist this.
+    /// Network-privacy principle, rules 4 and 6: the user's nonessential-
+    /// traffic switch would block the usage read itself, so the probe clears
+    /// only that master switch for its own process and turns every separate
+    /// off switch on — in the environment and, past the user's settings
+    /// files, in `--settings`.
     @Test
-    func settingsOverrideUnsetsNonessentialTrafficWithoutClobberingOtherEnv() throws {
+    func probeClearsTheMasterSwitchAndPassesTheSeparateSwitches() throws {
         let arguments = ClaudeUsageProbe.processArguments
-        let settingsIndex = try #require(arguments.firstIndex(of: "--settings"))
-        #expect(settingsIndex + 1 < arguments.count)
+        let index = try #require(arguments.firstIndex(of: "--settings"))
+        #expect(arguments[index + 1] == ClaudeNonessentialTraffic.probeSettings)
 
-        let raw = arguments[settingsIndex + 1]
-        let object = try #require(
-            try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
-        )
-        let env = try #require(object["env"] as? [String: Any])
-        #expect(Set(env.keys) == ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"])
-        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] as? String == "")
-        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] as? String != "0")
-        #expect(object.count == 1)
+        let env = ClaudeUsageProbe.childEnvironment(base: [
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "DISABLE_TELEMETRY": "",
+            "CLAUDE_CONFIG_DIR": "/tmp/claude-profile",
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_ENTRYPOINT": "cli",
+            "CLAUDE_CODE_SESSION_ID": "s",
+            "CLAUDE_CODE_CHILD_SESSION": "1",
+            "CLAUDE_PID": "42",
+            "PATH": "/custom/bin",
+        ])
+        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == nil)
+        for (key, value) in ClaudeNonessentialTraffic.quietEnvironment where !value.isEmpty {
+            #expect(env[key] == value, "\(key)")
+        }
+        #expect(env["CLAUDE_CONFIG_DIR"] == "/tmp/claude-profile")
+        // Session markers go: they would make the probe a nested session.
+        for marker in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID",
+                       "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_PID"] {
+            #expect(env[marker] == nil)
+        }
+        #expect(env["PATH"]?.hasPrefix("/custom/bin:") == true)
     }
 
     /// Issue #57: without `skip_behaviors`, Claude Code scans the last seven

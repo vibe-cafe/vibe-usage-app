@@ -238,6 +238,15 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// genuinely do not apply. Also a definitive answer — retrying cannot
         /// produce windows, so the card explains instead of offering one.
         case sessionWithoutPlanLimits
+        /// The organization's managed settings force Claude Code's
+        /// nonessential traffic off, which also blocks its usage read, so the
+        /// app did not start Claude Code (`ClaudeNonessentialTraffic`). Not a
+        /// failure and not something a retry can change: the card names the
+        /// policy and shows no older numbers. A user's own switch does not
+        /// lead here — the probe keeps it off and still reads the quota.
+        /// App-local; the shared pause vocabulary (#190) calls this
+        /// `vendorTrafficDisabled`.
+        case nonessentialTrafficDisabled
     }
 
     var emptyReason: EmptyReason?
@@ -274,6 +283,10 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case claudeTimedOut
         case claudeNoResponse
         case claudeNoWindows
+        /// The organization's policy forces Claude Code's nonessential traffic
+        /// off, so the live read was not attempted; the card shows Claude
+        /// Desktop's own (offline) record.
+        case claudeBlockedByPolicy
         // Native HTTP providers (Codex, OpenCode Go)
         case credentialsNotFound
         case credentialsRejected

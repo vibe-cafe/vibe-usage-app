@@ -146,6 +146,8 @@ struct RateLimitCardView: View {
             return "未订阅 \(snapshot.provider.displayName)"
         case .sessionWithoutPlanLimits:
             return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）"
+        case .nonessentialTrafficDisabled:
+            return "组织策略关闭了 Claude Code 非必要流量 · 无法读取"
         case nil:
             // The live read's own fixed reason (e.g. no Claude Code binary)
             // is more specific than local detection, which only saw a folder.
@@ -202,6 +204,7 @@ struct RateLimitCardView: View {
         case .claudeTimedOut: return "Claude 配额读取超时"
         case .claudeNoResponse: return "Claude 没有响应配额请求"
         case .claudeNoWindows: return "Claude 没有返回额度窗口"
+        case .claudeBlockedByPolicy: return "组织策略关闭了 Claude Code 非必要流量"
         case .credentialsNotFound: return "未找到 \(name) 登录信息"
         case .credentialsRejected: return "\(name) 登录已失效"
         case .endpointTimedOut: return "\(name) 配额接口请求超时"

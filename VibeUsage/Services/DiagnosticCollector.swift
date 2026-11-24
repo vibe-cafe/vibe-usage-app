@@ -80,7 +80,8 @@ enum DiagnosticCollector {
 
     /// `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json` —
     /// the file whose `env` Claude Code applies after spawn (where
-    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` silently empties the card).
+    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` would block the usage read;
+    /// the probe clears it for itself, see `ClaudeNonessentialTraffic`).
     static func claudeSettingsURL(environment: [String: String]) -> URL {
         if let custom = environment["CLAUDE_CONFIG_DIR"], !custom.isEmpty {
             return URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)

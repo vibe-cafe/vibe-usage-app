@@ -375,7 +375,9 @@ enum DiagnosticSummary {
             if let source = snapshot.source { parts.append("来源：\(sourceText(source, failed: snapshot.liveFailure != nil))") }
             if let dataAsOf = snapshot.dataAsOf { parts.append("数据时间：\(age(from: dataAsOf, to: now))") }
             if let failure = snapshot.liveFailure {
-                parts.append("实时读取失败：\(RateLimitCardView.liveFailureText(failure, provider: snapshot.provider))")
+                // A policy stops the live read before it starts: paused, not failed.
+                let label = failure == .claudeBlockedByPolicy ? "实时读取已暂停" : "实时读取失败"
+                parts.append("\(label)：\(RateLimitCardView.liveFailureText(failure, provider: snapshot.provider))")
             }
         case .noData:
             // Same as the card: a refresh in flight reads as loading.
