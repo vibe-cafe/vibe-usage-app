@@ -1,6 +1,6 @@
 # Vibe Usage
 
-macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常驻菜单栏，可选显示在 Dock / Cmd-Tab；数据同步到 [vibecafe.ai/usage](https://vibecafe.ai/usage)。
+macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常驻菜单栏，可选显示在 Dock / Cmd-Tab。默认网页仪表盘位于 [vibefriends.com/usage](https://vibefriends.com/usage)。
 
 <table align="center">
   <tr>
@@ -16,7 +16,7 @@ macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常�
 ## 配置
 
 1. 打开 Vibe Usage，点击「登录并链接数据」
-2. 浏览器自动打开 vibecafe.ai 审批页面 — 登录后确认验证码与 app 一致
+2. 浏览器自动打开审批页，默认站点为 vibefriends.com。使用自定义服务器时，在该服务器提供的审批页登录，核对验证码与 App 一致
 3. 点击「确认链接」 — app 自动拿到 Key 并开始同步
 
 ## 功能
@@ -57,7 +57,7 @@ Debug 构建的设置页提供“导出诊断日志”入口。日志仅保存�
 ## 相关项目
 
 - [@vibe-cafe/vibe-usage](https://github.com/vibe-cafe/vibe-usage) — 命令行同步工具
-- [vibecafe.ai/usage](https://vibecafe.ai/usage) — Web 仪表盘
+- [vibefriends.com/usage](https://vibefriends.com/usage) — Web 仪表盘
 
 ## License
 

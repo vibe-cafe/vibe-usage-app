@@ -1,16 +1,17 @@
 import Foundation
 
-/// HTTP client for vibecafe.ai API (authenticated with API Key)
+/// Authenticated usage client for vibefriends.com or the configured server.
 struct APIClient: Sendable {
-    let baseURL: String
+    let server: UsageServer
     let apiKey: String
 
     /// Fetch usage buckets for the dashboard.
     func fetchUsage(range: UsageQueryRange) async throws -> UsageResponse {
-        guard var components = URLComponents(string: "\(baseURL)/api/usage") else {
+        guard let endpoint = server.url(for: "api/usage"),
+              var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
         }
-        var queryItems = range.queryItems
+        var queryItems = (components.queryItems ?? []) + range.queryItems
         queryItems.append(URLQueryItem(name: "tz", value: TimeZone.current.identifier))
         components.queryItems = queryItems
         guard let url = components.url else { throw APIError.invalidURL }
@@ -115,6 +116,11 @@ struct DevicePollResponse: Decodable, Sendable {
     let apiKey: String?
     let apiUrl: String?
     let error: String?
+
+    func linkedServer(fallingBackTo requestedServer: UsageServer) -> UsageServer {
+        guard let apiUrl, !apiUrl.isEmpty else { return requestedServer }
+        return UsageServer(apiUrl)
+    }
 }
 
 enum DeviceFlowError: LocalizedError {
@@ -133,8 +139,8 @@ enum DeviceFlowError: LocalizedError {
     }
 }
 
-func requestDeviceCode(baseURL: String, clientName: String, hostname: String?) async throws -> DeviceCodeResponse {
-    guard let url = URL(string: "\(baseURL)/api/usage/device/code") else {
+func requestDeviceCode(server: UsageServer, clientName: String, hostname: String?) async throws -> DeviceCodeResponse {
+    guard let url = server.url(for: "api/usage/device/code") else {
         throw APIClient.APIError.invalidURL
     }
     var req = URLRequest(url: url)
@@ -155,8 +161,8 @@ func requestDeviceCode(baseURL: String, clientName: String, hostname: String?) a
     return try JSONDecoder().decode(DeviceCodeResponse.self, from: data)
 }
 
-func pollDeviceCode(baseURL: String, deviceCode: String) async throws -> DevicePollResponse {
-    guard let url = URL(string: "\(baseURL)/api/usage/device/poll") else {
+func pollDeviceCode(server: UsageServer, deviceCode: String) async throws -> DevicePollResponse {
+    guard let url = server.url(for: "api/usage/device/poll") else {
         throw APIClient.APIError.invalidURL
     }
     var req = URLRequest(url: url)

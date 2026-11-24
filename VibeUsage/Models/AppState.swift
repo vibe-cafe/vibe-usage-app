@@ -321,15 +321,18 @@ final class AppState {
     private var rateLimitCoordinator: RateLimitCoordinator?
     private var isRateLimitPanelVisible = false
     private var config: VibeUsageConfig?
-    private let usageFetcher: (String, String, UsageQueryRange) async throws -> UsageResponse
+    private let loadConfig: () -> VibeUsageConfig?
+    var usageServer: UsageServer { UsageServer(config?.apiUrl) }
+    private let usageFetcher: (UsageServer, String, UsageQueryRange) async throws -> UsageResponse
     private let quotaDefaults: UserDefaults
     private let zCodeAPIKeyStore: any ZCodeAPIKeyStoring
     private let quotaProductDiscoverer: () -> [QuotaProduct]
 
     init(
         initialConfig: VibeUsageConfig? = nil,
-        usageFetcher: @escaping (String, String, UsageQueryRange) async throws -> UsageResponse = { apiUrl, apiKey, range in
-            try await APIClient(baseURL: apiUrl, apiKey: apiKey).fetchUsage(range: range)
+        loadConfig: @escaping () -> VibeUsageConfig? = ConfigManager.load,
+        usageFetcher: @escaping (UsageServer, String, UsageQueryRange) async throws -> UsageResponse = { server, apiKey, range in
+            try await APIClient(server: server, apiKey: apiKey).fetchUsage(range: range)
         },
         quotaDefaults: UserDefaults = .standard,
         zCodeAPIKeyStore: any ZCodeAPIKeyStoring = KeychainZCodeAPIKeyStore(),
@@ -338,6 +341,7 @@ final class AppState {
         }
     ) {
         self.config = initialConfig
+        self.loadConfig = loadConfig
         self.isConfigured = initialConfig?.apiKey != nil
         self.usageFetcher = usageFetcher
         self.quotaDefaults = quotaDefaults
@@ -376,9 +380,7 @@ final class AppState {
         // Hand back the `statusLine.command` edit the pre-probe releases made.
         LegacyStatuslineRetirement.run()
 
-        let loadedConfig = ConfigManager.load()
-        self.config = loadedConfig
-        self.isConfigured = loadedConfig?.apiKey != nil
+        reloadConfig()
 
         if isConfigured {
             startScheduler()
@@ -443,15 +445,37 @@ final class AppState {
         #endif
     }
 
-    /// Save config to disk and start scheduler.
-    func configure(apiKey: String, apiUrl: String = AppConfig.defaultApiUrl) {
-        var cfg = ConfigManager.load() ?? VibeUsageConfig()
+    /// Pick up CLI edits as one snapshot, so the key always belongs to the same server.
+    func reloadConfig() {
+        if let latest = loadConfig() {
+            applyConfig(latest)
+        }
+    }
+
+    func applyConfig(_ latest: VibeUsageConfig?) {
+        if latest == nil || config?.apiKey != latest?.apiKey || usageServer != UsageServer(latest?.apiUrl) {
+            // A pending response or cached dashboard belongs to the previous account/server.
+            usageFetchGeneration &+= 1
+            lastFetchTime = nil
+            hasLoadedUsageData = false
+            isLoadingData = false
+            hasAnyData = false
+            buckets = []
+            sessions = []
+            usageNames = nil
+        }
+        config = latest
+        isConfigured = latest?.apiKey != nil
+    }
+
+    /// Save the server selected by device authorization and start the scheduler.
+    func configure(apiKey: String, server: UsageServer) {
+        var cfg = loadConfig() ?? VibeUsageConfig()
         cfg.apiKey = apiKey
-        cfg.apiUrl = apiUrl
+        cfg.apiUrl = server.baseURL
         ConfigManager.save(cfg)
 
-        self.config = ConfigManager.load()
-        self.isConfigured = self.config?.apiKey != nil
+        applyConfig(loadConfig())
         if isConfigured {
             startScheduler()
         }
@@ -501,8 +525,11 @@ final class AppState {
     // MARK: - Data Fetching
 
     func fetchUsageData() async {
-        guard let config, let apiKey = config.apiKey else { return }
-
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["VIBE_USAGE_QUOTA_UI_TEST"] == "1" { return }
+        #endif
+        reloadConfig()
+        guard isConfigured, let apiKey = config?.apiKey else { return }
         usageFetchGeneration &+= 1
         let generation = usageFetchGeneration
         let queryRange = currentQueryRange
@@ -517,10 +544,8 @@ final class AppState {
             }
         }
 
-        let apiUrl = config.apiUrl ?? AppConfig.defaultApiUrl
-
         do {
-            let response = try await usageFetcher(apiUrl, apiKey, queryRange)
+            let response = try await usageFetcher(usageServer, apiKey, queryRange)
             guard generation == usageFetchGeneration else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 buckets = response.buckets

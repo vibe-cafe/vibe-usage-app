@@ -323,18 +323,19 @@ final class SettingsModel {
         isRelinking = true
         defer { isRelinking = false }
 
-        let baseURL = AppConfig.defaultApiUrl
+        appState.reloadConfig()
+        let server = appState.usageServer
         let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
         let device: DeviceCodeResponse
         do {
-            device = try await requestDeviceCode(baseURL: baseURL, clientName: "\(AppConfig.displayName).app", hostname: hostname)
+            device = try await requestDeviceCode(server: server, clientName: "\(AppConfig.displayName).app", hostname: hostname)
         } catch {
             relinkError = "无法连接服务端：\(error.localizedDescription)"
             return
         }
 
         relinkUserCode = device.userCode
-        if let url = URL(string: device.verificationUriComplete) {
+        if let url = server.verificationURL(device.verificationUriComplete) {
             NSWorkspace.shared.open(url)
         }
 
@@ -347,12 +348,12 @@ final class SettingsModel {
             if Task.isCancelled { return }
             let res: DevicePollResponse
             do {
-                res = try await pollDeviceCode(baseURL: baseURL, deviceCode: device.deviceCode)
+                res = try await pollDeviceCode(server: server, deviceCode: device.deviceCode)
             } catch {
                 continue
             }
             if let apiKey = res.apiKey {
-                appState.configure(apiKey: apiKey, apiUrl: res.apiUrl ?? baseURL)
+                appState.configure(apiKey: apiKey, server: res.linkedServer(fallingBackTo: server))
                 await appState.fetchUsageData()
                 relinkUserCode = nil
                 load()
@@ -397,8 +398,7 @@ final class SettingsModel {
         // The local sync summaries go with the app's data.
         appState.syncHistory.clear()
 
-        appState.isConfigured = false
-        appState.buckets = []
+        appState.applyConfig(nil)
         apiKeyDisplay = "未配置"
         hasAPIKey = false
     }

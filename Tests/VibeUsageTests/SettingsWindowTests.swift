@@ -432,10 +432,10 @@ struct MenuBarLabelLinesTests {
 struct SettingsLinksTests {
     @Test
     func aboutPageLinksPointAtTheSiteAndBothRepositories() {
-        #expect(SettingsLinks.vibeCafe.absoluteString == "https://vibecafe.ai")
+        #expect(UsageServer(AppConfig.productionApiUrl).siteURL?.absoluteString == "https://vibefriends.com")
         #expect(SettingsLinks.cliRepository.absoluteString == "https://github.com/vibe-cafe/vibe-usage")
         #expect(SettingsLinks.appRepository.absoluteString == "https://github.com/vibe-cafe/vibe-usage-app")
-        for url in [SettingsLinks.vibeCafe, SettingsLinks.cliRepository, SettingsLinks.appRepository] {
+        for url in [SettingsLinks.cliRepository, SettingsLinks.appRepository] {
             #expect(url.scheme == "https")
         }
     }
