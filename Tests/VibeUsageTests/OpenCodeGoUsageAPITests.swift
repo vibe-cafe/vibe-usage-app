@@ -94,29 +94,57 @@ struct OpenCodeGoUsageAPITests {
 
     // MARK: - Credentials
 
+    private static let now = Date(timeIntervalSince1970: 1_795_000_000)
+    private static let laterMs = (now.timeIntervalSince1970 + 3_600) * 1000
+
+    private func key(_ value: String, workspace: String? = nil) -> OpenCodeGoUsageAPI.Lookup {
+        .found(.init(token: value, workspaceID: workspace))
+    }
+
     /// The Go key lives beside OpenCode's other provider credentials; only the
-    /// `opencode` entry is ever read.
+    /// `opencode-go` and `opencode` entries are ever read, in that order.
     @Test
-    func readsOnlyTheOpenCodeKeyEntry() throws {
+    func readsOnlyTheTwoOpenCodeEntriesOfAuthJSON() throws {
         let data = Data("""
-        { "opencode": { "type": "api", "key": "  sk-go-fixture  " },
-          "anthropic": { "type": "oauth", "access": "must-not-be-read" } }
+        { "opencode": { "type": "api", "key": "  sk-zen-fixture  " },
+          "anthropic": { "type": "oauth", "access": "must-not-be-read" },
+          "opencode-go": { "type": "api", "key": "sk-go-fixture" } }
         """.utf8)
-        #expect(OpenCodeGoUsageAPI.parseAuthFile(data) == "sk-go-fixture")
+        #expect(OpenCodeGoUsageAPI.parseAuthFile(data, now: Self.now) == [key("sk-go-fixture"), key("sk-zen-fixture")])
     }
 
     @Test
     func rejectsAuthFilesWithoutAUsableOpenCodeKey() {
-        #expect(OpenCodeGoUsageAPI.parseAuthFile(Data(#"{"anthropic":{"type":"oauth","access":"x"}}"#.utf8)) == nil)
-        #expect(OpenCodeGoUsageAPI.parseAuthFile(Data(#"{"opencode":{"type":"api","key":"   "}}"#.utf8)) == nil)
-        #expect(OpenCodeGoUsageAPI.parseAuthFile(Data("not json".utf8)) == nil)
+        func usable(_ json: String) -> Bool {
+            OpenCodeGoUsageAPI.parseAuthFile(Data(json.utf8), now: Self.now).contains { if case .found = $0 { true } else { false } }
+        }
+        #expect(!usable(#"{"anthropic":{"type":"oauth","access":"x"}}"#))
+        #expect(!usable(#"{"opencode":{"type":"api","key":"   "}}"#))
+        #expect(!usable(#"{"opencode":{"type":"oauth","access":"a","refresh":"r","expires":0}}"#))
+        #expect(!usable("not json"))
     }
 
     @Test
-    func resolvesTheCLIDataHome() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        #expect(OpenCodeGoUsageAPI.dataHome.path == home.appendingPathComponent(".local/share/opencode").path)
+    func resolvesTheDataHomeLikeOpenCode() {
+        let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
+        #expect(OpenCodeGoUsageAPI.dataHome(environment: [:], home: home).path == "/Users/example/.local/share/opencode")
+        #expect(OpenCodeGoUsageAPI.dataHome(environment: ["XDG_DATA_HOME": "/tmp/xdg"], home: home).path == "/tmp/xdg/opencode")
+        #expect(OpenCodeGoUsageAPI.dataHome(environment: ["XDG_DATA_HOME": ""], home: home).path == "/Users/example/.local/share/opencode")
         #expect(OpenCodeGoUsageAPI.authFileURL.lastPathComponent == "auth.json")
+    }
+
+    /// An OpenCode account login sends its workspace beside the token, as
+    /// OpenCode itself does; a Go key is sent exactly as before.
+    @Test
+    func requestCarriesTheWorkspaceOnlyForAnAccountLogin() {
+        let account = OpenCodeGoUsageAPI.request(for: .init(token: "acc-fixture", workspaceID: "wrk_fixture"))
+        #expect(account.value(forHTTPHeaderField: "Authorization") == "Bearer acc-fixture")
+        #expect(account.value(forHTTPHeaderField: "x-opencode-org-id") == "wrk_fixture")
+        #expect(account.url == OpenCodeGoUsageAPI.usageURL)
+
+        let goKey = OpenCodeGoUsageAPI.request(for: .init(token: "sk-go", workspaceID: nil))
+        #expect(goKey.value(forHTTPHeaderField: "Authorization") == "Bearer sk-go")
+        #expect(goKey.value(forHTTPHeaderField: "x-opencode-org-id") == nil)
     }
 
     // MARK: - Failure semantics
@@ -127,6 +155,10 @@ struct OpenCodeGoUsageAPITests {
     @Test
     func mapsFailuresToTheSharedRetryPolicy() {
         #expect(OpenCodeGoUsageAPI.FetchError.notLoggedIn.rateLimitFailure == .absent)
+        #expect(OpenCodeGoUsageAPI.FetchError.signInExpired.rateLimitFailure == .absent)
+        #expect(OpenCodeGoUsageAPI.FetchError.notLoggedIn.liveFailure == .credentialsNotFound)
+        #expect(OpenCodeGoUsageAPI.FetchError.signInExpired.liveFailure == .credentialsExpired)
+        #expect(OpenCodeGoUsageAPI.FetchError.unauthorized.liveFailure == .credentialsRejected)
         #expect(OpenCodeGoUsageAPI.FetchError.notSubscribed.rateLimitFailure == .notApplicable)
         #expect(OpenCodeGoUsageAPI.FetchError.unauthorized.rateLimitFailure == .unauthorized)
         #expect(OpenCodeGoUsageAPI.FetchError.badResponse(500).rateLimitFailure == .transient)
@@ -178,70 +210,152 @@ extension OpenCodeGoUsageAPITests {
         }
     }
 
-    /// The 2.x layout keeps the Go key in the credential table's own
-    /// `opencode-go` row; that row is read on its own, nothing else in the row.
+    private func accountLogin(access: String = "acc-fixture", workspace: String? = "wrk_fixture",
+                              expiresMs: Double = OpenCodeGoUsageAPITests.laterMs, server: String? = nil) -> String {
+        var metadata: [String: Any] = [:]
+        if let workspace { metadata["orgID"] = workspace }
+        if let server { metadata["server"] = server }
+        let value: [String: Any] = ["type": "oauth", "methodID": "device", "refresh": "ref-must-not-leave",
+                                    "access": access, "expires": expiresMs, "metadata": metadata]
+        let data = try! JSONSerialization.data(withJSONObject: value)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func store(table: [(integration: String, value: String, active: Int)] = [], authJSON: String? = nil) throws -> URL {
+        let root = try temporaryDirectory()
+        if !table.isEmpty {
+            try createCredentialDatabase(at: root.appendingPathComponent("opencode.db"), rows: table)
+        }
+        if let authJSON {
+            try Data(authJSON.utf8).write(to: root.appendingPathComponent("auth.json"))
+        }
+        return root
+    }
+
+    private func lookup(_ root: URL) -> OpenCodeGoUsageAPI.Lookup {
+        OpenCodeGoUsageAPI.loadCredential(dataHome: root, now: Self.now)
+    }
+
+    /// 1.x, connected through "OpenCode Go" as the official docs describe.
+    @Test
+    func readsA1xLoginMadeThroughOpenCodeGo() throws {
+        let root = try store(authJSON: #"{"opencode-go":{"type":"api","key":"sk-go-file"}}"#)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("sk-go-file"))
+    }
+
+    /// 1.x, connected through "OpenCode" with the same workspace key.
+    @Test
+    func readsA1xLoginMadeThroughOpenCode() throws {
+        let root = try store(table: [("anthropic", #"{"type":"oauth","access":"x"}"#, 1)],
+                             authJSON: #"{"opencode":{"type":"api","key":"sk-auth-file"}}"#)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("sk-auth-file"))
+    }
+
+    /// 2.0–2.3: the Go key in the credential table's own `opencode-go` row.
     @Test
     func readsTheGoKeyFromTheCredentialTable() throws {
-        let root = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appendingPathComponent("opencode.db")
-        try createCredentialDatabase(at: url, rows: [
+        let root = try store(table: [
             ("anthropic", #"{"type":"oauth","access":"must-not-be-read"}"#, 1),
             ("opencode-go", #"{"type":"key","key":"  sk-go-table  "}"#, 1),
         ])
-        #expect(OpenCodeGoUsageAPI.loadCredentialTableKey(databaseURL: url) == "sk-go-table")
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("sk-go-table"))
+    }
+
+    /// 2.4+: an OpenCode account sign-in, the only option new users get.
+    @Test
+    func readsAnOpenCodeAccountSignInWithItsWorkspace() throws {
+        let root = try store(table: [("opencode", accountLogin(), 1)])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("acc-fixture", workspace: "wrk_fixture"))
+    }
+
+    /// 2.x: "API key (service account)" under the OpenCode integration.
+    @Test
+    func readsAnOpenCodeServiceAccountKey() throws {
+        let root = try store(table: [("opencode", #"{"type":"key","key":"sk-service","metadata":{"orgID":"wrk_service"}}"#, 1)])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("sk-service", workspace: "wrk_service"))
+    }
+
+    /// Never renewed here: an expired (or nearly expired) sign-in is reported
+    /// as expired so nothing is sent until OpenCode renews it.
+    @Test
+    func reportsAnExpiredSignInWithoutUsingIt() throws {
+        let nowMs = Self.now.timeIntervalSince1970 * 1000
+        let expired = try store(table: [("opencode", accountLogin(expiresMs: nowMs - 1_000), 1)])
+        let margin = try store(table: [("opencode", accountLogin(expiresMs: nowMs + 30_000), 1)])
+        let forever = try store(table: [("opencode", accountLogin(expiresMs: 0), 1)])
+        defer { [expired, margin, forever].forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(lookup(expired) == .expired)
+        #expect(lookup(margin) == .expired)
+        #expect(lookup(forever) == key("acc-fixture", workspace: "wrk_fixture"))
     }
 
     @Test
-    func ignoresCredentialTablesWithoutAUsableGoRow() throws {
-        let root = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appendingPathComponent("opencode.db")
-        try createCredentialDatabase(at: url, rows: [
-            ("anthropic", #"{"type":"oauth","access":"x"}"#, 1),
-            ("opencode-go", "not json", 1),
-            ("opencode-go", #"{"type":"key","key":"   "}"#, 1),
-        ])
-        #expect(OpenCodeGoUsageAPI.loadCredentialTableKey(databaseURL: url) == nil)
+    func skipsAnAccountSignInWithoutAWorkspaceOrForAnotherConsole() throws {
+        let noWorkspace = try store(table: [("opencode", accountLogin(workspace: nil), 1)])
+        let custom = try store(table: [("opencode", accountLogin(server: "https://console.example.com"), 1)])
+        let retired = try store(table: [("opencode", accountLogin(server: "https://console.opencode.ai"), 1)])
+        defer { [noWorkspace, custom, retired].forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(lookup(noWorkspace) == .missing)
+        #expect(lookup(custom) == .missing)
+        #expect(lookup(retired) == key("acc-fixture", workspace: "wrk_fixture"))
     }
 
     @Test
-    func returnsNilInsteadOfThrowingForMissingOrForeignStores() throws {
-        let root = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        #expect(OpenCodeGoUsageAPI.loadCredentialTableKey(databaseURL: root.appendingPathComponent("absent.db")) == nil)
-
-        let foreign = root.appendingPathComponent("opencode.db")
-        try Data("not a sqlite database".utf8).write(to: foreign)
-        #expect(OpenCodeGoUsageAPI.loadCredentialTableKey(databaseURL: foreign) == nil)
-    }
-
-    /// Source precedence matches the CLI's adapter: the Go-specific table row
-    /// wins, and `auth.json` (the pre-2.x home for the same key) is the fallback.
-    @Test
-    func prefersTheCredentialTableAndFallsBackToAuthJSON() throws {
-        let root = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try createCredentialDatabase(at: root.appendingPathComponent("opencode.db"), rows: [
+    func prefersAGoKeyOverAnAccountSignInWhenBothAreStored() throws {
+        let root = try store(table: [
+            ("opencode", accountLogin(), 1),
             ("opencode-go", #"{"type":"key","key":"sk-go-table"}"#, 1),
         ])
-        try Data(#"{"opencode":{"type":"api","key":"sk-auth-file"}}"#.utf8)
-            .write(to: root.appendingPathComponent("auth.json"))
-        #expect(OpenCodeGoUsageAPI.loadAPIKey(dataHome: root) == "sk-go-table")
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("sk-go-table"))
+    }
 
-        // 1.x home: no Go row at all, only auth.json.
-        let legacy = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: legacy) }
-        try createCredentialDatabase(at: legacy.appendingPathComponent("opencode.db"), rows: [
-            ("anthropic", #"{"type":"oauth","access":"x"}"#, 1),
+    @Test
+    func usesAnOlderUsableLoginWhenTheSignInHasExpired() throws {
+        let nowMs = Self.now.timeIntervalSince1970 * 1000
+        let root = try store(table: [("opencode", accountLogin(expiresMs: nowMs - 1), 1)],
+                             authJSON: #"{"opencode-go":{"type":"api","key":"sk-go-file"}}"#)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("sk-go-file"))
+    }
+
+    @Test
+    func picksTheActiveAccountRow() throws {
+        let root = try store(table: [
+            ("opencode", accountLogin(access: "acc-active"), 1),
+            ("opencode", accountLogin(access: "acc-inactive"), 0),
         ])
-        try Data(#"{"opencode":{"type":"api","key":"sk-auth-file"}}"#.utf8)
-            .write(to: legacy.appendingPathComponent("auth.json"))
-        #expect(OpenCodeGoUsageAPI.loadAPIKey(dataHome: legacy) == "sk-auth-file")
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(lookup(root) == key("acc-active", workspace: "wrk_fixture"))
+    }
 
-        // Neither source: no login, no throw.
+    @Test
+    func ignoresStoresWithoutAUsableLogin() throws {
+        let unusable = try store(table: [
+            ("anthropic", #"{"type":"oauth","access":"x"}"#, 1),
+            ("opencode-go", "not json", 1),
+        ], authJSON: #"{"opencode":{"type":"api","key":"   "}}"#)
         let empty = try temporaryDirectory()
-        defer { try? FileManager.default.removeItem(at: empty) }
-        #expect(OpenCodeGoUsageAPI.loadAPIKey(dataHome: empty) == nil)
+        let foreign = try temporaryDirectory()
+        try Data("not a sqlite database".utf8).write(to: foreign.appendingPathComponent("opencode.db"))
+        defer { [unusable, empty, foreign].forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(lookup(unusable) == .missing)
+        #expect(lookup(empty) == .missing)
+        #expect(lookup(foreign) == .missing)
+    }
+
+    /// An unreadable database cannot hide a perfectly good 1.x login.
+    @Test
+    func fallsBackToAuthJSONWhenTheDatabaseIsUnreadable() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("not a sqlite database".utf8).write(to: root.appendingPathComponent("opencode.db"))
+        try Data(#"{"opencode":{"type":"api","key":"sk-auth-file"}}"#.utf8).write(to: root.appendingPathComponent("auth.json"))
+        #expect(lookup(root) == key("sk-auth-file"))
     }
 }

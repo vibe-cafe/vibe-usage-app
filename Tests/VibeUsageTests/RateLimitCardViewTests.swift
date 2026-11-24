@@ -146,6 +146,12 @@ struct RateLimitCardViewTests {
                                             liveFailure: .credentialsNotFound)
         #expect(RateLimitCardView.emptyStateText(for: notLoggedIn, isDetected: true) == "未找到 Codex 登录信息")
 
+        // OpenCode Go has no login of its own: the card says where to log in.
+        let goMissing = ProviderRateLimit(provider: .opencodeGo, status: .noData, liveFailure: .credentialsNotFound)
+        #expect(RateLimitCardView.emptyStateText(for: goMissing, isDetected: true) == "在 OpenCode 里登录后自动显示")
+        let goExpired = ProviderRateLimit(provider: .opencodeGo, status: .noData, liveFailure: .credentialsExpired)
+        #expect(RateLimitCardView.emptyStateText(for: goExpired, isDetected: true) == "打开 OpenCode 后自动显示")
+
         let answered = ProviderRateLimit(provider: .opencodeGo, status: .noData,
                                          emptyReason: .notEntitled, liveFailure: .credentialsNotFound)
         #expect(RateLimitCardView.emptyStateText(for: answered, isDetected: true) == "未订阅 OpenCode Go")
@@ -158,7 +164,7 @@ struct RateLimitCardViewTests {
         let all: [ProviderRateLimit.LiveFailure] = [
             .claudeBinaryNotFound, .claudeLaunchFailed, .claudeTimedOut, .claudeNoResponse,
             .claudeNoWindows, .claudeBlockedByPolicy, .credentialsNotFound, .credentialsRejected,
-            .endpointTimedOut,
+            .credentialsExpired, .endpointTimedOut,
             .endpointUnreachable, .endpointHTTPStatus(503), .endpointUnrecognized,
             .cliRuntimeMissing, .cliTimedOut, .cliFailed, .cliUnrecognizedOutput,
             .cliSchemaMismatch, .cliNoResult, .cliReportedFailure,
