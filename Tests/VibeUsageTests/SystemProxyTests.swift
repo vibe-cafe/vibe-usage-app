@@ -280,6 +280,80 @@ struct SystemProxyTests {
         // right after the system started counts too.
         #expect(LoginLaunch.isLoginItemLaunch(event: nil, loginItemEnabled: true, systemUptime: 60))
     }
+
+    /// A login launch goes ahead as soon as the proxy it would use answers,
+    /// instead of a fixed two minutes.
+    @Test
+    func loginLaunchGoesAheadOnceTheProxyAnswers() async {
+        let clock = FakeClock()
+        let routes = RouteScript([.direct, .unresolved, .http(host: "127.0.0.1", port: 7890)])
+        let up = await LoginLaunch.waitForProxy(
+            url: URL(string: "https://vibefriends.com/")!,
+            route: { _ in routes.next() },
+            accepts: { host, port in host == "127.0.0.1" && port == 7890 },
+            now: { clock.now },
+            sleep: { clock.advance($0) }
+        )
+        #expect(up)
+        #expect(clock.elapsed == 2 * LoginLaunch.proxyPollInterval)
+    }
+
+    /// A proxy that is set but not listening yet (the client still starting)
+    /// is polled until it answers; one that never answers runs out the limit.
+    @Test
+    func loginLaunchWaitsForAProxyThatIsNotListeningYet() async {
+        let clock = FakeClock()
+        let answered = Counter()
+        let up = await LoginLaunch.waitForProxy(
+            url: URL(string: "https://vibefriends.com/")!,
+            route: { _ in .socks(host: "127.0.0.1", port: 7891) },
+            accepts: { _, _ in answered.increment() >= 3 },
+            now: { clock.now },
+            sleep: { clock.advance($0) }
+        )
+        #expect(up)
+
+        let never = FakeClock()
+        let gaveUp = await LoginLaunch.waitForProxy(
+            url: URL(string: "https://vibefriends.com/")!,
+            route: { _ in .direct },
+            accepts: { _, _ in true },
+            now: { never.now },
+            sleep: { never.advance($0) }
+        )
+        #expect(!gaveUp)
+        #expect(never.elapsed >= LoginLaunch.proxyWaitLimit)
+        #expect(never.elapsed < LoginLaunch.proxyWaitLimit + LoginLaunch.proxyPollInterval + 1)
+    }
+
+    /// The real reachability check: a listening local port answers, a closed
+    /// one does not.
+    @Test
+    func acceptsTellsAListeningPortFromAClosedOne() async throws {
+        let proxy = try await StandInProxy.start()
+        defer { proxy.stop() }
+        #expect(await LoginLaunch.accepts("127.0.0.1", proxy.port))
+        #expect(!(await LoginLaunch.accepts("127.0.0.1", 1)))
+    }
+}
+
+private final class FakeClock: @unchecked Sendable {
+    private let start = Date(timeIntervalSince1970: 1_000_000)
+    private(set) var elapsed: TimeInterval = 0
+    var now: Date { start.addingTimeInterval(elapsed) }
+    func advance(_ seconds: TimeInterval) { elapsed += seconds }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func increment() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
+}
+
+private final class RouteScript: @unchecked Sendable {
+    private var routes: [SystemProxy.Route]
+    init(_ routes: [SystemProxy.Route]) { self.routes = routes }
+    func next() -> SystemProxy.Route { routes.count > 1 ? routes.removeFirst() : routes[0] }
 }
 
 /// Listens on 127.0.0.1, records the first bytes of each connection, answers

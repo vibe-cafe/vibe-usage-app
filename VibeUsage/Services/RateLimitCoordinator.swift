@@ -138,6 +138,8 @@ final class RateLimitCoordinator {
             upsert(carryingLiveFailure(cached))
         }
 
+        await appState.waitForLaunchNetwork()
+        guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
         do {
             let live = try await fetchCodexLive()
             guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
@@ -249,6 +251,8 @@ final class RateLimitCoordinator {
             upsertIfNewer(carryingLiveFailure(cached))
         }
 
+        await appState.waitForLaunchNetwork()
+        guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
         do {
             let live = try await fetchClaudeLive()
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
@@ -341,6 +345,8 @@ final class RateLimitCoordinator {
         TestDiagnosticLog.recordQuotaRefreshStarted([.opencodeGo])
         #endif
 
+        await appState.waitForLaunchNetwork()
+        guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencodeGo) else { return }
         do {
             let live = try await fetchOpenCodeGoLive()
             guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencodeGo) else { return }
@@ -459,6 +465,8 @@ final class RateLimitCoordinator {
         #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         TestDiagnosticLog.recordQuotaRefreshStarted(providers)
         #endif
+        await appState.waitForLaunchNetwork()
+        guard !Task.isCancelled else { return }
         do {
             let snapshots = try await fetchCLIQuotas(
                 providers,

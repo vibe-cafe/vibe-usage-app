@@ -382,10 +382,17 @@ final class AppState {
 
         reloadConfig()
 
+        if launchWaitsForProxy, launchProxyWait == nil {
+            let url = Self.launchProbeURL()
+            launchProxyWait = Task.detached(priority: .utility) {
+                let up = await LoginLaunch.waitForProxy(url: url)
+                debugLog("[launch] \(up ? "proxy is up" : "proxy wait ran out") — network reads go ahead")
+            }
+        }
         if isConfigured {
-            // Only the launch itself waits (`LoginLaunch`); linking later
-            // syncs at once.
-            startScheduler(firstSyncDelay: launchSyncDelay)
+            // Only a login launch waits, for the proxy (`LoginLaunch`);
+            // linking later syncs at once.
+            startScheduler()
         }
 
         // Subscription quotas are independent of Vibe Usage account linking.
@@ -902,14 +909,28 @@ final class AppState {
         coord.panelVisibilityChanged(visible: isRateLimitPanelVisible)
     }
 
-    /// Seconds the launch sync waits; set once for a login-item launch
-    /// (`LoginLaunch`) so the user's proxy client can start first.
-    var launchSyncDelay: TimeInterval = 0
+    /// Set by the app delegate for a login-item launch (`LoginLaunch`), before
+    /// `initialize()`: network reads then wait for the user's proxy.
+    var launchWaitsForProxy = false
+    /// That wait, started once by `initialize()`; nil for any other launch.
+    private var launchProxyWait: Task<Void, Never>?
+
+    /// Returns once a login launch's proxy is up or its wait ran out; at once
+    /// for any other launch. The first sync and every live quota read call it.
+    func waitForLaunchNetwork() async {
+        await launchProxyWait?.value
+    }
+
+    /// The URL whose route decides whether the user's proxy is up: the server
+    /// the CLI syncs to.
+    private static func launchProbeURL() -> URL {
+        URL(string: ConfigManager.load()?.apiUrl ?? "") ?? URL(string: "https://vibefriends.com/")!
+    }
     /// The launch sync, cancelled when the scheduler is started again
     /// (relink) or the configuration is reset.
     private var launchSyncTask: Task<Void, Never>?
 
-    private func startScheduler(firstSyncDelay: TimeInterval = 0) {
+    private func startScheduler() {
         syncScheduler = SyncScheduler(interval: Self.syncInterval) { [weak self] in
             await self?.triggerSync(.scheduled)
         }
@@ -918,14 +939,12 @@ final class AppState {
         // Fetch the dashboard immediately so the menu bar populates without waiting for
         // the CLI subprocess (which can take 5-30s, or hang if Node isn't installed).
         Task { await fetchUsageData() }
-        // Run the full sync (CLI upload + fetch) in parallel as the background pipeline.
-        let delay = firstSyncDelay
+        // Run the full sync (CLI upload + fetch) in parallel as the background
+        // pipeline; a login launch waits for the user's proxy first.
         launchSyncTask?.cancel()
         launchSyncTask = Task {
-            if delay > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                guard !Task.isCancelled else { return }
-            }
+            await waitForLaunchNetwork()
+            guard !Task.isCancelled else { return }
             await triggerSync(.launch)
         }
     }
