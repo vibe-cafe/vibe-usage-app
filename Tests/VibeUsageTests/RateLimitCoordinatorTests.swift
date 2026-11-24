@@ -1343,9 +1343,9 @@ struct RateLimitCoordinatorTests {
         #expect(QuotaProductRow.note(for: .cursor) == nil)
     }
 
-    /// The CLI answers an unused Antigravity from its record; once a window's
-    /// reset has passed it moves `dataAsOf` to that reset, which must replace
-    /// the percentage on screen, while the same record again changes nothing.
+    /// The CLI answers Antigravity from its own record: after a reset it shows
+    /// the window as 0% (unused) or leaves it out (used since), under the same
+    /// `dataAsOf`. The card always takes that answer as is.
     @Test @MainActor
     func antigravityRecoveredWindowReplacesTheStalePercentage() async {
         let (appState, defaults, suite) = selectedAppState([.antigravity])
@@ -1359,11 +1359,11 @@ struct RateLimitCoordinatorTests {
                 status: .ok, fetchedAt: Date(), dataAsOf: dataAsOf, source: .live)
         }
         // Used after the reset and the next read failed: the CLI leaves the 5h
-        // window out and dates the answer when the use was seen.
+        // window out under the same timestamp; the card must drop that row.
         let weekly = ProviderRateLimit(provider: .antigravity,
             meters: [RateLimitMeter(id: "gemini-weekly", label: "7d",
                 window: RateLimitWindow(utilization: 10, resetsAt: Date(timeIntervalSinceNow: 86_400), windowDuration: 604_800))],
-            status: .ok, fetchedAt: Date(), dataAsOf: Date(), source: .cache, liveFailure: .cliReportedFailure)
+            status: .ok, fetchedAt: Date(), dataAsOf: reset, source: .cache, liveFailure: .cliReportedFailure)
         var answers = [snapshot(40, resetsAt: reset, dataAsOf: readAt), snapshot(0, resetsAt: nil, dataAsOf: reset),
                        snapshot(0, resetsAt: nil, dataAsOf: reset), weekly]
         let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in [answers.removeFirst()] })
