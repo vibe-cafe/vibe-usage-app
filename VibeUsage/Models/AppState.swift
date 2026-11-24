@@ -940,8 +940,8 @@ final class AppState {
 
     /// The URL whose route decides whether the user's proxy is up: the server
     /// the CLI syncs to.
-    private static func launchProbeURL() -> URL {
-        URL(string: ConfigManager.load()?.apiUrl ?? "") ?? URL(string: "https://vibefriends.com/")!
+    nonisolated static func launchProbeURL(apiURL: String? = ConfigManager.load()?.apiUrl) -> URL {
+        UsageServer(apiURL).siteURL ?? URL(string: AppConfig.defaultApiUrl)!
     }
     /// The launch sync, cancelled when the scheduler is started again
     /// (relink) or the configuration is reset.

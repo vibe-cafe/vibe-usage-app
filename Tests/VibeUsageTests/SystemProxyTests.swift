@@ -216,6 +216,11 @@ struct SystemProxyTests {
         // The server keeps its real scheme and port: a PAC answers per URL.
         #expect(SystemProxy.configuredCLIURLs(home: home, apiURL: "http://usage.intra:8080").map(\.absoluteString)
             == ["https://registry.npmmirror.com/", "http://usage.intra:8080"])
+        // A config still holding the legacy production name resolves to vibefriends.com (already in cliHosts).
+        #expect(SystemProxy.configuredCLIURLs(home: home, apiURL: "https://vibecafe.ai").map(\.absoluteString)
+            == ["https://registry.npmmirror.com/"])
+        #expect(AppState.launchProbeURL(apiURL: "https://vibecafe.ai").absoluteString == "https://vibefriends.com")
+        #expect(AppState.launchProbeURL(apiURL: "http://usage.intra:8080").absoluteString == "http://usage.intra:8080")
     }
 
     // MARK: - Pinned sessions, against a stand-in proxy
