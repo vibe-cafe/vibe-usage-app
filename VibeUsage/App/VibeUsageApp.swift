@@ -18,9 +18,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appState = AppState()
     private let updaterViewModel = UpdaterViewModel()
     private var menuBarController: MenuBarController?
+    private var launchedAsLoginItem = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // The open-application event is current only while launching.
+        launchedAsLoginItem = LoginLaunch.isLoginItemLaunch()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ActivationCoordinator.shared.applyDockPreference()
+        if launchedAsLoginItem {
+            // The proxy client may not be up yet: network reads wait for it.
+            debugLog("[launch] login item launch — network reads wait for the proxy (at most \(Int(LoginLaunch.proxyWaitLimit))s)")
+            appState.launchWaitsForProxy = true
+        }
         appState.initialize()
         menuBarController = MenuBarController(appState: appState, updaterViewModel: updaterViewModel)
         #if DEBUG

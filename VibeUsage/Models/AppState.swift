@@ -382,7 +382,18 @@ final class AppState {
 
         reloadConfig()
 
+        // Nothing to send (not linked, no quota product selected): no reason
+        // to look at the proxy at all.
+        if launchWaitsForProxy, launchProxyWait == nil, isConfigured || !selectedQuotaProviders.isEmpty {
+            let urls = LoginLaunch.proxyProbeURLs(server: Self.launchProbeURL())
+            launchProxyWait = Task.detached(priority: .utility) {
+                let up = await LoginLaunch.waitForProxy(urls: urls)
+                debugLog("[launch] \(up ? "proxy is up" : "proxy wait ran out") — network reads go ahead")
+            }
+        }
         if isConfigured {
+            // Only a login launch waits, for the proxy (`LoginLaunch`);
+            // linking later syncs at once.
             startScheduler()
         }
 
@@ -466,6 +477,8 @@ final class AppState {
         }
         config = latest
         isConfigured = latest?.apiKey != nil
+        // A reset drops the launch sync that has not started yet.
+        if latest == nil { launchSyncTask?.cancel() }
     }
 
     /// Save the server selected by device authorization and start the scheduler.
@@ -486,6 +499,19 @@ final class AppState {
     func triggerSync(_ trigger: SyncRecord.Trigger = .manual) async {
         guard syncStatus != .syncing else { return }
         syncStatus = .syncing
+        // Any sync, manual ones too, waits for a login launch's proxy. A reset
+        // or relink in the meantime drops this one.
+        let account = config?.apiKey
+        await waitForLaunchNetwork()
+        guard config?.apiKey == account else {
+            syncStatus = .idle
+            // A relink meanwhile: sync the new account instead (its own launch
+            // sync may have returned while this one held the status).
+            if config?.apiKey != nil {
+                await triggerSync(trigger)
+            }
+            return
+        }
 
         let startedAt = Date()
         let (result, outcome) = await SyncEngine.shared.runSync()
@@ -900,6 +926,27 @@ final class AppState {
         coord.panelVisibilityChanged(visible: isRateLimitPanelVisible)
     }
 
+    /// Set by the app delegate for a login-item launch (`LoginLaunch`), before
+    /// `initialize()`: network reads then wait for the user's proxy.
+    var launchWaitsForProxy = false
+    /// That wait, started once by `initialize()`; nil for any other launch.
+    private var launchProxyWait: Task<Void, Never>?
+
+    /// Returns once a login launch's proxy is up or its wait ran out; at once
+    /// for any other launch. The first sync and every live quota read call it.
+    func waitForLaunchNetwork() async {
+        await launchProxyWait?.value
+    }
+
+    /// The URL whose route decides whether the user's proxy is up: the server
+    /// the CLI syncs to.
+    private static func launchProbeURL() -> URL {
+        URL(string: ConfigManager.load()?.apiUrl ?? "") ?? URL(string: "https://vibefriends.com/")!
+    }
+    /// The launch sync, cancelled when the scheduler is started again
+    /// (relink) or the configuration is reset.
+    private var launchSyncTask: Task<Void, Never>?
+
     private func startScheduler() {
         syncScheduler = SyncScheduler(interval: Self.syncInterval) { [weak self] in
             await self?.triggerSync(.scheduled)
@@ -909,8 +956,14 @@ final class AppState {
         // Fetch the dashboard immediately so the menu bar populates without waiting for
         // the CLI subprocess (which can take 5-30s, or hang if Node isn't installed).
         Task { await fetchUsageData() }
-        // Run the full sync (CLI upload + fetch) in parallel as the background pipeline.
-        Task { await triggerSync(.launch) }
+        // Run the full sync (CLI upload + fetch) in parallel as the background
+        // pipeline; a login launch waits for the user's proxy first.
+        launchSyncTask?.cancel()
+        launchSyncTask = Task {
+            await waitForLaunchNetwork()
+            guard !Task.isCancelled else { return }
+            await triggerSync(.launch)
+        }
     }
 
     // MARK: - Diagnostics

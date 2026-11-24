@@ -543,7 +543,11 @@ final class SettingsModel {
             zCodeAPIKeyDraft = ""
             isReplacingZCodeAPIKey = false
             if appState.isQuotaProviderSelected(.zCode) {
-                await appState.refreshRateLimit(for: .zCode)
+                // The card shows its own loading state; the controls are free
+                // again at once (after a login launch the read may wait up to
+                // two minutes for the proxy).
+                let appState = appState
+                Task { await appState.refreshRateLimit(for: .zCode) }
             }
         } catch {
             zCodeAPIKeyError = error.localizedDescription

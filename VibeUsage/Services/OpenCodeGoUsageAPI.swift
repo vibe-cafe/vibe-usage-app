@@ -198,7 +198,9 @@ enum OpenCodeGoUsageAPI {
                 try await Task.sleep(for: .milliseconds(500 * (1 << (attempt - 2))))
             }
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                // Pinned to the system route for this URL: a proxy that is
+                // down fails the request instead of letting it go direct.
+                let (data, response) = try await SystemProxy.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 if !isRetryable(status: status) || attempt == maxAttempts {
                     return (data, status)

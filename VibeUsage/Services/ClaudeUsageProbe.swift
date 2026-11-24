@@ -99,7 +99,14 @@ enum ClaudeUsageProbe {
         if ClaudeNonessentialTraffic.isForcedByPolicy() {
             throw ProbeError.nonessentialTrafficDisabled
         }
-        return try await fetch(candidates: discoverBinaries(), now: now, timeout: timeout)
+        // Claude Code reads proxy variables, never system settings: hand it
+        // the system proxy for Anthropic's hosts (`SystemProxy`), through a
+        // relay for this probe alone when that proxy is SOCKS.
+        let launch = await SystemProxy.claudeLaunch(base: ProcessInfo.processInfo.environment)
+        defer { launch.relay?.stop() }
+        return try await fetch(
+            candidates: discoverBinaries(), now: now, timeout: timeout, environment: launch.environment
+        )
     }
 
     /// Injectable entry point for lifecycle tests. `timeout` is an overall
@@ -108,7 +115,8 @@ enum ClaudeUsageProbe {
         candidates: [Binary],
         now: Date = Date(),
         timeout: TimeInterval,
-        attemptLog lastAttempts: AttemptLogStore = Self.lastAttempts
+        attemptLog lastAttempts: AttemptLogStore = Self.lastAttempts,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) async throws -> ProviderRateLimit {
         let recorder = AttemptRecorder()
         guard !candidates.isEmpty else {
@@ -136,7 +144,8 @@ enum ClaudeUsageProbe {
                     candidate: candidate,
                     timeout: min(candidateTimeout, remaining),
                     recorder: recorder,
-                    slot: slot
+                    slot: slot,
+                    environment: environment
                 )
                 guard let payload = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
                     throw ProbeError.noResponse
@@ -515,13 +524,14 @@ enum ClaudeUsageProbe {
         candidate: Binary,
         timeout: TimeInterval,
         recorder: AttemptRecorder,
-        slot: Int
+        slot: Int,
+        environment: [String: String]
     ) async throws -> Data {
         let process = Process()
         process.executableURL = candidate.url
         process.arguments = processArguments
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-        process.environment = childEnvironment()
+        process.environment = childEnvironment(base: environment)
 
         let stdin = makeRequestPipe()
         let stdout = Pipe()
