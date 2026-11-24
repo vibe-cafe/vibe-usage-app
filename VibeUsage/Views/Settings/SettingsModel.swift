@@ -133,7 +133,13 @@ enum SettingsQuotaStatus {
                 case .nonessentialTrafficDisabled: return (.warning, "组织策略不允许")
                 case .limitReached: return (.warning, "额度已用满")
                 case .noWindow: return (.warning, "暂无额度窗口")
-                case nil: return (.warning, needsLogin ? loginText : "暂无配额数据")
+                case nil:
+                    switch snapshot.liveFailure {
+                    case .egressRegionUnsupported: return (.warning, "出口受限，已暂停")
+                    case .egressUnconfirmed: return (.warning, "出口未确认")
+                    case .proxyNotDetected: return (.warning, "无代理，已暂停")
+                    default: return (.warning, needsLogin ? loginText : "暂无配额数据")
+                    }
                 }
             case .retryableError: return (.warning, needsLogin ? loginText : "读取失败")
             case .error: return (.error, "读取失败")

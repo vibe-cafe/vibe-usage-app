@@ -19,6 +19,10 @@ enum QuotaCLIBridge {
         var source: String
         var message: String?
         var emptyReason: String?
+        /// Why an `unsupported` read was deliberately not sent (the CLI's
+        /// egress check); `egressRegion` comes with `egressRegionUnsupported`.
+        var pauseReason: String?
+        var egressRegion: String?
     }
 
     struct Meter: Decodable, Equatable {
@@ -128,7 +132,12 @@ enum QuotaCLIBridge {
             var liveFailure: ProviderRateLimit.LiveFailure? = product.source == "cache" ? .cliReportedFailure : nil
             switch product.status {
             case "ok": status = product.meters.isEmpty ? .noData : .ok
-            case "no_data", "unsupported": status = .noData
+            case "no_data": status = .noData
+            case "unsupported":
+                status = .noData
+                if let pause = pauseFailure(reason: product.pauseReason, region: product.egressRegion) {
+                    liveFailure = pause
+                }
             case "missing_credentials":
                 status = .unauthorized
                 if provider == .antigravity { liveFailure = .credentialsNotFound }
@@ -165,6 +174,19 @@ enum QuotaCLIBridge {
                 source: source(product.source),
                 liveFailure: liveFailure
             )
+        }
+    }
+
+    /// The CLI's `pauseReason`, as the card's own fixed reason. Unknown codes
+    /// stay nil (the card then says nothing was read, as before).
+    static func pauseFailure(reason: String?, region: String?) -> ProviderRateLimit.LiveFailure? {
+        switch reason {
+        case "egressRegionUnsupported":
+            let code = region.flatMap { $0.count == 2 && $0.allSatisfy { $0.isASCII && $0.isUppercase } ? $0 : nil }
+            return .egressRegionUnsupported(code ?? "")
+        case "egressUnconfirmed": return .egressUnconfirmed
+        case "proxyNotDetected": return .proxyNotDetected
+        default: return nil
         }
     }
 

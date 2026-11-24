@@ -58,6 +58,9 @@ enum CodexUsageAPI {
     static func fetch(now: Date = Date()) async throws -> ProviderRateLimit {
         guard var auth = loadAuth() else { throw FetchError.notLoggedIn }
         var endpoint = usageURL()
+        // Direct to OpenAI: confirm the egress before the token goes out
+        // (`EgressCheck`; throws `EgressCheck.Paused`).
+        try await EgressCheck.checkCodex(url: endpoint)
 
         var (data, status) = try await send(
             url: endpoint,

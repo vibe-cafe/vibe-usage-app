@@ -222,6 +222,19 @@ struct RateLimitCardView: View {
         case .cliSchemaMismatch: return "配额 CLI 协议版本不兼容"
         case .cliNoResult: return "配额 CLI 没有返回这个产品"
         case .cliReportedFailure: return "实时读取失败"
+        case let .egressRegionUnsupported(region): return "网络出口\(egressPlace(region))，已暂停读取"
+        case .egressUnconfirmed: return "无法确认网络出口，已暂停读取"
+        case .proxyNotDetected: return "未检测到代理，已暂停读取"
+        }
+    }
+
+    /// Where an unsupported egress is, in the card's words.
+    nonisolated static func egressPlace(_ region: String) -> String {
+        switch region {
+        case "CN": return "在中国大陆"
+        case "HK": return "在香港"
+        case "MO": return "在澳门"
+        default: return "不在支持地区"
         }
     }
 }

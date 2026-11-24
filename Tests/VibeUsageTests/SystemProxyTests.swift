@@ -286,7 +286,7 @@ struct SystemProxyTests {
     @Test
     func loginLaunchGoesAheadOnceTheProxyAnswers() async {
         let clock = FakeClock()
-        let routes = RouteScript([.direct, .unresolved, .http(host: "127.0.0.1", port: 7890)])
+        let routes = RouteScript([.unresolved, .unresolved, .http(host: "127.0.0.1", port: 7890)])
         let up = await LoginLaunch.waitForProxy(
             urls: [URL(string: "https://vibefriends.com/")!],
             routes: { urls in urls.map { _ in routes.next() } },
@@ -316,14 +316,32 @@ struct SystemProxyTests {
         let never = FakeClock()
         let gaveUp = await LoginLaunch.waitForProxy(
             urls: [URL(string: "https://vibefriends.com/")!],
-            routes: { urls in urls.map { _ in .direct } },
-            accepts: { _, _ in true },
+            routes: { urls in urls.map { _ in .http(host: "127.0.0.1", port: 7890) } },
+            accepts: { _, _ in false },
             now: { never.now },
             sleep: { never.advance($0) }
         )
         #expect(!gaveUp)
         #expect(never.elapsed >= LoginLaunch.proxyWaitLimit)
         #expect(never.elapsed < LoginLaunch.proxyWaitLimit + LoginLaunch.proxyPollInterval + 1)
+    }
+
+    /// With no proxy configured at all a login launch no longer waits two
+    /// minutes: there is nothing to wait for, and the vendor reads that would
+    /// go out direct are gated by the egress check (`EgressCheck`).
+    @Test
+    func aLoginLaunchWithoutAProxyGoesAheadAtOnce() async {
+        let clock = FakeClock()
+        let probed = Counter()
+        let up = await LoginLaunch.waitForProxy(
+            urls: LoginLaunch.proxyProbeURLs(server: URL(string: "https://vibefriends.com/")!),
+            routes: { urls in urls.map { _ in .direct } },
+            accepts: { _, _ in probed.increment() > 0 },
+            now: { clock.now }, sleep: { clock.advance($0) }
+        )
+        #expect(up)
+        #expect(clock.elapsed == 0)
+        #expect(probed.increment() == 1)
     }
 
     /// A PAC that sends the sync server direct and only the vendors through

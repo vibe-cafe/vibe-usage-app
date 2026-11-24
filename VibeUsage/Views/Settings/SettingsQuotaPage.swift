@@ -46,6 +46,8 @@ struct SettingsQuotaPage: View {
                     .foregroundStyle(SettingsTheme.secondaryText)
                     .padding(.horizontal, 2)
                     .padding(.top, 8)
+                SettingsSectionTitle(title: "网络")
+                EgressSettingsCard()
             }
             .onAppear { reveal(navigation.focusedProvider, proxy: proxy) }
             .onChange(of: navigation.focusRequest) { _, _ in
@@ -97,6 +99,46 @@ struct SettingsQuotaPage: View {
 // MARK: - Header
 
 /// 工具 · 状态 · 面板卡片, aligned with the row columns.
+/// The egress check's two settings (`EgressCheck`): Codex, Claude and
+/// Antigravity read without a detected proxy only after an anonymous check of
+/// the egress country, unless the check is off; the manual switch pauses
+/// them whenever no proxy is detected.
+private struct EgressSettingsCard: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        SettingsCard {
+            SettingsRow(tall: true) {
+                SettingsRowLabel(
+                    title: "检测网络出口",
+                    caption: appState.egressCheckEnabled
+                        ? "未检测到代理时，先匿名确认出口地区再读取"
+                        : "关闭后，未检测到代理时直接读取"
+                )
+                Spacer(minLength: 8)
+                Toggle("检测网络出口", isOn: Binding(
+                    get: { appState.egressCheckEnabled },
+                    set: { appState.egressCheckEnabled = $0 }
+                ))
+                .toggleStyle(.settingsSwitch)
+            }
+            SettingsSeparator()
+            SettingsRow(tall: true) {
+                SettingsRowLabel(
+                    title: "这台电脑上网靠本机代理软件",
+                    caption: "未检测到代理时，暂停读取 Codex、Claude、Antigravity"
+                )
+                Spacer(minLength: 8)
+                Toggle("这台电脑上网靠本机代理软件", isOn: Binding(
+                    get: { appState.egressRequiresLocalProxy },
+                    set: { appState.egressRequiresLocalProxy = $0 }
+                ))
+                .toggleStyle(.settingsSwitch)
+            }
+        }
+    }
+}
+
 private struct QuotaTableHeader: View {
     var body: some View {
         HStack(spacing: 10) {
