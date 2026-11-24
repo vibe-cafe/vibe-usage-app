@@ -477,8 +477,9 @@ enum ClaudeUsageProbe {
     /// `--settings` is process-local, in-memory JSON
     /// (`ClaudeNonessentialTraffic.probeSettings`): the nonessential-traffic
     /// master switch cleared — with it on, Claude Code blocks the usage read
-    /// itself — and every separate off switch on, so whatever the user turned
-    /// off stays off and the probe adds only the usage read. Claude Code
+    /// itself — and every separate off switch on, so every feature with a
+    /// switch of its own stays off (what remains is listed on
+    /// `ClaudeNonessentialTraffic`). Claude Code
     /// re-applies `env` from the user's settings files after spawn; flag
     /// settings outrank them. The probe never writes those files, and never
     /// passes `--bare` (it skips the keychain the binary needs to fetch usage).

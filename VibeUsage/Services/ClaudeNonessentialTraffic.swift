@@ -15,8 +15,9 @@ import Foundation
 ///
 /// So the probe always runs with the master switch cleared and all those
 /// separate switches on (`quietEnvironment`, passed both in the environment
-/// and in an in-memory `--settings`, which outranks the user's files): what
-/// the user switched off stays off, and the probe adds only the usage read.
+/// and in an in-memory `--settings`, which outranks the user's files): every
+/// feature that has a switch of its own stays off. What the master switch
+/// alone would also have stopped is listed below.
 /// Measured, the probe then reaches `api.anthropic.com` only: the usage read
 /// plus the start-up configuration (`/api/claude_cli/bootstrap`), which no
 /// separate switch covers — same host and same account. For an account in an
