@@ -99,11 +99,6 @@ enum ClaudeUsageProbe {
         if ClaudeNonessentialTraffic.isForcedByPolicy() {
             throw ProbeError.nonessentialTrafficDisabled
         }
-        // Bedrock / Vertex / …: no plan quota to read, and starting Claude
-        // Code could send a model request with the user's cloud account.
-        if ClaudeThirdPartyProvider.isConfigured() {
-            throw ProbeError.limitsNotApplicable
-        }
         return try await fetch(candidates: discoverBinaries(), now: now, timeout: timeout)
     }
 

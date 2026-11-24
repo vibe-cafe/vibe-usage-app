@@ -18,8 +18,8 @@ import Foundation
 /// and in an in-memory `--settings`, which outranks the user's files): every
 /// feature that has a switch of its own stays off. What the master switch
 /// alone would also have stopped is listed below.
-/// Measured through a proxy, the probe then reaches `api.anthropic.com` only:
-/// the usage read plus the start-up configuration
+/// Measured through a proxy, only connections to `api.anthropic.com` showed
+/// up, matching in the code the usage read plus the start-up configuration
 /// (`/api/claude_cli/bootstrap`), which no separate switch covers. From the
 /// code, Claude Code may also: preconnect to its API address (`HEAD
 /// /api/hello`, skipped when an `HTTP(S)_PROXY` variable is set), refresh the
@@ -27,8 +27,8 @@ import Foundation
 /// Enterprise organization's remote settings and policy limits, refresh an
 /// eligible Pro / Max account's invite eligibility (personal plans included)
 /// when its cached copy is missing or a day old, and renew an expired login
-/// with its own login service. A third-party provider setup starts no probe
-/// (`ClaudeThirdPartyProvider`).
+/// with its own login service. Set up for Bedrock / Vertex, Claude Code may
+/// also check model availability with the user's cloud account at start.
 ///
 /// Cleared only for the probe's own process and never written anywhere. An
 /// organization's managed settings outrank `--settings`; when those force the
