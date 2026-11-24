@@ -505,6 +505,11 @@ final class AppState {
         await waitForLaunchNetwork()
         guard config?.apiKey == account else {
             syncStatus = .idle
+            // A relink meanwhile: sync the new account instead (its own launch
+            // sync may have returned while this one held the status).
+            if config?.apiKey != nil {
+                await triggerSync(trigger)
+            }
             return
         }
 
