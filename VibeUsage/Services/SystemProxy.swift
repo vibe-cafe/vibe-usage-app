@@ -50,11 +50,11 @@ enum SystemProxy {
     }
 
     /// The route the system would take for `url` under `settings`.
-    static func route(for url: URL, settings: [String: Any]?) -> Route {
+    static func route(for url: URL, settings: [String: Any]?, evaluatingPAC: Bool = true) -> Route {
         guard let settings else { return .unresolved }
         let list = CFNetworkCopyProxiesForURL(url as CFURL, settings as CFDictionary)
             .takeRetainedValue() as? [[String: Any]] ?? []
-        return route(from: list, for: url, evaluatingPAC: true)
+        return route(from: list, for: url, evaluatingPAC: evaluatingPAC)
     }
 
     static func route(from list: [[String: Any]], for url: URL, evaluatingPAC: Bool) -> Route {
@@ -145,6 +145,7 @@ enum SystemProxy {
     static let claudeHosts = ["api.anthropic.com", "platform.claude.com", "claude.ai"]
 
     static let proxyVariableNames = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+    static let allProxyNames = ["ALL_PROXY", "all_proxy"]
     static let loopback = ["localhost", "127.0.0.1", "::1"]
 
     /// Variables to add to a child's environment so it follows the system
@@ -158,11 +159,23 @@ enum SystemProxy {
         nodeSwitch: Bool
     ) -> [String: String] {
         var out: [String: String] = [:]
-        let own = proxyVariableNames.compactMap { base[$0]?.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+        let own = (proxyVariableNames + allProxyNames).compactMap { name -> (String, String)? in
+            guard let value = base[name]?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+            return (name, value)
+        }
         if !own.isEmpty {
+            // The user's own proxy wins over the system's (the CLI and Claude
+            // Code read these variables), as on Windows. A value without a
+            // scheme is written out as `http://…` for the child: Node with
+            // NODE_USE_ENV_PROXY refuses to start on it (measured).
+            var httpValue = false
+            for (name, value) in own {
+                if isSOCKS(value) { continue }
+                if !value.contains("://") { out[name] = "http://\(value)" }
+                if proxyVariableNames.contains(name) { httpValue = true }
+            }
             setNoProxy(&out, noProxy(base: base, adding: []), base: base)
-            if nodeSwitch, !own.contains(where: isSOCKS) { out["NODE_USE_ENV_PROXY"] = "1" }
+            if nodeSwitch, httpValue, !own.contains(where: { isSOCKS($0.1) }) { out["NODE_USE_ENV_PROXY"] = "1" }
             return out
         }
 
@@ -196,16 +209,28 @@ enum SystemProxy {
         return out
     }
 
-    private static func noProxy(base: [String: String], adding hosts: [String]) -> String {
-        var entries = (base["NO_PROXY"] ?? base["no_proxy"] ?? "")
-            .split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
-        for host in loopback + hosts where !entries.contains(host) { entries.append(host) }
+    /// Both spellings merged (Node prefers lowercase, other programs
+    /// uppercase) plus loopback and `hosts`. Nil when either already says
+    /// `*`, which must stay exactly `*` to bypass everything.
+    private static func noProxy(base: [String: String], adding hosts: [String]) -> String? {
+        var entries: [String] = []
+        for name in ["no_proxy", "NO_PROXY"] {
+            for entry in (base[name] ?? "").split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
+                where !entries.contains(entry) {
+                entries.append(entry)
+            }
+        }
+        if entries.contains("*") { return nil }
+        for host in loopback + hosts where !entries.contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }) {
+            entries.append(host)
+        }
         return entries.joined(separator: ",")
     }
 
     /// Node prefers a lowercase `no_proxy` when both exist, so it is kept in
     /// step whenever the user had one.
-    private static func setNoProxy(_ out: inout [String: String], _ value: String, base: [String: String]) {
+    private static func setNoProxy(_ out: inout [String: String], _ value: String?, base: [String: String]) {
+        guard let value else { return }
         out["NO_PROXY"] = value
         if base["no_proxy"] != nil { out["no_proxy"] = value }
     }
@@ -237,7 +262,15 @@ enum SystemProxy {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let settings = currentSettings()
-                continuation.resume(returning: urls.map { route(for: $0, settings: settings) })
+                // Once a PAC cannot be evaluated, the rest of the batch is
+                // unresolved too instead of waiting `pacTimeout` per URL.
+                var pacFailed = false
+                let routes = urls.map { url -> Route in
+                    let route = route(for: url, settings: settings, evaluatingPAC: !pacFailed)
+                    if route == .unresolved { pacFailed = true }
+                    return route
+                }
+                continuation.resume(returning: routes)
             }
         }
     }
@@ -251,8 +284,9 @@ enum SystemProxy {
     /// cannot route (a SOCKS proxy under Node), instead of going direct.
     static func cliEnvironment(base: [String: String]) async -> [String: String] {
         var env = base
+        let hosts = hasOwnProxy(base) ? [] : cliHosts + configuredCLIHosts(base: base)
         let variables = proxyVariables(
-            routes: await routes(forHosts: cliHosts), base: base, allowSOCKS: true, nodeSwitch: true
+            routes: await routes(forHosts: hosts), base: base, allowSOCKS: true, nodeSwitch: true
         )
         env.merge(variables) { _, proxy in proxy }
         return env
@@ -261,11 +295,43 @@ enum SystemProxy {
     /// For Claude Code: HTTP only (it does not support SOCKS).
     static func claudeEnvironment(base: [String: String]) async -> [String: String] {
         var env = base
+        let hosts = hasOwnProxy(base) ? [] : claudeHosts
         let variables = proxyVariables(
-            routes: await routes(forHosts: claudeHosts), base: base, allowSOCKS: false, nodeSwitch: false
+            routes: await routes(forHosts: hosts), base: base, allowSOCKS: false, nodeSwitch: false
         )
         env.merge(variables) { _, proxy in proxy }
         return env
+    }
+
+    static func hasOwnProxy(_ base: [String: String]) -> Bool {
+        (proxyVariableNames + allProxyNames).contains {
+            !(base[$0] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
+
+    /// The hosts the CLI reaches that the user chose: the npm registry the
+    /// launcher asks (`~/.npmrc`'s `@vibe-cafe:registry`, else `registry`, as
+    /// `cli-bootstrap.mjs` reads it) and the configured Vibe Usage server. A
+    /// PAC may send a mirror or an intranet server direct.
+    static func configuredCLIHosts(
+        base: [String: String],
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        apiURL: String? = ConfigManager.load()?.apiUrl
+    ) -> [String] {
+        var hosts: [String] = []
+        if let text = try? String(contentsOf: home.appendingPathComponent(".npmrc"), encoding: .utf8) {
+            var scoped: String?
+            var plain: String?
+            for line in text.split(whereSeparator: \.isNewline) {
+                let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+                guard parts.count == 2 else { continue }
+                if parts[0] == "@vibe-cafe:registry" { scoped = parts[1] }
+                if parts[0] == "registry" { plain = parts[1] }
+            }
+            if let value = scoped ?? plain, let host = URL(string: value)?.host { hosts.append(host) }
+        }
+        if let apiURL, let host = URL(string: apiURL)?.host { hosts.append(host) }
+        return hosts.filter { !cliHosts.contains($0) }
     }
 
     // MARK: - Sessions for the app's own vendor requests

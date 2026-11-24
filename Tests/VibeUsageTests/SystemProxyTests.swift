@@ -150,6 +150,60 @@ struct SystemProxyTests {
         ])
     }
 
+    /// A proxy variable without a scheme makes Node (with the switch) refuse
+    /// to start, so the child gets it as `http://…`.
+    @Test
+    func theUsersSchemeLessProxyIsWrittenOutWithAScheme() {
+        let env = variables([], base: ["HTTPS_PROXY": "127.0.0.1:7890"])
+        #expect(env["HTTPS_PROXY"] == "http://127.0.0.1:7890")
+        #expect(env["NODE_USE_ENV_PROXY"] == "1")
+    }
+
+    /// An explicit ALL_PROXY is the user's choice: the system proxy is not
+    /// written over it (the CLI reads ALL_PROXY when nothing else is set).
+    @Test
+    func theUsersOwnAllProxyWinsOverTheSystem() {
+        let env = variables(
+            [("cursor.com", .direct), ("api.kimi.com", .http(host: "127.0.0.1", port: 7890))],
+            base: ["ALL_PROXY": "socks5://127.0.0.1:7891"]
+        )
+        #expect(env["HTTPS_PROXY"] == nil)
+        #expect(env["HTTP_PROXY"] == nil)
+        #expect(env["NODE_USE_ENV_PROXY"] == nil)
+        #expect(env["NO_PROXY"] == "localhost,127.0.0.1,::1")
+        #expect(SystemProxy.hasOwnProxy(["all_proxy": "x"]))
+        #expect(!SystemProxy.hasOwnProxy(["NO_PROXY": "x"]))
+    }
+
+    /// Both bypass spellings are merged, and a `*` stays exactly `*`.
+    @Test
+    func noProxySpellingsMergeAndStarIsLeftAlone() {
+        let route: [(String, SystemProxy.Route)] = [("a", .http(host: "127.0.0.1", port: 7890))]
+        let merged = variables(route, base: ["NO_PROXY": "upper.example", "no_proxy": "lower.example"])
+        #expect(merged["NO_PROXY"] == "lower.example,upper.example,localhost,127.0.0.1,::1")
+        #expect(merged["no_proxy"] == merged["NO_PROXY"])
+        let star = variables(route, base: ["NO_PROXY": "*"])
+        #expect(star["NO_PROXY"] == nil)
+        #expect(star["HTTPS_PROXY"] == "http://127.0.0.1:7890")
+    }
+
+    /// A mirror in ~/.npmrc and a custom server are resolved too, so a PAC
+    /// that sends them direct puts them in NO_PROXY.
+    @Test
+    func configuredRegistryAndServerHostsAreResolved() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("vu-npmrc-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data("registry=https://registry.npmmirror.com/\n//registry.npmmirror.com/:_authToken=secret\n".utf8)
+            .write(to: home.appendingPathComponent(".npmrc"))
+        #expect(SystemProxy.configuredCLIHosts(base: [:], home: home, apiURL: "https://usage.corp.example")
+            == ["registry.npmmirror.com", "usage.corp.example"])
+        try Data("registry=https://a.example/\n@vibe-cafe:registry=https://b.example/\n".utf8)
+            .write(to: home.appendingPathComponent(".npmrc"))
+        #expect(SystemProxy.configuredCLIHosts(base: [:], home: home, apiURL: "https://vibefriends.com")
+            == ["b.example"])
+    }
+
     // MARK: - Pinned sessions, against a stand-in proxy
 
     @Test
@@ -229,11 +283,7 @@ final class StandInProxy: @unchecked Sendable {
         let proxy = StandInProxy(listener: try NWListener(using: parameters))
         proxy.listener.newConnectionHandler = { [proxy] connection in
             connection.start(queue: proxy.queue)
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
-                if let data { proxy.lock.withLock { proxy.chunks.append(data) } }
-                let reply = Data("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n".utf8)
-                connection.send(content: reply, completion: .contentProcessed { _ in connection.cancel() })
-            }
+            proxy.read(connection, buffer: Data())
         }
         let port: Int = try await withCheckedThrowingContinuation { continuation in
             let once = Once()
@@ -250,6 +300,22 @@ final class StandInProxy: @unchecked Sendable {
         }
         proxy.port = port
         return proxy
+    }
+
+    /// Reads until a full request line (HTTP) or the SOCKS greeting has
+    /// arrived, records it, answers 502 and closes.
+    private func read(_ connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [self] data, _, isComplete, error in
+            let buffer = buffer + (data ?? Data())
+            let socks = buffer.first == 0x05
+            if !socks, !buffer.contains(Data("\r\n".utf8)), !isComplete, error == nil {
+                read(connection, buffer: buffer)
+                return
+            }
+            lock.withLock { chunks.append(buffer) }
+            let reply = Data("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n".utf8)
+            connection.send(content: reply, completion: .contentProcessed { _ in connection.cancel() })
+        }
     }
 
     func firstChunks() -> [Data] { lock.withLock { chunks } }

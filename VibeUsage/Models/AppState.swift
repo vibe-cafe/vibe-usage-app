@@ -383,7 +383,9 @@ final class AppState {
         reloadConfig()
 
         if isConfigured {
-            startScheduler()
+            // Only the launch itself waits (`LoginLaunch`); linking later
+            // syncs at once.
+            startScheduler(firstSyncDelay: launchSyncDelay)
         }
 
         // Subscription quotas are independent of Vibe Usage account linking.
@@ -904,7 +906,7 @@ final class AppState {
     /// (`LoginLaunch`) so the user's proxy client can start first.
     var launchSyncDelay: TimeInterval = 0
 
-    private func startScheduler() {
+    private func startScheduler(firstSyncDelay: TimeInterval = 0) {
         syncScheduler = SyncScheduler(interval: Self.syncInterval) { [weak self] in
             await self?.triggerSync(.scheduled)
         }
@@ -914,8 +916,7 @@ final class AppState {
         // the CLI subprocess (which can take 5-30s, or hang if Node isn't installed).
         Task { await fetchUsageData() }
         // Run the full sync (CLI upload + fetch) in parallel as the background pipeline.
-        let delay = launchSyncDelay
-        launchSyncDelay = 0
+        let delay = firstSyncDelay
         Task {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
             await triggerSync(.launch)
