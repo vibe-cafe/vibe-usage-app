@@ -157,18 +157,19 @@ struct PopoverView: View {
         pendingUserCode = nil
         defer { deviceFlowState = .idle }
 
-        let baseURL = AppConfig.defaultApiUrl
+        appState.reloadConfig()
+        let server = appState.usageServer
         let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
         let device: DeviceCodeResponse
         do {
-            device = try await requestDeviceCode(baseURL: baseURL, clientName: "\(AppConfig.displayName).app", hostname: hostname)
+            device = try await requestDeviceCode(server: server, clientName: "\(AppConfig.displayName).app", hostname: hostname)
         } catch {
             setupError = "无法连接服务端：\(error.localizedDescription)"
             return
         }
 
         pendingUserCode = device.userCode
-        if let url = URL(string: device.verificationUriComplete) {
+        if let url = server.verificationURL(device.verificationUriComplete) {
             NSWorkspace.shared.open(url)
         }
 
@@ -181,13 +182,13 @@ struct PopoverView: View {
             if Task.isCancelled { return }
             let res: DevicePollResponse
             do {
-                res = try await pollDeviceCode(baseURL: baseURL, deviceCode: device.deviceCode)
+                res = try await pollDeviceCode(server: server, deviceCode: device.deviceCode)
             } catch {
                 continue
             }
             if let apiKey = res.apiKey {
                 pendingUserCode = nil
-                appState.configure(apiKey: apiKey, apiUrl: res.apiUrl ?? baseURL)
+                appState.configure(apiKey: apiKey, server: res.linkedServer(fallingBackTo: server))
                 await appState.fetchUsageData()
                 return
             }
@@ -345,8 +346,8 @@ struct PopoverView: View {
 
             Spacer()
 
-            headerLinkButton(title: "详情", url: "\(AppConfig.defaultApiUrl)/usage")
-            headerLinkButton(title: "排行榜", url: "\(AppConfig.defaultApiUrl)/rank")
+            headerLinkButton(title: "详情", url: appState.usageServer.url(for: "usage"))
+            headerLinkButton(title: "排行榜", url: appState.usageServer.url(for: "rank"))
 
             // Settings — NSWindow directly (SwiftUI scenes don't work in LSUIElement MenuBarExtra)
             Button {
@@ -365,10 +366,10 @@ struct PopoverView: View {
         }
     }
 
-    private func headerLinkButton(title: String, url: String) -> some View {
+    private func headerLinkButton(title: String, url: URL?) -> some View {
         Button {
-            if let u = URL(string: url) {
-                NSWorkspace.shared.open(u)
+            if let url {
+                NSWorkspace.shared.open(url)
             }
         } label: {
             HStack(spacing: 3) {

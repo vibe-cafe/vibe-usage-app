@@ -59,7 +59,7 @@ struct SettingsAboutPage: View {
                     GitHubMark().fill(style: FillStyle(eoFill: true))
                 }
                 SettingsSeparator()
-                SettingsLinkRow(title: "VibeCafé", url: SettingsLinks.vibeCafe) {
+                SettingsLinkRow(title: "VibeCafé", url: model.appState.usageServer.siteURL) {
                     Image(systemName: "globe")
                         .resizable()
                         .scaledToFit()
@@ -150,10 +150,8 @@ struct SettingsAboutPage: View {
     }
 }
 
-/// Where the 关于 page's links go (maintainer 2026-11-20): the VibeCafé site
-/// and the two public repositories, the CLI and this app.
+/// Public repositories on the 关于 page. The VibeCafé site follows the configured server.
 enum SettingsLinks {
-    static let vibeCafe = URL(string: "https://vibecafe.ai")!
     static let cliRepository = URL(string: "https://github.com/vibe-cafe/vibe-usage")!
     static let appRepository = URL(string: "https://github.com/vibe-cafe/vibe-usage-app")!
 }
@@ -163,13 +161,13 @@ enum SettingsLinks {
 /// under the pointer; no framed button.
 struct SettingsLinkRow<Mark: View>: View {
     let title: String
-    let url: URL
+    let url: URL?
     @ViewBuilder var mark: Mark
     @State private var isHovered = false
 
     var body: some View {
         Button {
-            NSWorkspace.shared.open(url)
+            if let url { NSWorkspace.shared.open(url) }
         } label: {
             HStack(spacing: 10) {
                 mark
@@ -195,7 +193,8 @@ struct SettingsLinkRow<Mark: View>: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help(url.absoluteString)
+        .disabled(url == nil)
+        .help(url?.absoluteString ?? "")
         .accessibilityAddTraits(.isLink)
         .accessibilityHint("在浏览器中打开")
     }

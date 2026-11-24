@@ -15,6 +15,10 @@ enum ConfigManager {
     private static let configFile = configDir.appendingPathComponent(AppConfig.configFileName)
 
     static func load() -> VibeUsageConfig? {
+        load(from: configFile)
+    }
+
+    static func load(from configFile: URL) -> VibeUsageConfig? {
         guard FileManager.default.fileExists(atPath: configFile.path) else {
             return nil
         }
