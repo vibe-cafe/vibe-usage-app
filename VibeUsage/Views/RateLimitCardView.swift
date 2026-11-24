@@ -146,6 +146,8 @@ struct RateLimitCardView: View {
             return "未订阅 \(snapshot.provider.displayName)"
         case .sessionWithoutPlanLimits:
             return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）"
+        case .nonessentialTrafficDisabled:
+            return "已关闭 Claude Code 非必要流量 · 按你的设置不读取"
         case nil:
             // The live read's own fixed reason (e.g. no Claude Code binary)
             // is more specific than local detection, which only saw a folder.

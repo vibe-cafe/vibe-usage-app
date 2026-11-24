@@ -238,6 +238,12 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// genuinely do not apply. Also a definitive answer — retrying cannot
         /// produce windows, so the card explains instead of offering one.
         case sessionWithoutPlanLimits
+        /// The user switched off Claude Code's nonessential traffic, so the
+        /// app did not start Claude Code (`ClaudeNonessentialTraffic`). Not a
+        /// failure and not something a retry can change: the card names the
+        /// user's setting and shows no older numbers. App-local; the shared
+        /// pause vocabulary (#190) calls this `vendorTrafficDisabled`.
+        case nonessentialTrafficDisabled
     }
 
     var emptyReason: EmptyReason?
