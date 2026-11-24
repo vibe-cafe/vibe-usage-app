@@ -144,6 +144,7 @@ struct SystemProxyTests {
         )
         #expect(env == [
             "HTTPS_PROXY": "http://corp:8080",
+            "https_proxy": "http://corp:8080",
             "NO_PROXY": "corp.example,localhost,127.0.0.1,::1,[::1]",
             "no_proxy": "corp.example,localhost,127.0.0.1,::1,[::1]",
             "NODE_USE_ENV_PROXY": "1",
@@ -204,6 +205,9 @@ struct SystemProxyTests {
         // Credentials for that host: the launcher falls back to the official registry.
         #expect(SystemProxy.launcherRegistry(npmrc: "registry=https://npm.corp/\n//npm.corp/:_authToken=x\n") == nil)
         #expect(SystemProxy.launcherRegistry(npmrc: "registry=http://plain.example/\n") == nil)
+        #expect(SystemProxy.launcherRegistry(npmrc: "registry=https://registry.npmmirror.com # 国内镜像\n")?.host
+            == "registry.npmmirror.com")
+        #expect(SystemProxy.launcherRegistry(npmrc: "registry=https://user:pass@npm.corp/\n") == nil)
 
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("vu-npmrc-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)

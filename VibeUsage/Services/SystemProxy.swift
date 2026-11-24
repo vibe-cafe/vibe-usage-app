@@ -182,8 +182,15 @@ enum SystemProxy {
             let https = firstValue(base, ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"])
             let http = firstValue(base, ["http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"])
             if ![https, http].contains(where: { $0.map(isSOCKS) ?? false }) {
-                if let https { out["HTTPS_PROXY"] = withScheme(https) }
-                if let http { out["HTTP_PROXY"] = withScheme(http) }
+                // Lowercase spellings too: Node prefers them when both exist.
+                if let https {
+                    out["HTTPS_PROXY"] = withScheme(https)
+                    if base["https_proxy"] != nil { out["https_proxy"] = withScheme(https) }
+                }
+                if let http {
+                    out["HTTP_PROXY"] = withScheme(http)
+                    if base["http_proxy"] != nil { out["http_proxy"] = withScheme(http) }
+                }
                 if nodeSwitch { out["NODE_USE_ENV_PROXY"] = "1" }
             }
             setNoProxy(&out, noProxy(base: base, adding: []), base: base)
@@ -358,7 +365,12 @@ enum SystemProxy {
         for line in npmrc.split(whereSeparator: \.isNewline) {
             let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
             guard parts.count == 2 else { continue }
-            let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            // An unquoted value ends at a `#` or `;` comment, as the launcher reads it.
+            var raw = parts[1]
+            if !raw.hasPrefix("\""), !raw.hasPrefix("'"), let cut = raw.firstIndex(where: { $0 == "#" || $0 == ";" }) {
+                raw = String(raw[..<cut]).trimmingCharacters(in: .whitespaces)
+            }
+            let value = raw.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             if parts[0] == "@vibe-cafe:registry" { scoped = value }
             else if parts[0] == "registry" { plain = value }
             else if parts[0].hasPrefix("//"), parts[0].contains(":") {
@@ -368,6 +380,7 @@ enum SystemProxy {
             }
         }
         guard let value = scoped ?? plain, let url = URL(string: value), url.scheme == "https",
+              url.user == nil, url.password == nil,
               let host = url.host, !credentialHosts.contains(host.lowercased())
         else { return nil }
         return url
