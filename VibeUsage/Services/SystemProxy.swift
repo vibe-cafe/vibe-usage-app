@@ -26,9 +26,9 @@ import Foundation
 ///   proxy that is down makes them fail instead of connecting directly.
 ///
 /// Settings are read again for every call; nothing is cached across calls.
-/// A PAC that cannot be evaluated is `.unresolved`: callers then keep their
-/// previous behavior (this is the plain "follow the proxy" step; pausing
-/// requests that cannot be routed is separate work).
+/// A PAC that cannot be evaluated is `.unresolved` and fails closed: requests
+/// and children are pointed at a closed local port, never sent direct
+/// (pausing with an explanation is separate work).
 enum SystemProxy {
 
     enum Route: Equatable, Sendable {
@@ -42,6 +42,17 @@ enum SystemProxy {
     }
 
     static let pacTimeout: TimeInterval = 3
+    /// One resolution batch (all the hosts a child reaches) gets at most this
+    /// long for PAC answers; what is left after it is unresolved.
+    static let batchPACBudget: TimeInterval = 6
+
+    /// Where a request goes when its route cannot be resolved (a PAC that is
+    /// set but cannot be fetched or evaluated, typically while the proxy
+    /// client is restarting): a closed local port, so the request fails
+    /// instead of going direct. Never a real proxy.
+    static let failClosedHost = "127.0.0.1"
+    static let failClosedPort = 1
+    static var failClosedURL: String { "http://\(failClosedHost):\(failClosedPort)" }
 
     // MARK: - Resolution
 
@@ -159,23 +170,23 @@ enum SystemProxy {
         nodeSwitch: Bool
     ) -> [String: String] {
         var out: [String: String] = [:]
-        let own = (proxyVariableNames + allProxyNames).compactMap { name -> (String, String)? in
-            guard let value = base[name]?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
-            return (name, value)
-        }
-        if !own.isEmpty {
-            // The user's own proxy wins over the system's (the CLI and Claude
-            // Code read these variables), as on Windows. A value without a
-            // scheme is written out as `http://…` for the child: Node with
-            // NODE_USE_ENV_PROXY refuses to start on it (measured).
-            var httpValue = false
-            for (name, value) in own {
-                if isSOCKS(value) { continue }
-                if !value.contains("://") { out[name] = "http://\(value)" }
-                if proxyVariableNames.contains(name) { httpValue = true }
+        if hasOwnProxy(base) {
+            // The user's own proxy wins over the system's. Pick the proxy each
+            // scheme really uses (the CLI's order: the scheme's own variable,
+            // then ALL_PROXY, and for https an HTTP_PROXY last) and write those
+            // two out explicitly, so Node's startup switch and older CLIs see
+            // what the CLI itself would choose; a value without a scheme is
+            // written as `http://…` (Node with the switch refuses to start on
+            // it). A SOCKS choice gets no switch: the CLI refuses vendor
+            // requests it cannot route.
+            let https = firstValue(base, ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"])
+            let http = firstValue(base, ["http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"])
+            if ![https, http].contains(where: { $0.map(isSOCKS) ?? false }) {
+                if let https { out["HTTPS_PROXY"] = withScheme(https) }
+                if let http { out["HTTP_PROXY"] = withScheme(http) }
+                if nodeSwitch { out["NODE_USE_ENV_PROXY"] = "1" }
             }
             setNoProxy(&out, noProxy(base: base, adding: []), base: base)
-            if nodeSwitch, httpValue, !own.contains(where: { isSOCKS($0.1) }) { out["NODE_USE_ENV_PROXY"] = "1" }
             return out
         }
 
@@ -195,6 +206,11 @@ enum SystemProxy {
         }) {
             proxyURL = socks
             out["ALL_PROXY"] = socks
+        } else if routes.contains(where: { $0.route == .unresolved }) {
+            // A PAC that cannot be evaluated right now: a closed local port,
+            // so the child fails instead of connecting directly.
+            proxyURL = failClosedURL
+            http = true
         } else {
             return [:]
         }
@@ -209,19 +225,16 @@ enum SystemProxy {
         return out
     }
 
-    /// Both spellings merged (Node prefers lowercase, other programs
-    /// uppercase) plus loopback and `hosts`. Nil when either already says
-    /// `*`, which must stay exactly `*` to bypass everything.
+    /// The bypass list Node would use (lowercase `no_proxy` first; an empty
+    /// value counts as unset) plus loopback (`[::1]` too, as Node's fetch
+    /// matches the bracketed host) and `hosts`. Nil when it says `*`, which
+    /// must stay exactly `*`.
     private static func noProxy(base: [String: String], adding hosts: [String]) -> String? {
-        var entries: [String] = []
-        for name in ["no_proxy", "NO_PROXY"] {
-            for entry in (base[name] ?? "").split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
-                where !entries.contains(entry) {
-                entries.append(entry)
-            }
-        }
+        var entries = (firstValue(base, ["no_proxy", "NO_PROXY"]) ?? "")
+            .split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
         if entries.contains("*") { return nil }
-        for host in loopback + hosts where !entries.contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }) {
+        for host in loopback + ["[::1]"] + hosts
+            where !entries.contains(where: { $0.caseInsensitiveCompare(host) == .orderedSame }) {
             entries.append(host)
         }
         return entries.joined(separator: ",")
@@ -233,6 +246,14 @@ enum SystemProxy {
         guard let value else { return }
         out["NO_PROXY"] = value
         if base["no_proxy"] != nil { out["no_proxy"] = value }
+    }
+
+    private static func firstValue(_ base: [String: String], _ names: [String]) -> String? {
+        names.lazy.compactMap { base[$0]?.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
+    }
+
+    private static func withScheme(_ value: String) -> String {
+        value.contains("://") ? value : "http://\(value)"
     }
 
     private static func isSOCKS(_ value: String) -> Bool {
@@ -262,13 +283,11 @@ enum SystemProxy {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let settings = currentSettings()
-                // Once a PAC cannot be evaluated, the rest of the batch is
-                // unresolved too instead of waiting `pacTimeout` per URL.
-                var pacFailed = false
+                // Each URL keeps its own answer; once the batch budget is
+                // spent, the rest are unresolved (and fail closed).
+                let deadline = Date().addingTimeInterval(batchPACBudget)
                 let routes = urls.map { url -> Route in
-                    let route = route(for: url, settings: settings, evaluatingPAC: !pacFailed)
-                    if route == .unresolved { pacFailed = true }
-                    return route
+                    route(for: url, settings: settings, evaluatingPAC: Date() < deadline)
                 }
                 continuation.resume(returning: routes)
             }
@@ -284,10 +303,14 @@ enum SystemProxy {
     /// cannot route (a SOCKS proxy under Node), instead of going direct.
     static func cliEnvironment(base: [String: String]) async -> [String: String] {
         var env = base
-        let hosts = hasOwnProxy(base) ? [] : cliHosts + configuredCLIHosts(base: base)
-        let variables = proxyVariables(
-            routes: await routes(forHosts: hosts), base: base, allowSOCKS: true, nodeSwitch: true
-        )
+        var routes: [(host: String, route: Route)] = []
+        if !hasOwnProxy(base) {
+            // The CLI's fixed hosts, plus the user's own registry and server
+            // resolved by their real URL (scheme and port matter to a PAC).
+            let urls = cliHosts.map { URL(string: "https://\($0)/")! } + configuredCLIURLs()
+            routes = zip(urls, await self.routes(for: urls)).map { (host: $0.0.host ?? "", route: $0.1) }
+        }
+        let variables = proxyVariables(routes: routes, base: base, allowSOCKS: true, nodeSwitch: true)
         env.merge(variables) { _, proxy in proxy }
         return env
     }
@@ -309,44 +332,66 @@ enum SystemProxy {
         }
     }
 
-    /// The hosts the CLI reaches that the user chose: the npm registry the
-    /// launcher asks (`~/.npmrc`'s `@vibe-cafe:registry`, else `registry`, as
-    /// `cli-bootstrap.mjs` reads it) and the configured Vibe Usage server. A
-    /// PAC may send a mirror or an intranet server direct.
-    static func configuredCLIHosts(
-        base: [String: String],
+    /// The URLs the CLI reaches that the user chose: the npm registry the
+    /// launcher asks and the configured Vibe Usage server. A PAC may send a
+    /// mirror or an intranet server direct.
+    static func configuredCLIURLs(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         apiURL: String? = ConfigManager.load()?.apiUrl
-    ) -> [String] {
-        var hosts: [String] = []
-        if let text = try? String(contentsOf: home.appendingPathComponent(".npmrc"), encoding: .utf8) {
-            var scoped: String?
-            var plain: String?
-            for line in text.split(whereSeparator: \.isNewline) {
-                let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-                guard parts.count == 2 else { continue }
-                if parts[0] == "@vibe-cafe:registry" { scoped = parts[1] }
-                if parts[0] == "registry" { plain = parts[1] }
+    ) -> [URL] {
+        var urls: [URL] = []
+        let npmrc = try? String(contentsOf: home.appendingPathComponent(".npmrc"), encoding: .utf8)
+        if let registry = launcherRegistry(npmrc: npmrc) { urls.append(registry) }
+        if let apiURL, let url = URL(string: apiURL), url.host != nil { urls.append(url) }
+        return urls.filter { !cliHosts.contains($0.host ?? "") }
+    }
+
+    /// The registry `cli-bootstrap.mjs` asks, read the same way: the last
+    /// `@vibe-cafe:registry`, else the last `registry`; quotes stripped; https
+    /// only; a registry the file holds credentials for (`//host/…:_authToken=`)
+    /// is skipped, as the launcher then uses the official one.
+    static func launcherRegistry(npmrc: String?) -> URL? {
+        guard let npmrc else { return nil }
+        var scoped: String?
+        var plain: String?
+        var credentialHosts: Set<String> = []
+        for line in npmrc.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2 else { continue }
+            let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            if parts[0] == "@vibe-cafe:registry" { scoped = value }
+            else if parts[0] == "registry" { plain = value }
+            else if parts[0].hasPrefix("//"), parts[0].contains(":") {
+                let host = parts[0].dropFirst(2).split(separator: "/").first.map(String.init)?
+                    .split(separator: ":").first.map(String.init)
+                if let host { credentialHosts.insert(host.lowercased()) }
             }
-            if let value = scoped ?? plain, let host = URL(string: value)?.host { hosts.append(host) }
         }
-        if let apiURL, let host = URL(string: apiURL)?.host { hosts.append(host) }
-        return hosts.filter { !cliHosts.contains($0) }
+        guard let value = scoped ?? plain, let url = URL(string: value), url.scheme == "https",
+              let host = url.host, !credentialHosts.contains(host.lowercased())
+        else { return nil }
+        return url
     }
 
     // MARK: - Sessions for the app's own vendor requests
 
     /// A `URLSession` configuration whose proxy is the given route, so a dead
-    /// proxy fails the request instead of letting it go direct. Nil for
-    /// `.unresolved`: the caller keeps the system's own handling.
-    static func configuration(for route: Route) -> URLSessionConfiguration? {
+    /// proxy fails the request instead of letting it go direct. An
+    /// unresolvable PAC fails closed the same way.
+    static func configuration(for route: Route) -> URLSessionConfiguration {
         let disabled: [AnyHashable: Any] = [
             "HTTPEnable": 0, "HTTPSEnable": 0, "SOCKSEnable": 0, "ProxyAutoConfigEnable": 0,
         ]
         var dictionary = disabled
         switch route {
         case .unresolved:
-            return nil
+            // Fail closed: a closed local port, never direct.
+            dictionary["HTTPEnable"] = 1
+            dictionary["HTTPProxy"] = failClosedHost
+            dictionary["HTTPPort"] = failClosedPort
+            dictionary["HTTPSEnable"] = 1
+            dictionary["HTTPSProxy"] = failClosedHost
+            dictionary["HTTPSPort"] = failClosedPort
         case .direct:
             break
         case let .http(host, port):
@@ -370,10 +415,7 @@ enum SystemProxy {
     static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         guard let url = request.url else { return try await URLSession.shared.data(for: request) }
         let route = await routes(for: [url]).first ?? .unresolved
-        guard let configuration = configuration(for: route) else {
-            return try await URLSession.shared.data(for: request)
-        }
-        let session = URLSession(configuration: configuration)
+        let session = URLSession(configuration: configuration(for: route))
         defer { session.finishTasksAndInvalidate() }
         return try await session.data(for: request)
     }

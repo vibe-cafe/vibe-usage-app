@@ -905,6 +905,9 @@ final class AppState {
     /// Seconds the launch sync waits; set once for a login-item launch
     /// (`LoginLaunch`) so the user's proxy client can start first.
     var launchSyncDelay: TimeInterval = 0
+    /// The launch sync, cancelled when the scheduler is started again
+    /// (relink) or the configuration is reset.
+    private var launchSyncTask: Task<Void, Never>?
 
     private func startScheduler(firstSyncDelay: TimeInterval = 0) {
         syncScheduler = SyncScheduler(interval: Self.syncInterval) { [weak self] in
@@ -917,8 +920,12 @@ final class AppState {
         Task { await fetchUsageData() }
         // Run the full sync (CLI upload + fetch) in parallel as the background pipeline.
         let delay = firstSyncDelay
-        Task {
-            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        launchSyncTask?.cancel()
+        launchSyncTask = Task {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+            }
             await triggerSync(.launch)
         }
     }

@@ -98,7 +98,7 @@ struct SystemProxyTests {
         #expect(env == [
             "HTTPS_PROXY": "http://127.0.0.1:7890",
             "HTTP_PROXY": "http://127.0.0.1:7890",
-            "NO_PROXY": "corp.example,localhost,127.0.0.1,::1,open.bigmodel.cn,api.kimi.com",
+            "NO_PROXY": "corp.example,localhost,127.0.0.1,::1,[::1],open.bigmodel.cn,api.kimi.com",
             "NODE_USE_ENV_PROXY": "1",
         ])
     }
@@ -125,91 +125,103 @@ struct SystemProxyTests {
         #expect(cli["ALL_PROXY"] == "socks5://127.0.0.1:7891")
         #expect(cli["NODE_USE_ENV_PROXY"] == nil)
         #expect(variables(routes, allowSOCKS: false, nodeSwitch: false).isEmpty)
-        // A SOCKS value the user set themselves does not get the switch either.
-        #expect(variables([], base: ["ALL_PROXY": "x", "HTTPS_PROXY": "socks5h://h:1"])["NODE_USE_ENV_PROXY"] == nil)
     }
 
     @Test
     func nothingToFollowAddsNothing() {
-        #expect(variables([("a", .direct), ("b", .unresolved)]).isEmpty)
+        #expect(variables([("a", .direct)]).isEmpty)
         #expect(variables([]).isEmpty)
     }
 
-    /// A proxy the user already put in the environment is theirs: kept, with
-    /// loopback bypassed and Node told to honour it.
+    /// The user's own proxy wins over the system's. The proxy each scheme
+    /// really uses (the CLI's order) is written out explicitly, with a scheme,
+    /// so Node's startup switch sees what the CLI would choose.
     @Test
-    func theUsersOwnProxyVariablesAreKept() {
+    func theUsersOwnProxyVariablesWinAndAreWrittenOutPerScheme() {
         let env = variables(
             [("a", .http(host: "127.0.0.1", port: 7890))],
             base: ["https_proxy": "http://corp:8080", "no_proxy": "corp.example"]
         )
         #expect(env == [
-            "NO_PROXY": "corp.example,localhost,127.0.0.1,::1",
-            "no_proxy": "corp.example,localhost,127.0.0.1,::1",
+            "HTTPS_PROXY": "http://corp:8080",
+            "NO_PROXY": "corp.example,localhost,127.0.0.1,::1,[::1]",
+            "no_proxy": "corp.example,localhost,127.0.0.1,::1,[::1]",
             "NODE_USE_ENV_PROXY": "1",
         ])
-    }
-
-    /// A proxy variable without a scheme makes Node (with the switch) refuse
-    /// to start, so the child gets it as `http://…`.
-    @Test
-    func theUsersSchemeLessProxyIsWrittenOutWithAScheme() {
-        let env = variables([], base: ["HTTPS_PROXY": "127.0.0.1:7890"])
-        #expect(env["HTTPS_PROXY"] == "http://127.0.0.1:7890")
-        #expect(env["NODE_USE_ENV_PROXY"] == "1")
-    }
-
-    /// An explicit ALL_PROXY is the user's choice: the system proxy is not
-    /// written over it (the CLI reads ALL_PROXY when nothing else is set).
-    @Test
-    func theUsersOwnAllProxyWinsOverTheSystem() {
-        let env = variables(
-            [("cursor.com", .direct), ("api.kimi.com", .http(host: "127.0.0.1", port: 7890))],
-            base: ["ALL_PROXY": "socks5://127.0.0.1:7891"]
-        )
-        #expect(env["HTTPS_PROXY"] == nil)
-        #expect(env["HTTP_PROXY"] == nil)
-        #expect(env["NODE_USE_ENV_PROXY"] == nil)
-        #expect(env["NO_PROXY"] == "localhost,127.0.0.1,::1")
+        // Without a scheme: written out as http:// (Node would not start).
+        let bare = variables([], base: ["HTTPS_PROXY": "127.0.0.1:7890"])
+        #expect(bare["HTTPS_PROXY"] == "http://127.0.0.1:7890")
+        #expect(bare["NODE_USE_ENV_PROXY"] == "1")
+        // HTTP proxies plus a SOCKS ALL_PROXY (a common client setup): both
+        // schemes already have their HTTP proxy, so Node gets its switch.
+        let mixed = variables([], base: [
+            "HTTP_PROXY": "http://127.0.0.1:7890", "HTTPS_PROXY": "http://127.0.0.1:7890",
+            "ALL_PROXY": "socks5://127.0.0.1:7891",
+        ])
+        #expect(mixed["NODE_USE_ENV_PROXY"] == "1")
+        // An HTTP ALL_PROXY alone becomes explicit variables Node reads.
+        let all = variables([], base: ["ALL_PROXY": "http://127.0.0.1:7890"])
+        #expect(all["HTTPS_PROXY"] == "http://127.0.0.1:7890")
+        #expect(all["HTTP_PROXY"] == "http://127.0.0.1:7890")
+        // A SOCKS choice for either scheme: nothing written, no switch.
+        let socks = variables([("cursor.com", .direct)], base: [
+            "http_proxy": "http://a:1", "ALL_PROXY": "socks5://127.0.0.1:7891",
+        ])
+        #expect(socks["HTTPS_PROXY"] == nil)
+        #expect(socks["NODE_USE_ENV_PROXY"] == nil)
         #expect(SystemProxy.hasOwnProxy(["all_proxy": "x"]))
         #expect(!SystemProxy.hasOwnProxy(["NO_PROXY": "x"]))
     }
 
-    /// Both bypass spellings are merged, and a `*` stays exactly `*`.
+    /// The bypass list Node would use (lowercase first), and `*` stays `*`.
     @Test
-    func noProxySpellingsMergeAndStarIsLeftAlone() {
+    func noProxyFollowsNodesPrecedenceAndStarIsLeftAlone() {
         let route: [(String, SystemProxy.Route)] = [("a", .http(host: "127.0.0.1", port: 7890))]
-        let merged = variables(route, base: ["NO_PROXY": "upper.example", "no_proxy": "lower.example"])
-        #expect(merged["NO_PROXY"] == "lower.example,upper.example,localhost,127.0.0.1,::1")
-        #expect(merged["no_proxy"] == merged["NO_PROXY"])
-        let star = variables(route, base: ["NO_PROXY": "*"])
-        #expect(star["NO_PROXY"] == nil)
-        #expect(star["HTTPS_PROXY"] == "http://127.0.0.1:7890")
+        let lower = variables(route, base: ["NO_PROXY": "upper.example", "no_proxy": "lower.example"])
+        #expect(lower["NO_PROXY"] == "lower.example,localhost,127.0.0.1,::1,[::1]")
+        #expect(lower["no_proxy"] == lower["NO_PROXY"])
+        #expect(variables(route, base: ["NO_PROXY": "*"])["NO_PROXY"] == nil)
+        // A lowercase list overriding an inherited uppercase `*` is what Node uses.
+        let overridden = variables(route, base: ["NO_PROXY": "*", "no_proxy": "localhost"])
+        #expect(overridden["no_proxy"] == "localhost,127.0.0.1,::1,[::1]")
     }
 
-    /// A mirror in ~/.npmrc and a custom server are resolved too, so a PAC
-    /// that sends them direct puts them in NO_PROXY.
+    /// A PAC that cannot be evaluated points children at a closed port.
     @Test
-    func configuredRegistryAndServerHostsAreResolved() throws {
+    func anUnresolvedPACFailsClosedForChildren() {
+        let env = variables([("cursor.com", .unresolved), ("open.bigmodel.cn", .direct)])
+        #expect(env["HTTPS_PROXY"] == SystemProxy.failClosedURL)
+        #expect(env["NO_PROXY"] == "localhost,127.0.0.1,::1,[::1],open.bigmodel.cn")
+    }
+
+    /// The registry is read the way `cli-bootstrap.mjs` reads it.
+    @Test
+    func theLaunchersRegistryIsReadLikeTheLauncher() throws {
+        #expect(SystemProxy.launcherRegistry(npmrc: "registry=\"https://registry.npmmirror.com/\"\n")?.host
+            == "registry.npmmirror.com")
+        #expect(SystemProxy.launcherRegistry(npmrc: "registry=https://a.example/\n@vibe-cafe:registry=https://b.example/\n")?.host
+            == "b.example")
+        // Credentials for that host: the launcher falls back to the official registry.
+        #expect(SystemProxy.launcherRegistry(npmrc: "registry=https://npm.corp/\n//npm.corp/:_authToken=x\n") == nil)
+        #expect(SystemProxy.launcherRegistry(npmrc: "registry=http://plain.example/\n") == nil)
+
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("vu-npmrc-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: home) }
-        try Data("registry=https://registry.npmmirror.com/\n//registry.npmmirror.com/:_authToken=secret\n".utf8)
-            .write(to: home.appendingPathComponent(".npmrc"))
-        #expect(SystemProxy.configuredCLIHosts(base: [:], home: home, apiURL: "https://usage.corp.example")
-            == ["registry.npmmirror.com", "usage.corp.example"])
-        try Data("registry=https://a.example/\n@vibe-cafe:registry=https://b.example/\n".utf8)
-            .write(to: home.appendingPathComponent(".npmrc"))
-        #expect(SystemProxy.configuredCLIHosts(base: [:], home: home, apiURL: "https://vibefriends.com")
-            == ["b.example"])
+        try Data("registry=https://registry.npmmirror.com/\n".utf8).write(to: home.appendingPathComponent(".npmrc"))
+        // The server keeps its real scheme and port: a PAC answers per URL.
+        #expect(SystemProxy.configuredCLIURLs(home: home, apiURL: "http://usage.intra:8080").map(\.absoluteString)
+            == ["https://registry.npmmirror.com/", "http://usage.intra:8080"])
     }
 
     // MARK: - Pinned sessions, against a stand-in proxy
 
     @Test
     func directAndUnresolvedSessionConfigurations() throws {
-        #expect(SystemProxy.configuration(for: .unresolved) == nil)
-        let direct = try #require(SystemProxy.configuration(for: .direct)?.connectionProxyDictionary)
+        let unresolved = try #require(SystemProxy.configuration(for: .unresolved).connectionProxyDictionary)
+        #expect(unresolved["HTTPSProxy"] as? String == SystemProxy.failClosedHost)
+        #expect(unresolved["HTTPSPort"] as? Int == SystemProxy.failClosedPort)
+        let direct = try #require(SystemProxy.configuration(for: .direct).connectionProxyDictionary)
         #expect(direct["HTTPSEnable"] as? Int == 0)
         #expect(direct["SOCKSEnable"] as? Int == 0)
         #expect(direct["ProxyAutoConfigEnable"] as? Int == 0)
@@ -219,7 +231,7 @@ struct SystemProxyTests {
     func aPinnedHTTPProxyReceivesTheRequest() async throws {
         let proxy = try await StandInProxy.start()
         defer { proxy.stop() }
-        let configuration = try #require(SystemProxy.configuration(for: .http(host: "127.0.0.1", port: proxy.port)))
+        let configuration = SystemProxy.configuration(for: .http(host: "127.0.0.1", port: proxy.port))
         configuration.timeoutIntervalForRequest = 5
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
@@ -232,7 +244,7 @@ struct SystemProxyTests {
     func aPinnedSOCKSProxyReceivesTheRequest() async throws {
         let proxy = try await StandInProxy.start()
         defer { proxy.stop() }
-        let configuration = try #require(SystemProxy.configuration(for: .socks(host: "127.0.0.1", port: proxy.port)))
+        let configuration = SystemProxy.configuration(for: .socks(host: "127.0.0.1", port: proxy.port))
         configuration.timeoutIntervalForRequest = 5
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
