@@ -128,52 +128,79 @@ enum EgressCheck {
         defaults: UserDefaults = .standard,
         checker: Checker = .shared
     ) async throws {
-        guard let host = claudeTraceHost(environment: environment, settingsEnvironment: settingsEnvironment)
-        else { return }
-        try await requireDirect(traceHost: host, defaults: defaults, checker: checker)
-    }
-
-    /// The Anthropic host Claude Code would reach direct, judged by the proxy
-    /// it really ends up with: the environment it is started with, with the
-    /// proxy keys of its own `settings.json` `env` on top (Claude Code applies
-    /// those over its environment; a proxy set only there is common). Claude
-    /// Code follows `HTTPS_PROXY` / `HTTP_PROXY` (either case) and no SOCKS or
-    /// `ALL_PROXY`. With such a proxy a host is direct only when the bypass
-    /// list names it as Claude Code reads it (`bypassMatches`); without one
-    /// every host is. The check then goes to a host that really goes direct.
-    static func claudeTraceHost(environment: [String: String], settingsEnvironment: [String: String]) -> String? {
-        let effective = environment.merging(settingsEnvironment) { _, setting in setting }
-        func value(_ names: [String]) -> String? {
-            names.lazy.compactMap { effective[$0]?.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty }
+        switch claudeRoute(environment: environment, settingsEnvironment: settingsEnvironment) {
+        case .proxied:
+            return
+        case let .direct(host):
+            try await requireDirect(traceHost: host, defaults: defaults, checker: checker)
+        case .unsure:
+            // It may go direct, but no host is surely direct to check through.
+            if requiresProxy(defaults) { throw Paused(reason: .proxyNotDetected) }
+            guard isEnabled(defaults) else { return }
+            throw Paused(reason: .unconfirmed)
         }
-        let proxied = value(["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"]) != nil
-        let bypass = value(["no_proxy", "NO_PROXY"]) ?? ""
-        return SystemProxy.claudeHosts.first { !proxied || bypassMatches(host: $0, list: bypass) }
     }
 
-    /// A bypass list (`NO_PROXY`) for an https host, read as Claude Code
-    /// 2.1.330 reads it (checked against its code in cross-review): `*`, the
-    /// exact host, or `.domain` / `*.domain` for its subdomains; a bare
-    /// `anthropic.com` is that host only; an entry with a port only for 443.
-    /// Reading it more broadly would send the anonymous check direct to a
-    /// host the user's settings send through the proxy (rule 1).
-    static func bypassMatches(host: String, list: String) -> Bool {
-        let host = host.lowercased()
-        for raw in list.split(whereSeparator: { $0 == "," || $0.isWhitespace }) {
+    enum ClaudeRoute: Equatable {
+        /// Every Anthropic host goes through a proxy Claude Code can use.
+        case proxied
+        /// This host goes direct under any reading of the bypass list: check it.
+        case direct(String)
+        /// Some host may go direct, but none surely does.
+        case unsure
+    }
+
+    /// How Claude Code reaches Anthropic, judged by the proxy it really ends up
+    /// with: the environment it is started with, with the proxy keys of its
+    /// own `settings.json` `env` on top (Claude Code applies those over its
+    /// environment; a proxy set only there is common). Claude Code follows
+    /// `HTTPS_PROXY` / `HTTP_PROXY` (either case), no SOCKS or `ALL_PROXY`.
+    /// With such a proxy a host goes direct only when the bypass list
+    /// (`NO_PROXY` and `no_proxy` together) names it. How Claude Code reads an
+    /// entry such as `.api.anthropic.com` or `*.anthropic.com` is not settled
+    /// (three cross-review rounds read its code differently), so both ways
+    /// count: a host that may go direct under any reading is not let through
+    /// unchecked, and the anonymous check goes only to a host that goes direct
+    /// under every reading, never to one the user's settings may proxy.
+    static func claudeRoute(environment: [String: String], settingsEnvironment: [String: String]) -> ClaudeRoute {
+        let effective = environment.merging(settingsEnvironment) { _, setting in setting }
+        let proxied = ["https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"].contains {
+            !(effective[$0]?.trimmingCharacters(in: .whitespaces) ?? "").isEmpty
+        }
+        guard proxied else { return .direct(SystemProxy.claudeHosts[0]) }
+        let bypass = ["no_proxy", "NO_PROXY"].compactMap { effective[$0] }.joined(separator: ",")
+        if let host = SystemProxy.claudeHosts.first(where: { bypassSurely(host: $0, list: bypass) }) { return .direct(host) }
+        return SystemProxy.claudeHosts.contains { bypassPossibly(host: $0, list: bypass) } ? .unsure : .proxied
+    }
+
+    private static func bypassEntries(_ list: String) -> [String] {
+        list.split(whereSeparator: { $0 == "," || $0.isWhitespace }).compactMap { raw in
             var entry = raw.lowercased()
-            if entry == "*" { return true }
             if !entry.hasPrefix("["), let colon = entry.lastIndex(of: ":") {
-                guard entry[entry.index(after: colon)...] == "443" else { continue }
+                // Only an entry for 443 (or no port) concerns these https hosts.
+                guard entry[entry.index(after: colon)...] == "443" else { return nil }
                 entry = String(entry[..<colon])
             }
-            if entry.hasPrefix("*.") || entry.hasPrefix(".") {
-                let suffix = entry.hasPrefix("*.") ? String(entry.dropFirst(1)) : entry
-                if host.hasSuffix(suffix) { return true }
-            } else if host == entry {
-                return true
-            }
+            return entry.isEmpty ? nil : entry
         }
-        return false
+    }
+
+    /// Bypassed under every reading: `*`, or the host itself.
+    static func bypassSurely(host: String, list: String) -> Bool {
+        let host = host.lowercased()
+        return bypassEntries(list).contains { $0 == "*" || $0 == host }
+    }
+
+    /// Bypassed under some reading: also a domain of it, with or without a
+    /// leading `.` / `*.`.
+    static func bypassPossibly(host: String, list: String) -> Bool {
+        let host = host.lowercased()
+        return bypassEntries(list).contains { entry in
+            if entry == "*" { return true }
+            var domain = Substring(entry)
+            if domain.hasPrefix("*.") { domain = domain.dropFirst(2) } else if domain.hasPrefix(".") { domain = domain.dropFirst() }
+            return !domain.isEmpty && (host == domain || host.hasSuffix("." + domain))
+        }
     }
 
     static let proxyEnvironmentNames = [

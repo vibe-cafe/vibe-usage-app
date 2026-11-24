@@ -171,53 +171,66 @@ struct EgressCheckTests {
 
     @Test
     func claudeIsJudgedByTheEnvironmentItReallyGets() async throws {
-        let host = { (environment: [String: String], settings: [String: String]) in
-            EgressCheck.claudeTraceHost(environment: environment, settingsEnvironment: settings)
+        let route = { (environment: [String: String], settings: [String: String]) in
+            EgressCheck.claudeRoute(environment: environment, settingsEnvironment: settings)
         }
         let proxy = "http://127.0.0.1:7890"
         // No proxy at all: every host goes direct, the first is asked.
-        #expect(host([:], [:]) == "api.anthropic.com")
+        #expect(route([:], [:]) == .direct("api.anthropic.com"))
         // A proxy for all hosts (system, the app's own, or the SOCKS relay).
-        #expect(host(["HTTPS_PROXY": proxy, "HTTP_PROXY": proxy], [:]) == nil)
-        #expect(host(["http_proxy": proxy], [:]) == nil)
+        #expect(route(["HTTPS_PROXY": proxy, "HTTP_PROXY": proxy], [:]) == .proxied)
+        #expect(route(["http_proxy": proxy], [:]) == .proxied)
         // Claude Code follows no ALL_PROXY / SOCKS of its own.
-        #expect(host(["ALL_PROXY": "socks5://127.0.0.1:7891"], [:]) == "api.anthropic.com")
+        #expect(route(["ALL_PROXY": "socks5://127.0.0.1:7891"], [:]) == .direct("api.anthropic.com"))
         // A host the PAC sends direct, added to NO_PROXY by claudeLaunch.
-        #expect(host(["HTTPS_PROXY": proxy, "NO_PROXY": "localhost,127.0.0.1,::1,claude.ai"], [:]) == "claude.ai")
-        // Bypass entries as Claude Code reads them: a bare domain is that host only.
-        #expect(host(["HTTPS_PROXY": proxy, "no_proxy": "anthropic.com"], [:]) == nil)
-        #expect(host(["HTTPS_PROXY": proxy, "no_proxy": ".anthropic.com"], [:]) == "api.anthropic.com")
+        #expect(route(["HTTPS_PROXY": proxy, "NO_PROXY": "localhost,127.0.0.1,::1,claude.ai"], [:]) == .direct("claude.ai"))
         // A proxy set only in Claude Code's own settings.json is a proxy...
-        #expect(host([:], ["HTTPS_PROXY": proxy]) == nil)
+        #expect(route([:], ["HTTPS_PROXY": proxy]) == .proxied)
         // ...but NO_PROXY written for a PAC's direct host still applies.
-        #expect(host(["NO_PROXY": "platform.claude.com"], ["HTTPS_PROXY": proxy]) == "platform.claude.com")
-        // ...and its own bypass list replaces the environment's.
-        #expect(host(["HTTPS_PROXY": proxy, "NO_PROXY": "claude.ai"], ["NO_PROXY": "platform.claude.com"]) == "platform.claude.com")
+        #expect(route(["NO_PROXY": "platform.claude.com"], ["HTTPS_PROXY": proxy]) == .direct("platform.claude.com"))
+        // Both spellings of the list count together.
+        #expect(route(["HTTPS_PROXY": proxy, "no_proxy": "localhost"], ["NO_PROXY": "api.anthropic.com"]) == .direct("api.anthropic.com"))
+        // Entries whose reading differs between runtimes: may go direct, but
+        // no host is surely direct to check through.
+        for entry in [".api.anthropic.com", "*.anthropic.com", ".anthropic.com", "anthropic.com"] {
+            #expect(route(["HTTPS_PROXY": proxy, "NO_PROXY": entry], [:]) == .unsure, "\(entry)")
+        }
+        #expect(route(["HTTPS_PROXY": proxy, "NO_PROXY": "api.anthropic.com:8443"], [:]) == .proxied)
+        #expect(route(["HTTPS_PROXY": proxy, "NO_PROXY": "*"], [:]) == .direct("api.anthropic.com"))
 
         let (store, suite) = defaults()
         defer { store.removePersistentDomain(forName: suite) }
         let calls = Box<[String]>([])
         let check = checker(answer: Box("CN"), calls: calls)
-        try await EgressCheck.checkClaude(
-            environment: ["HTTPS_PROXY": proxy], settingsEnvironment: [:], defaults: store, checker: check
-        )
+        try await EgressCheck.checkClaude(environment: ["HTTPS_PROXY": proxy], settingsEnvironment: [:], defaults: store, checker: check)
         #expect(calls.value.isEmpty)
         await #expect(throws: EgressCheck.Paused(reason: .regionUnsupported("CN"))) {
             try await EgressCheck.checkClaude(environment: [:], settingsEnvironment: [:], defaults: store, checker: check)
         }
         #expect(calls.value == ["api.anthropic.com"])
+        // Unsure: paused without a check, or sent when the check is off.
+        await #expect(throws: EgressCheck.Paused(reason: .unconfirmed)) {
+            try await EgressCheck.checkClaude(environment: ["HTTPS_PROXY": proxy, "NO_PROXY": ".anthropic.com"],
+                settingsEnvironment: [:], defaults: store, checker: check)
+        }
+        #expect(calls.value == ["api.anthropic.com"])
+        let (off, offSuite) = defaults(enabled: false)
+        defer { off.removePersistentDomain(forName: offSuite) }
+        try await EgressCheck.checkClaude(environment: ["HTTPS_PROXY": proxy, "NO_PROXY": ".anthropic.com"],
+            settingsEnvironment: [:], defaults: off, checker: check)
     }
 
     @Test
-    func bypassListsAreReadAsClaudeCodeReadsThem() {
-        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "api.anthropic.com"))
-        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: "anthropic.com"))
-        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "localhost, .anthropic.com"))
-        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "*.anthropic.com:443"))
-        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ".anthropic.com:8443"))
-        #expect(EgressCheck.bypassMatches(host: "claude.ai", list: "*"))
-        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ".notanthropic.com"))
-        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ""))
+    func bypassListsAreReadSurelyAndPossibly() {
+        #expect(EgressCheck.bypassSurely(host: "api.anthropic.com", list: "localhost, api.anthropic.com"))
+        #expect(EgressCheck.bypassSurely(host: "api.anthropic.com", list: "api.anthropic.com:443"))
+        #expect(EgressCheck.bypassSurely(host: "claude.ai", list: "*"))
+        #expect(!EgressCheck.bypassSurely(host: "api.anthropic.com", list: ".anthropic.com"))
+        #expect(EgressCheck.bypassPossibly(host: "api.anthropic.com", list: "anthropic.com"))
+        #expect(EgressCheck.bypassPossibly(host: "api.anthropic.com", list: "*.anthropic.com"))
+        #expect(EgressCheck.bypassPossibly(host: "api.anthropic.com", list: ".api.anthropic.com"))
+        #expect(!EgressCheck.bypassPossibly(host: "api.anthropic.com", list: ".notanthropic.com"))
+        #expect(!EgressCheck.bypassPossibly(host: "api.anthropic.com", list: ".anthropic.com:8443"))
     }
 
     @Test

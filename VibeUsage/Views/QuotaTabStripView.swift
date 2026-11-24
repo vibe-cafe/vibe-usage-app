@@ -113,7 +113,10 @@ struct QuotaTabStripView: View {
                 ?? QuotaProduct(provider: provider, availability: .ready, isDetected: false)
         )
         guard isEnabled else { return "\(provider.displayName) · \(status) · 未启用" }
-        return showsWarning ? "\(provider.displayName) · \(status) · 数据异常" : "\(provider.displayName) · \(status)"
+        guard showsWarning else { return "\(provider.displayName) · \(status)" }
+        // A paused read keeps sound numbers: only the reading stopped.
+        let paused = appState.rateLimits.first { $0.provider == provider }?.liveFailure?.isEgressPause == true
+        return "\(provider.displayName) · \(status) · \(paused ? "读取已暂停" : "数据异常")"
     }
 
     // MARK: - Reorder
