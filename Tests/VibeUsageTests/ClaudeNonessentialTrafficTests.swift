@@ -12,19 +12,25 @@ struct ClaudeNonessentialTrafficTests {
     /// The master switch is cleared with an empty string (Claude Code counts
     /// `"0"` as on) and the separate switches the user may have meant are on.
     @Test
-    func quietEnvironmentClearsOnlyTheMasterSwitch() {
-        let env = ClaudeNonessentialTraffic.quietEnvironment
-        #expect(env[Self.key] == "")
-        for key in ["CLAUDE_CODE_DISABLE_FAST_MODE", "DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_AUTOUPDATER",
-                    "DISABLE_BUG_COMMAND", "DISABLE_UPDATES", "DISABLE_FEEDBACK_COMMAND",
-                    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY", "DISABLE_GROWTHBOOK",
-                    "CLAUDE_CODE_DISABLE_FEATURE_FLAGS", "CLAUDE_CODE_DISABLE_VITALS_EMITTER",
-                    "DISABLE_INSTALLATION_CHECKS",
-                    "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL", "DO_NOT_TRACK"] {
-            #expect(env[key] == "1", "\(key)")
-        }
-        #expect(env["CLAUDE_CODE_MODEL_CATALOG"] == "0")
-        #expect(env.values.filter(\.isEmpty).count == 1)
+    func quietEnvironmentIsTheMasterSwitchClearedAndFifteenSwitchesOff() {
+        #expect(ClaudeNonessentialTraffic.quietEnvironment == [
+            Self.key: "",
+            "CLAUDE_CODE_DISABLE_FAST_MODE": "1",
+            "DISABLE_TELEMETRY": "1",
+            "DISABLE_ERROR_REPORTING": "1",
+            "DISABLE_AUTOUPDATER": "1",
+            "DISABLE_UPDATES": "1",
+            "DISABLE_BUG_COMMAND": "1",
+            "DISABLE_FEEDBACK_COMMAND": "1",
+            "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+            "DISABLE_GROWTHBOOK": "1",
+            "CLAUDE_CODE_DISABLE_FEATURE_FLAGS": "1",
+            "CLAUDE_CODE_DISABLE_VITALS_EMITTER": "1",
+            "CLAUDE_CODE_MODEL_CATALOG": "0",
+            "DISABLE_INSTALLATION_CHECKS": "1",
+            "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
+            "DO_NOT_TRACK": "1",
+        ])
     }
 
     @Test

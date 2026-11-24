@@ -28,7 +28,9 @@ import Foundation
 /// eligible Pro / Max account's invite eligibility (personal plans included)
 /// when its cached copy is missing or a day old, and renew an expired login
 /// with its own login service. Set up for Bedrock / Vertex, Claude Code may
-/// also check model availability with the user's cloud account at start.
+/// also check model availability with the user's cloud account at start (a
+/// fixed `.` with `max_tokens: 1`, possibly for several models), and an
+/// organization's declared extra plugin marketplaces may be fetched.
 ///
 /// Cleared only for the probe's own process and never written anywhere. An
 /// organization's managed settings outrank `--settings`; when those force the

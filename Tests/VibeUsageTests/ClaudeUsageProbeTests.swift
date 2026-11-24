@@ -28,9 +28,9 @@ struct ClaudeUsageProbeTests {
     /// traffic switch would block the usage read itself, so the probe clears
     /// only that master switch for its own process and turns every separate
     /// off switch on — in the environment and, past the user's settings
-    /// files, in `--settings`. Whatever the user turned off stays off.
+    /// files, in `--settings`.
     @Test
-    func probeKeepsTheUsersTrafficOffExceptTheUsageRead() throws {
+    func probeClearsTheMasterSwitchAndPassesTheSeparateSwitches() throws {
         let arguments = ClaudeUsageProbe.processArguments
         let index = try #require(arguments.firstIndex(of: "--settings"))
         #expect(arguments[index + 1] == ClaudeNonessentialTraffic.probeSettings)
