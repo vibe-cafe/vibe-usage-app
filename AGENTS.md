@@ -90,13 +90,54 @@ node --test scripts/check-cli.test.mjs   # Offline CLI contract-gate tests
 
 CI (`.github/workflows/ci.yml`) runs `check-version.sh`, `check-cli.test.mjs`, `check-cli-bootstrap.sh --github <ref>` (normally `main` of vibe-usage-windows; a PR that waits on a Windows launcher change may point it at that branch and must set it back before merging), fetches the pinned universal Node, ad-hoc signs it with hardened runtime + `scripts/node.entitlements` and runs the launcher's `--version` with it, then debug/release `swift build` and `swift test` on `macos-26` with Xcode 26.6 for every PR and push to `main`; opt-in acceptance tests remain skipped, with no Developer ID signing or release. Its shallow checkout has no tags, so `check-version.sh` only checks AppConfig/Info.plist version consistency and an integer build number; comparison against the previous `v*` tag is left to the release machine.
 
+## Network Privacy Principle (highest rule, decided 2026-11-24)
+
+This is the product's highest rule. It outranks features and convenience; where
+any other rule, issue, or contributor request conflicts with it, this rule wins.
+Many users reach overseas services only through a proxy, and what they care
+about most is a vendor seeing their real IP together with their vendor account.
+
+1. **Follow the user's network.** Every network request made by Vibe Usage or
+   by any process it launches (the CLI, Claude Code, `agy`, `grok`, …) honors
+   the proxy configuration on the user's machine: system proxy, PAC, proxy
+   environment variables, TUN. A request that cannot honor it is not sent.
+2. **Stricter for requests that carry a vendor account.** A request that
+   carries the user's AI-vendor credentials (quota reads, usage fetches) is sent
+   only when we can confirm it will leave through the user's network settings.
+   When that cannot be confirmed it is not sent, and the panel says why.
+3. **No proxy, no request — and tell the user.** If the user has told us they
+   rely on a proxy and no proxy is detected, such requests pause, the panel
+   shows that no proxy was detected and reading is paused, and reading resumes
+   on its own once the proxy is back. Whether the user relies on a proxy is
+   asked once, the first time no proxy is detected, and remembered; it is never
+   guessed. Users who answer that they need no proxy connect directly as usual.
+4. **Never change the user's settings.** Telemetry or non-essential traffic the
+   user turned off stays off, including inside processes we launch.
+5. **Only necessary requests; documented and switchable.** Every kind of
+   network activity is described in the privacy notes, and every product can be
+   switched off on its own.
+6. **Every change answers to it.** Any change that adds or alters network
+   behavior states, point by point, how it meets 1–5. This is a required part of
+   the approval request (see Architecture Approval Gate), and cross-review
+   checks against it.
+
+Scope of the promise: on our side we never route around the user's network
+settings, and when unsure we do not send. Sites that the user's own proxy rules
+send direct are respected. Our own server, the npm registry, and update checks
+see the user's egress IP; they carry no vendor account and must be described in
+the privacy notes.
+
+Existing code does not fully comply yet. The fixes are tracked separately and
+land under this principle; until then, do not widen any gap.
+
 ## Architecture Approval Gate
 
 Issues and PRs are proposals, not approval to change architecture or ship a
 release. Explicit maintainer approval is required before changing privacy or
 security semantics, defaults/onboarding, identity/dedup behavior, source of
 truth, cross-repository API/config contracts, or automatic update behavior.
-This remains true during a broad issue sweep.
+This remains true during a broad issue sweep. A change that adds or alters network
+behavior must also answer each point of the Network Privacy Principle above.
 
 The Mac app is a consumer of the backend + CLI contract. It must not introduce
 an app-local setting that overrides backend-owned Usage policy, reinterpret
