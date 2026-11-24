@@ -201,6 +201,16 @@ extension OpenCodeGoUsageAPITests {
         }
     }
 
+    private func addMigrations(_ ids: [String], to root: URL) throws {
+        var handle: OpaquePointer?
+        guard sqlite3_open(root.appendingPathComponent("opencode.db").path, &handle) == SQLITE_OK, let handle else {
+            throw NSError(domain: "sqlite", code: 1)
+        }
+        defer { sqlite3_close(handle) }
+        try exec(handle, "CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL);")
+        for id in ids { try exec(handle, "INSERT INTO migration VALUES ('\(id)', 1);") }
+    }
+
     private func exec(_ handle: OpaquePointer, _ sql: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         guard sqlite3_exec(handle, sql, nil, nil, &error) == SQLITE_OK else {
@@ -315,23 +325,67 @@ extension OpenCodeGoUsageAPITests {
         #expect(lookup(root) == key("sk-go-table"))
     }
 
+    /// 2.x leaves the 1.x auth.json behind after importing it; once the table
+    /// holds an OpenCode login, that stale file never stands in for it.
     @Test
-    func usesAnOlderUsableLoginWhenTheSignInHasExpired() throws {
+    func reportsExpiryInsteadOfUsingALeftoverAuthJSON() throws {
         let nowMs = Self.now.timeIntervalSince1970 * 1000
         let root = try store(table: [("opencode", accountLogin(expiresMs: nowMs - 1), 1)],
                              authJSON: #"{"opencode-go":{"type":"api","key":"sk-go-file"}}"#)
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(lookup(root) == key("sk-go-file"))
+        #expect(lookup(root) == .expired)
     }
 
     @Test
-    func picksTheActiveAccountRow() throws {
+    func ignoresAuthJSONOnceOpenCode2xImportedIt() throws {
+        let imported = try store(table: [("anthropic", #"{"type":"key","key":"x"}"#, 1)],
+                                 authJSON: #"{"opencode-go":{"type":"api","key":"sk-go-file"}}"#)
+        try addMigrations(["20260805200742_import_legacy_credentials"], to: imported)
+        // 1.x: the table exists but stays empty and that migration never runs.
+        let legacy = try store(authJSON: #"{"opencode-go":{"type":"api","key":"sk-go-file"}}"#)
+        try createCredentialDatabase(at: legacy.appendingPathComponent("opencode.db"), rows: [])
+        try addMigrations(["20260622202450_simplify_session_input"], to: legacy)
+        defer { [imported, legacy].forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(lookup(imported) == .missing)
+        #expect(lookup(legacy) == key("sk-go-file"))
+    }
+
+    @Test
+    func sendsAnOpenCodeKeyOnlyToItsOwnConsole() throws {
+        let custom = try store(table: [("opencode",
+            #"{"type":"key","key":"sk-custom","metadata":{"orgID":"wrk_x","server":"https://console.example.com"}}"#, 1)])
+        // A 1.x "OpenCode" key imported by 2.x has no workspace and still works.
+        let imported = try store(table: [("opencode", #"{"type":"key","key":"sk-imported"}"#, 1)])
+        defer { [custom, imported].forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(lookup(custom) == .missing)
+        #expect(lookup(imported) == key("sk-imported"))
+    }
+
+    @Test
+    func acceptsTheDefaultConsoleWithAnExplicitPort() {
+        #expect(OpenCodeGoUsageAPI.isDefaultConsole(nil))
+        #expect(OpenCodeGoUsageAPI.isDefaultConsole("https://opencode.ai/console"))
+        #expect(OpenCodeGoUsageAPI.isDefaultConsole("https://opencode.ai:443/console"))
+        #expect(OpenCodeGoUsageAPI.isDefaultConsole("https://console.opencode.ai"))
+        #expect(!OpenCodeGoUsageAPI.isDefaultConsole("https://opencode.ai:8443/console"))
+        #expect(!OpenCodeGoUsageAPI.isDefaultConsole("http://opencode.ai/console"))
+        #expect(!OpenCodeGoUsageAPI.isDefaultConsole("https://console.example.com"))
+    }
+
+    @Test
+    func picksTheActiveAccountRowAndTheNewestAmongEquals() throws {
         let root = try store(table: [
             ("opencode", accountLogin(access: "acc-active"), 1),
             ("opencode", accountLogin(access: "acc-inactive"), 0),
         ])
-        defer { try? FileManager.default.removeItem(at: root) }
+        // Rows later in the fixture are newer (larger time_updated).
+        let equals = try store(table: [
+            ("opencode", accountLogin(access: "acc-older"), 1),
+            ("opencode", accountLogin(access: "acc-newer"), 1),
+        ])
+        defer { [root, equals].forEach { try? FileManager.default.removeItem(at: $0) } }
         #expect(lookup(root) == key("acc-active", workspace: "wrk_fixture"))
+        #expect(lookup(equals) == key("acc-newer", workspace: "wrk_fixture"))
     }
 
     @Test

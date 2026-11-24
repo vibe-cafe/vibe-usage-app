@@ -123,14 +123,20 @@ enum OpenCodeGoUsageAPI {
 
     /// Every store, in the order the CLI's adapter tries them: the 2.x
     /// credential table (`opencode-go`, then `opencode`), then 1.x `auth.json`
-    /// (`opencode-go`, then `opencode`). The first usable login wins; an
-    /// expired account sign-in is reported only when nothing else is usable.
+    /// (`opencode-go`, then `opencode`) — the file only when the table holds
+    /// no OpenCode login and 2.x has not imported it (2.x leaves its imported
+    /// copy behind, and that stale copy must not stand in for a login the user
+    /// removed or a sign-in that expired). The first usable login wins; an
+    /// expired account sign-in is reported, with nothing sent, when no current
+    /// login is usable.
     static func loadCredential(dataHome: URL = OpenCodeGoUsageAPI.dataHome, now: Date = Date()) -> Lookup {
         let table = loadCredentialTable(databaseURL: dataHome.appendingPathComponent("opencode.db"), now: now)
-        let file = loadAuthFile(authFileURL: dataHome.appendingPathComponent("auth.json"), now: now)
-        let lookups = table + file
-        for case let .found(credential) in lookups { return .found(credential) }
-        return lookups.contains(.expired) ? .expired : .missing
+        for case let .found(credential) in table.lookups { return .found(credential) }
+        if !table.authoritative {
+            let file = loadAuthFile(authFileURL: dataHome.appendingPathComponent("auth.json"), now: now)
+            for case let .found(credential) in file { return .found(credential) }
+        }
+        return table.lookups.contains(.expired) ? .expired : .missing
     }
 
     private static func loadAuthFile(authFileURL: URL, now: Date) -> [Lookup] {
@@ -148,78 +154,112 @@ enum OpenCodeGoUsageAPI {
             // 1.x stores API keys as `{ type: "api", key }`; an OAuth entry
             // there carries no workspace and is not a Go login.
             guard let entry = entry as? [String: Any], entry["type"] as? String == "api" else { return .missing }
-            return credential(from: entry, integrationID: id, now: now)
+            return credential(from: Fields(type: "api", key: entry["key"] as? String), integrationID: id, now: now)
         }
     }
 
-    /// The credential-table query: the `opencode-go` and `opencode` rows, one
-    /// column each. `active` is nullable in the store's own schema, so it is
-    /// coalesced before ordering, and the newest row wins among equally active
-    /// ones — the same rows the CLI's adapter picks.
-    static let credentialQuery = """
-        SELECT integration_id, value FROM credential
-        WHERE integration_id IN ('opencode-go', 'opencode')
-        ORDER BY coalesce(active, 1) DESC, time_updated DESC
+    /// What one stored credential contributes to the request — nothing else
+    /// of it (the refresh token above all) is ever read.
+    struct Fields: Equatable {
+        var type: String?
+        var key: String?
+        var access: String?
+        var expires: Double?
+        var workspaceID: String?
+        var server: String?
+    }
+
+    /// The current row of one integration (active first, then newest, as
+    /// OpenCode picks it), reduced inside SQLite to the fields the request
+    /// needs. A malformed value yields nulls instead of failing the query.
+    static func credentialQuery(integrationID: String) -> String {
+        let fields = [("type", "$.type"), ("key", "$.key"), ("access", "$.access"), ("expires", "$.expires"),
+                      ("org", "$.metadata.orgID"), ("server", "$.metadata.server")]
+            .map { "CASE WHEN json_valid(value) THEN json_extract(value, '\($0.1)') END AS \($0.0)" }
+            .joined(separator: ", ")
+        return """
+            SELECT \(fields) FROM credential
+            WHERE integration_id = '\(integrationID)'
+            ORDER BY coalesce(active, 1) DESC, time_updated DESC
+            LIMIT 1
+            """
+    }
+
+    /// 2.x imports `auth.json` into the credential table once, by this
+    /// migration, and leaves the file behind.
+    static let legacyImportQuery = """
+        SELECT 1 FROM migration WHERE id = '20260805200742_import_legacy_credentials' LIMIT 1
         """
 
-    /// Reads the current row of each integration from a read-only connection.
-    /// Any failure — no database, an older schema without the table, a lock,
-    /// a malformed blob — yields no lookup so the caller falls back to
-    /// `auth.json` instead of reporting a missing login.
+    /// Reads the current `opencode-go` and `opencode` rows from a read-only
+    /// connection. Any failure — no database, an older schema without the
+    /// table, a lock — yields no lookup and a non-authoritative table, so the
+    /// caller falls back to `auth.json` instead of reporting a missing login.
     static func loadCredentialTable(
         databaseURL: URL = credentialDatabaseURL,
         now: Date = Date()
-    ) -> [Lookup] {
+    ) -> (lookups: [Lookup], authoritative: Bool) {
         var handle: OpaquePointer?
         guard sqlite3_open_v2(databaseURL.path, &handle, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
               let handle else {
             if let handle { sqlite3_close(handle) }
-            return []
+            return ([], false)
         }
         defer { sqlite3_close(handle) }
 
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, credentialQuery, -1, &statement, nil) == SQLITE_OK,
-              let statement else { return [] }
-        defer { sqlite3_finalize(statement) }
-
-        var current: [String: String] = [:]
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let rawID = sqlite3_column_text(statement, 0) else { continue }
-            let id = String(cString: rawID)
-            guard current[id] == nil else { continue }
-            current[id] = sqlite3_column_text(statement, 1).map { String(cString: $0) } ?? ""
+        var lookups: [Lookup] = []
+        for id in [goIntegrationID, openCodeIntegrationID] {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(handle, credentialQuery(integrationID: id), -1, &statement, nil) == SQLITE_OK,
+                  let statement else { return ([], false) }
+            defer { sqlite3_finalize(statement) }
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                func text(_ column: Int32) -> String? {
+                    sqlite3_column_text(statement, column).map { String(cString: $0) }
+                }
+                let expires = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                    ? nil : sqlite3_column_double(statement, 3)
+                let fields = Fields(type: text(0), key: text(1), access: text(2), expires: expires,
+                                    workspaceID: text(4), server: text(5))
+                lookups.append(credential(from: fields, integrationID: id, now: now))
+            case SQLITE_DONE:
+                continue
+            default:
+                return ([], false)
+            }
         }
-        return [goIntegrationID, openCodeIntegrationID].compactMap { id in
-            guard let raw = current[id] else { return nil }
-            guard let data = raw.data(using: .utf8),
-                  let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            else { return .missing }
-            return credential(from: value, integrationID: id, now: now)
-        }
+        return (lookups, !lookups.isEmpty || legacyLoginsImported(handle))
     }
 
-    /// Turns one stored value into a usable credential. Only the key, or an
-    /// account sign-in's access token, expiry, Console and workspace ID are
-    /// read; the refresh token is never touched.
-    static func credential(from value: [String: Any], integrationID: String, now: Date) -> Lookup {
-        let metadata = value["metadata"] as? [String: Any]
+    private static func legacyLoginsImported(_ handle: OpaquePointer) -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, legacyImportQuery, -1, &statement, nil) == SQLITE_OK,
+              let statement else { return false }
+        defer { sqlite3_finalize(statement) }
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    /// Turns one stored credential into a usable one, or the reason it is not.
+    static func credential(from fields: Fields, integrationID: String, now: Date) -> Lookup {
+        let isOpenCode = integrationID == openCodeIntegrationID
         // Only an OpenCode-account credential names a workspace for the
         // request; a Go key is already scoped to one and is sent as before.
-        let workspaceID = integrationID == openCodeIntegrationID
-            ? (metadata?["orgID"] as? String).flatMap(normalizedKey) : nil
-        switch value["type"] as? String {
+        let workspaceID = isOpenCode ? fields.workspaceID.flatMap(normalizedKey) : nil
+        // An OpenCode credential belongs to the Console it signed in to; one
+        // for a custom Console is never sent to opencode.ai.
+        if isOpenCode, !isDefaultConsole(fields.server) { return .missing }
+        switch fields.type {
         case "key", "api":
-            guard let key = (value["key"] as? String).flatMap(normalizedKey) else { return .missing }
+            // No workspace is required: a 1.x "OpenCode" key imported by 2.x
+            // has none, and the endpoint accepts it as it did in 1.x.
+            guard let key = fields.key.flatMap(normalizedKey) else { return .missing }
             return .found(Credential(token: key, workspaceID: workspaceID))
-        case "oauth" where integrationID == openCodeIntegrationID:
+        case "oauth" where isOpenCode:
             // OpenCode reads the workspace from the sign-in itself and shows
             // no Go usage without it.
-            guard let access = (value["access"] as? String).flatMap(normalizedKey),
-                  let workspaceID,
-                  isDefaultConsole(metadata?["server"] as? String)
-            else { return .missing }
-            let expires = number(value["expires"]) ?? 0
+            guard let access = fields.access.flatMap(normalizedKey), let workspaceID else { return .missing }
+            let expires = fields.expires ?? 0
             if expires != 0, expires / 1000 <= now.timeIntervalSince1970 + expiryMargin {
                 return .expired
             }
@@ -229,14 +269,13 @@ enum OpenCodeGoUsageAPI {
         }
     }
 
-    /// An account sign-in is accepted only for the default OpenCode Console
-    /// (the retired host maps onto it, as OpenCode rewrites it); a custom
-    /// Console's token belongs to another server.
+    /// An OpenCode credential is accepted only for the default OpenCode
+    /// Console (the retired host maps onto it, as OpenCode rewrites it).
     static func isDefaultConsole(_ server: String?) -> Bool {
         guard let server = server?.trimmingCharacters(in: .whitespacesAndNewlines), !server.isEmpty else {
             return true
         }
-        guard let url = URL(string: server), url.scheme == "https", url.port == nil else { return false }
+        guard let url = URL(string: server), url.scheme == "https", url.port == nil || url.port == 443 else { return false }
         return url.host == "opencode.ai" || url.host == "console.opencode.ai"
     }
 
