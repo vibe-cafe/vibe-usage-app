@@ -201,6 +201,14 @@ struct QuotaProductRow: View {
         }
     }
 
+    /// One grey line under a product's name, only where the vendor itself
+    /// has said something the user should know before turning it on.
+    /// Antigravity: Google says reading quota from third-party apps is not
+    /// supported (maintainer, 2026-11-24).
+    nonisolated static func note(for provider: ProviderRateLimit.Provider) -> String? {
+        provider == .antigravity ? "Google 表示不支持第三方读取额度" : nil
+    }
+
     private var row: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
@@ -208,11 +216,19 @@ struct QuotaProductRow: View {
                     .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
                     .opacity(isOn ? 1 : 0.72)
                     .frame(width: 22, height: 22)
-                Text(provider.displayName)
-                    .font(SettingsTheme.label)
-                    .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(provider.displayName)
+                        .font(SettingsTheme.label)
+                        .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
+                        .lineLimit(1)
+                    if let note = Self.note(for: provider) {
+                        Text(note)
+                            .font(SettingsTheme.caption)
+                            .foregroundStyle(SettingsTheme.tertiaryText)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 QuotaStatusCell(value: statusValue, isOn: isOn)
             }
             .contentShape(Rectangle())

@@ -1332,4 +1332,42 @@ struct RateLimitCoordinatorTests {
         #expect(card?.sevenDay?.utilization == 30)
         #expect(card?.liveFailure == .endpointUnreachable)
     }
+
+    @Test
+    func antigravityIsAskedAtMostEveryFiveMinutesOnPopoverOpen() {
+        #expect(RateLimitCoordinator.popoverRefreshInterval(for: .antigravity, default: 60) == 300)
+        for provider in [ProviderRateLimit.Provider.kimiCode, .zCode, .grok, .cursor] {
+            #expect(RateLimitCoordinator.popoverRefreshInterval(for: provider, default: 60) == 60)
+        }
+        #expect(QuotaProductRow.note(for: .antigravity) == "Google 表示不支持第三方读取额度")
+        #expect(QuotaProductRow.note(for: .cursor) == nil)
+    }
+
+    /// The CLI answers an unused Antigravity from its record; once a window's
+    /// reset has passed it moves `dataAsOf` to that reset, which must replace
+    /// the percentage on screen, while the same record again changes nothing.
+    @Test @MainActor
+    func antigravityRecoveredWindowReplacesTheStalePercentage() async {
+        let (appState, defaults, suite) = selectedAppState([.antigravity])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let readAt = Date(timeIntervalSinceNow: -7_200)
+        let reset = Date(timeIntervalSinceNow: -3_600)
+        func snapshot(_ utilization: Double, resetsAt: Date?, dataAsOf: Date) -> ProviderRateLimit {
+            ProviderRateLimit(provider: .antigravity,
+                meters: [RateLimitMeter(id: "gemini-5h", label: "5h",
+                    window: RateLimitWindow(utilization: utilization, resetsAt: resetsAt, windowDuration: 18_000))],
+                status: .ok, fetchedAt: Date(), dataAsOf: dataAsOf, source: .live)
+        }
+        var answers = [snapshot(40, resetsAt: reset, dataAsOf: readAt), snapshot(0, resetsAt: nil, dataAsOf: reset),
+                       snapshot(0, resetsAt: nil, dataAsOf: reset)]
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in [answers.removeFirst()] })
+        await coordinator.refreshCLIProviders([.antigravity])
+        #expect(appState.rateLimits.first { $0.provider == .antigravity }?.meters.first?.window.utilization == 40)
+        await coordinator.refreshCLIProviders([.antigravity])
+        #expect(appState.rateLimits.first { $0.provider == .antigravity }?.meters.first?.window.utilization == 0)
+        await coordinator.refreshCLIProviders([.antigravity])
+        let card = appState.rateLimits.first { $0.provider == .antigravity }
+        #expect(card?.meters.first?.window.utilization == 0)
+        #expect(card?.liveFailure == nil)
+    }
 }

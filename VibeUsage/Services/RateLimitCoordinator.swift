@@ -613,13 +613,28 @@ final class RateLimitCoordinator {
         }
     }
 
+    /// Antigravity is read at most every 5 minutes on popover open
+    /// (maintainer, 2026-11-24, 《Antigravity额度读取-封号风险与新做法》). The
+    /// CLI decides whether Google is asked at all — only after Antigravity was
+    /// used, never more often than this — so asking the CLI sooner only spawns
+    /// a process that answers from its record.
+    nonisolated static let antigravityRefreshInterval: TimeInterval = 5 * 60
+
+    nonisolated static func popoverRefreshInterval(
+        for provider: ProviderRateLimit.Provider,
+        default maxAge: TimeInterval
+    ) -> TimeInterval {
+        provider == .antigravity ? antigravityRefreshInterval : maxAge
+    }
+
     func refreshCLIProvidersIfNeeded(
         _ providers: [ProviderRateLimit.Provider],
         maxAge: TimeInterval = 60
     ) async {
         let stale = providers.filter { provider in
             guard let last = lastCLIFetchAt[provider] else { return true }
-            return Date().timeIntervalSince(last) >= maxAge
+            return Date().timeIntervalSince(last)
+                >= Self.popoverRefreshInterval(for: provider, default: maxAge)
         }
         await refreshCLIProviders(stale)
     }
