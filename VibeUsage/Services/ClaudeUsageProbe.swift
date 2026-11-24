@@ -100,18 +100,18 @@ enum ClaudeUsageProbe {
             throw ProbeError.nonessentialTrafficDisabled
         }
         let candidates = discoverBinaries()
-        let base = ProcessInfo.processInfo.environment
-        // Claude Code would reach Anthropic direct: confirm the egress before
-        // it starts with the user's login (`EgressCheck`; throws
-        // `EgressCheck.Paused`). Nothing to start, nothing to check.
-        if !candidates.isEmpty {
-            try await EgressCheck.checkClaude(base: base)
-        }
         // Claude Code reads proxy variables, never system settings: hand it
         // the system proxy for Anthropic's hosts (`SystemProxy`), through a
         // relay for this probe alone when that proxy is SOCKS.
-        let launch = await SystemProxy.claudeLaunch(base: base)
+        let launch = await SystemProxy.claudeLaunch(base: ProcessInfo.processInfo.environment)
         defer { launch.relay?.stop() }
+        // Claude Code would reach Anthropic direct with that environment:
+        // confirm the egress before it starts with the user's login
+        // (`EgressCheck`; throws `EgressCheck.Paused`). Nothing to start,
+        // nothing to check.
+        if !candidates.isEmpty {
+            try await EgressCheck.checkClaude(environment: launch.environment)
+        }
         return try await fetch(
             candidates: candidates, now: now, timeout: timeout, environment: launch.environment
         )

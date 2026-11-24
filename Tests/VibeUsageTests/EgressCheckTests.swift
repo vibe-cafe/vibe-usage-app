@@ -170,56 +170,53 @@ struct EgressCheckTests {
     }
 
     @Test
-    func claudeIsCheckedThroughTheFirstAnthropicHostThatGoesDirect() async throws {
+    func claudeIsJudgedByTheEnvironmentItReallyGets() async throws {
+        let host = { (environment: [String: String], settings: [String: String]) in
+            EgressCheck.claudeTraceHost(environment: environment, settingsEnvironment: settings)
+        }
+        let proxy = "http://127.0.0.1:7890"
+        // No proxy at all: every host goes direct, the first is asked.
+        #expect(host([:], [:]) == "api.anthropic.com")
+        // A proxy for all hosts (system, the app's own, or the SOCKS relay).
+        #expect(host(["HTTPS_PROXY": proxy, "HTTP_PROXY": proxy], [:]) == nil)
+        #expect(host(["http_proxy": proxy], [:]) == nil)
+        // Claude Code follows no ALL_PROXY / SOCKS of its own.
+        #expect(host(["ALL_PROXY": "socks5://127.0.0.1:7891"], [:]) == "api.anthropic.com")
+        // A host the PAC sends direct, added to NO_PROXY by claudeLaunch.
+        #expect(host(["HTTPS_PROXY": proxy, "NO_PROXY": "localhost,127.0.0.1,::1,claude.ai"], [:]) == "claude.ai")
+        // Bypass entries as Claude Code reads them: a bare domain is that host only.
+        #expect(host(["HTTPS_PROXY": proxy, "no_proxy": "anthropic.com"], [:]) == nil)
+        #expect(host(["HTTPS_PROXY": proxy, "no_proxy": ".anthropic.com"], [:]) == "api.anthropic.com")
+        // A proxy set only in Claude Code's own settings.json is a proxy...
+        #expect(host([:], ["HTTPS_PROXY": proxy]) == nil)
+        // ...but NO_PROXY written for a PAC's direct host still applies.
+        #expect(host(["NO_PROXY": "platform.claude.com"], ["HTTPS_PROXY": proxy]) == "platform.claude.com")
+        // ...and its own bypass list replaces the environment's.
+        #expect(host(["HTTPS_PROXY": proxy, "NO_PROXY": "claude.ai"], ["NO_PROXY": "platform.claude.com"]) == "platform.claude.com")
+
         let (store, suite) = defaults()
         defer { store.removePersistentDomain(forName: suite) }
         let calls = Box<[String]>([])
-        let check = checker(answer: Box("US"), calls: calls)
-        let proxied: SystemProxy.Route = .http(host: "127.0.0.1", port: 7890)
-        func run(
-            base: [String: String] = [:], settings: [String: String] = [:],
-            direct: Set<String> = []
-        ) async throws {
-            try await EgressCheck.checkClaude(
-                base: base, settingsEnvironment: settings,
-                routes: { hosts in hosts.map { ($0, direct.contains($0) ? .direct : proxied) } },
-                defaults: store, checker: check
-            )
-        }
-        try await run()
+        let check = checker(answer: Box("CN"), calls: calls)
+        try await EgressCheck.checkClaude(
+            environment: ["HTTPS_PROXY": proxy], settingsEnvironment: [:], defaults: store, checker: check
+        )
         #expect(calls.value.isEmpty)
-        // The app's own proxy variables go to Claude Code as they are.
-        try await run(base: ["HTTPS_PROXY": "http://127.0.0.1:7890"], direct: Set(SystemProxy.claudeHosts))
-        #expect(calls.value.isEmpty)
-        try await run(direct: ["claude.ai"])
-        #expect(calls.value == ["claude.ai"])
-        try await run(direct: Set(SystemProxy.claudeHosts))
-        #expect(calls.value == ["claude.ai", "api.anthropic.com"])
-        // Which host is asked, without the checker's cache in the way.
-        func host(
-            base: [String: String] = [:], settings: [String: String] = [:], direct: Set<String> = []
-        ) async -> String? {
-            await EgressCheck.claudeTraceHost(base: base, settingsEnvironment: settings) { hosts in
-                hosts.map { ($0, direct.contains($0) ? .direct : proxied) }
-            }
+        await #expect(throws: EgressCheck.Paused(reason: .regionUnsupported("CN"))) {
+            try await EgressCheck.checkClaude(environment: [:], settingsEnvironment: [:], defaults: store, checker: check)
         }
-        // The app's own proxy with the user's bypass list: that host goes direct.
-        #expect(await host(base: ["HTTPS_PROXY": "http://127.0.0.1:7890", "NO_PROXY": "anthropic.com"])
-            == "api.anthropic.com")
-        // A proxy set only in Claude Code's own settings.json is a proxy.
-        #expect(await host(settings: ["HTTPS_PROXY": "http://127.0.0.1:7890"], direct: Set(SystemProxy.claudeHosts)) == nil)
-        // ...and its own bypass list, also past the system proxy, sends a host direct.
-        #expect(await host(settings: ["HTTPS_PROXY": "http://127.0.0.1:7890", "no_proxy": "claude.ai"]) == "claude.ai")
-        #expect(await host(settings: ["NO_PROXY": ".claude.ai"]) == "claude.ai")
+        #expect(calls.value == ["api.anthropic.com"])
     }
 
     @Test
-    func bypassListsAreReadBroadly() {
-        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "anthropic.com"))
+    func bypassListsAreReadAsClaudeCodeReadsThem() {
+        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "api.anthropic.com"))
+        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: "anthropic.com"))
         #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "localhost, .anthropic.com"))
         #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "*.anthropic.com:443"))
+        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ".anthropic.com:8443"))
         #expect(EgressCheck.bypassMatches(host: "claude.ai", list: "*"))
-        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: "notanthropic.com"))
+        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ".notanthropic.com"))
         #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ""))
     }
 
@@ -373,6 +370,33 @@ struct EgressCheckTests {
         #expect(appState.rateLimits.first { $0.provider == .codex }?.status == .ok)
         await coordinator.refreshCodexIfNeeded()
         #expect(fetches == 2)
+    }
+
+    @Test @MainActor
+    func aPausedCLIProductIsTriedAgainAtTheNextOpen() async {
+        let suite = "EgressCheckTests.\(UUID().uuidString)"
+        let store = UserDefaults(suiteName: suite)!
+        defer { store.removePersistentDomain(forName: suite) }
+        store.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        store.set([ProviderRateLimit.Provider.antigravity.rawValue], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(quotaDefaults: store, quotaProductDiscoverer: {
+            QuotaProductRegistry.catalog.map { provider, availability in
+                QuotaProduct(provider: provider, availability: availability, isDetected: provider == .antigravity)
+            }
+        })
+        appState.initializeQuotaProducts()
+        var calls = 0
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { providers, _, _ in
+            calls += 1
+            return providers.map {
+                ProviderRateLimit(provider: $0, status: .noData, fetchedAt: Date(), liveFailure: calls == 1 ? .egressUnconfirmed : nil)
+            }
+        })
+        await coordinator.refreshCLIProvidersIfNeeded([.antigravity])
+        await coordinator.refreshCLIProvidersIfNeeded([.antigravity])
+        #expect(calls == 2)
+        await coordinator.refreshCLIProvidersIfNeeded([.antigravity])
+        #expect(calls == 2)
     }
 
     @Test @MainActor

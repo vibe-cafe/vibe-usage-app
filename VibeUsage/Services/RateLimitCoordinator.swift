@@ -623,6 +623,8 @@ final class RateLimitCoordinator {
         maxAge: TimeInterval = 60
     ) async {
         let stale = providers.filter { provider in
+            // A read the egress check paused is tried again at every open.
+            if currentSnapshot(provider)?.liveFailure?.isEgressPause == true { return true }
             guard let last = lastCLIFetchAt[provider] else { return true }
             return Date().timeIntervalSince(last) >= maxAge
         }
