@@ -238,11 +238,14 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// genuinely do not apply. Also a definitive answer — retrying cannot
         /// produce windows, so the card explains instead of offering one.
         case sessionWithoutPlanLimits
-        /// The user switched off Claude Code's nonessential traffic, so the
+        /// The organization's managed settings force Claude Code's
+        /// nonessential traffic off, which also blocks its usage read, so the
         /// app did not start Claude Code (`ClaudeNonessentialTraffic`). Not a
         /// failure and not something a retry can change: the card names the
-        /// user's setting and shows no older numbers. App-local; the shared
-        /// pause vocabulary (#190) calls this `vendorTrafficDisabled`.
+        /// policy and shows no older numbers. A user's own switch does not
+        /// lead here — the probe keeps it off and still reads the quota.
+        /// App-local; the shared pause vocabulary (#190) calls this
+        /// `vendorTrafficDisabled`.
         case nonessentialTrafficDisabled
     }
 

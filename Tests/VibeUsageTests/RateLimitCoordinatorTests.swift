@@ -750,10 +750,11 @@ struct RateLimitCoordinatorTests {
             == .sessionWithoutPlanLimits)
     }
 
-    /// Network-privacy principle, rule 4: the user switched off Claude Code's
-    /// nonessential traffic, so the coordinator starts nothing, paints no
-    /// cached numbers, and replaces an earlier reading with the setting's own
-    /// line — no retry, no stale percentages.
+    /// The organization's policy forces Claude Code's nonessential traffic
+    /// off, which blocks its usage read too, so the coordinator starts
+    /// nothing, paints no cached numbers, and replaces an earlier reading with
+    /// the policy's own line — no retry, no stale percentages. (A user's own
+    /// switch does not lead here; the probe keeps it off and still reads.)
     @Test @MainActor
     func claudeNonessentialTrafficOffStartsNothingAndShowsTheSetting() async {
         let appState = AppState()

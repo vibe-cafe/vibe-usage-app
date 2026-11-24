@@ -125,7 +125,7 @@ enum SettingsQuotaStatus {
                 switch snapshot.emptyReason {
                 case .notEntitled: return (.warning, "未订阅")
                 case .sessionWithoutPlanLimits: return (.warning, "无订阅额度")
-                case .nonessentialTrafficDisabled: return (.warning, "非必要流量已关")
+                case .nonessentialTrafficDisabled: return (.warning, "组织策略不允许")
                 case .limitReached: return (.warning, "额度已用满")
                 case .noWindow: return (.warning, "暂无额度窗口")
                 case nil: return (.warning, needsLogin ? "需要登录" : "暂无配额数据")

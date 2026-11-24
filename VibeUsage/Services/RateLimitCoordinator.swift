@@ -61,7 +61,7 @@ final class RateLimitCoordinator {
         },
         claudeNonessentialTrafficDisabled: @escaping @MainActor () async -> Bool = {
             await Task.detached(priority: .utility) {
-                ClaudeNonessentialTraffic.isDisabledByUser()
+                ClaudeNonessentialTraffic.isForcedByPolicy()
             }.value
         },
         fetchClaudeLive: @escaping @MainActor () async throws -> ProviderRateLimit = {
@@ -246,12 +246,13 @@ final class RateLimitCoordinator {
         TestDiagnosticLog.recordQuotaRefreshStarted([.claudeCode])
         #endif
 
-        // The user switched off Claude Code's nonessential traffic: start
-        // nothing and paint no older numbers, just say so. Checked on every
-        // refresh, so changing the setting takes effect on the next one.
+        // The organization's policy forces Claude Code's nonessential traffic
+        // off, which also blocks its usage read: start nothing and paint no
+        // older numbers (they predate the policy), just say so. Checked on
+        // every refresh, so a policy change takes effect on the next one.
         if await claudeNonessentialTrafficDisabled() {
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-            debugLog("[rate-limit] claude nonessential traffic is off — not starting Claude Code")
+            debugLog("[rate-limit] claude nonessential traffic forced off by policy — not starting Claude Code")
             upsertClaudeNonessentialTrafficDisabled()
             #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             if let snapshot = currentSnapshot(.claudeCode) {
@@ -289,7 +290,7 @@ final class RateLimitCoordinator {
             let reason = Self.liveFailure(error)
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             if case ClaudeUsageProbe.ProbeError.nonessentialTrafficDisabled = error {
-                // The setting changed between the check above and the probe's
+                // The policy changed between the check above and the probe's
                 // own check. Same answer as above.
                 upsertClaudeNonessentialTrafficDisabled()
             } else if failure == .notApplicable {
@@ -327,7 +328,7 @@ final class RateLimitCoordinator {
     }
 
     /// Replaces whatever the Claude card showed — including numbers read
-    /// before the user switched the setting on — with the setting's own line.
+    /// before the policy arrived — with the policy's own line.
     private func upsertClaudeNonessentialTrafficDisabled() {
         upsert(ProviderRateLimit(provider: .claudeCode, status: .noData,
             fetchedAt: Date(), emptyReason: .nonessentialTrafficDisabled))

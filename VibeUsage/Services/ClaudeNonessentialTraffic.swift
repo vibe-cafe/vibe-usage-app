@@ -1,67 +1,86 @@
 import Foundation
 
-/// Whether the user switched off Claude Code's "nonessential traffic"
-/// (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`).
+/// How the Claude probe treats Claude Code's "nonessential traffic" switch
+/// (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`) — network-privacy principle,
+/// rules 4 and 6 (keep what the user switched off off, without losing the
+/// quota card).
 ///
-/// With that switch on, Claude Code answers `get_usage` with
-/// `rate_limits: null`, so a probe cannot produce numbers — it would only add
-/// one more signed-in launch of Claude Code. The probe used to unset the
-/// switch for its own process (`--settings`), which turned back on traffic the
-/// user had turned off. The network-privacy principle (rule 4: never change a
-/// user's setting, including inside the processes we start) forbids that, so
-/// the app now checks first and, when the switch is on, does not start Claude
-/// Code at all; the card says why.
+/// What the switch does, read from Claude Code 2.1.330 and measured with a
+/// host-logging proxy (2026-11-24): it blocks every request Claude Code calls
+/// nonessential, the usage read (`/api/oauth/usage`) included — with it on,
+/// `get_usage` only answers from Claude Code's own snapshot, which nothing
+/// refreshes. The documented equivalents (telemetry, error reporting, the
+/// auto-updater, the bug command) and every other such feature that has a
+/// switch of its own can be turned off one by one.
 ///
-/// Claude Code counts any non-empty value as "on", `"0"` and `"false"`
-/// included, so this does too. Sources, matching where the probe's Claude Code
-/// would read the variable (it runs with the home directory as its working
-/// directory):
+/// So the probe always runs with the master switch cleared and all those
+/// separate switches on (`quietEnvironment`, passed both in the environment
+/// and in an in-memory `--settings`, which outranks the user's files): what
+/// the user switched off stays off, and the probe adds only the usage read.
+/// Measured, the probe then reaches `api.anthropic.com` only, three
+/// requests: the usage read plus two Claude Code makes at every start that no
+/// separate switch covers (its start-up configuration and the organization's
+/// fast-mode status) — same host and same account as the usage read.
 ///
-/// - the app's own environment;
-/// - user settings: `$CLAUDE_CONFIG_DIR/settings.json`, else
-///   `~/.claude/settings.json`;
-/// - project settings for the home directory: `~/.claude/settings.json` and
-///   `~/.claude/settings.local.json`;
-/// - managed settings: `/Library/Application Support/ClaudeCode/managed-settings.json`,
-///   every `managed-settings.d/*.json` beside it, and a configuration
-///   profile's forced `env` in the `com.anthropic.claudecode` domain.
-///
-/// "On in any source" counts as on. Claude Code itself resolves the levels by
-/// precedence, so a higher level that sets the variable to an empty string
-/// would switch it back off there; treating that rare setup as "on" errs
-/// towards not starting Claude Code. Server-managed settings from the
-/// claude.ai console are fetched by Claude Code and are not visible here; with
-/// those, the probe still runs and Claude Code answers without windows.
-///
-/// Only that one key is used. Each file is parsed in memory and everything
-/// else in it (`env` can hold API keys) is dropped right away — never kept,
-/// logged, or put in diagnostics.
-///
-/// This gates the quota read only. Copying diagnostics still runs
-/// `claude --version` (user-initiated, no quota request), unchanged.
+/// Cleared only for the probe's own process and never written anywhere. An
+/// organization's managed settings outrank `--settings`; when those force the
+/// switch on (`isForcedByPolicy`), Claude Code cannot read the quota and the
+/// app does not start it.
 enum ClaudeNonessentialTraffic {
     static let variable = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
     static let managedDirectoryPath = "/Library/Application Support/ClaudeCode"
     static let managedPreferencesDomain = "com.anthropic.claudecode"
 
-    static func isDisabledByUser(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+    /// The probe's Claude Code environment: the master switch cleared (empty
+    /// string — Claude Code counts any non-empty value as on, `"0"` included)
+    /// and each separate off switch on. `CLAUDE_CODE_MODEL_CATALOG` is off
+    /// with `"0"`.
+    static let quietEnvironment: [String: String] = [
+        variable: "",
+        "DISABLE_TELEMETRY": "1",
+        "DISABLE_ERROR_REPORTING": "1",
+        "DISABLE_AUTOUPDATER": "1",
+        "DISABLE_UPDATES": "1",
+        "DISABLE_BUG_COMMAND": "1",
+        "DISABLE_FEEDBACK_COMMAND": "1",
+        "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1",
+        "DISABLE_GROWTHBOOK": "1",
+        "CLAUDE_CODE_DISABLE_FEATURE_FLAGS": "1",
+        "CLAUDE_CODE_DISABLE_VITALS_EMITTER": "1",
+        "CLAUDE_CODE_MODEL_CATALOG": "0",
+        "DISABLE_INSTALLATION_CHECKS": "1",
+        "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
+        "DO_NOT_TRACK": "1",
+    ]
+
+    /// `--settings` for the probe: `{"env": quietEnvironment}`. Claude Code
+    /// re-applies `env` from the user's settings files after spawn, so the
+    /// process environment alone is not enough; flag settings outrank those
+    /// files (not managed settings) and are never written to disk.
+    static let probeSettings: String = {
+        let data = try? JSONSerialization.data(
+            withJSONObject: ["env": quietEnvironment], options: [.sortedKeys])
+        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }()
+
+    /// Whether the organization's managed settings force the switch on —
+    /// `/Library/Application Support/ClaudeCode/managed-settings.json`, every
+    /// `managed-settings.d/*.json` beside it, or a configuration profile's
+    /// forced `env` in `com.anthropic.claudecode`. Those outrank the probe's
+    /// `--settings`, so Claude Code could not read the quota. The user's own
+    /// files and environment do not count here: the probe handles those.
+    /// Server-managed settings from the claude.ai console are fetched by
+    /// Claude Code and are not visible here; with those, the probe runs and
+    /// Claude Code answers without windows.
+    ///
+    /// Only that one key is used. Each file is parsed in memory and the rest
+    /// is dropped right away — never kept, logged, or put in diagnostics.
+    static func isForcedByPolicy(
         managedDirectory: URL = URL(fileURLWithPath: managedDirectoryPath),
         forcedManagedEnv: () -> Any? = ClaudeNonessentialTraffic.forcedManagedPreferencesEnv,
         fileManager: FileManager = .default
     ) -> Bool {
-        if isOn(environment[variable]) { return true }
-
-        var files: [URL] = []
-        if let custom = environment["CLAUDE_CONFIG_DIR"], !custom.isEmpty {
-            files.append(URL(fileURLWithPath: (custom as NSString).expandingTildeInPath)
-                .appendingPathComponent("settings.json"))
-        }
-        let claudeDirectory = home.appendingPathComponent(".claude")
-        files.append(claudeDirectory.appendingPathComponent("settings.json"))
-        files.append(claudeDirectory.appendingPathComponent("settings.local.json"))
-        files.append(managedDirectory.appendingPathComponent("managed-settings.json"))
+        var files = [managedDirectory.appendingPathComponent("managed-settings.json")]
         let dropIns = (try? fileManager.contentsOfDirectory(
             at: managedDirectory.appendingPathComponent("managed-settings.d"),
             includingPropertiesForKeys: nil,
@@ -97,8 +116,7 @@ enum ClaudeNonessentialTraffic {
     }
 
     /// Claude Code treats any non-empty value as set. A non-string value is
-    /// not valid in `env`; it counts as set too, erring towards not starting
-    /// Claude Code.
+    /// not valid in `env`; it counts as set too.
     static func isOn(_ value: Any?) -> Bool {
         guard let value, !(value is NSNull) else { return false }
         if let string = value as? String { return !string.isEmpty }

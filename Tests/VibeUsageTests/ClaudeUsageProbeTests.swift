@@ -19,21 +19,25 @@ struct ClaudeUsageProbeTests {
             "--output-format", "stream-json",
             "--input-format", "stream-json",
             "--verbose",
+            "--settings", ClaudeNonessentialTraffic.probeSettings,
         ])
         #expect(!ClaudeUsageProbe.processArguments.contains("--bare"))
     }
 
-    /// Network-privacy principle, rule 4: the probe never overrides the
-    /// user's Claude Code settings. It used to pass `--settings` to unset
-    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`; now it passes no settings
-    /// at all and leaves the variable in the child's environment.
+    /// Network-privacy principle, rules 4 and 6: the user's nonessential-
+    /// traffic switch would block the usage read itself, so the probe clears
+    /// only that master switch for its own process and turns every separate
+    /// off switch on — in the environment and, past the user's settings
+    /// files, in `--settings`. Whatever the user turned off stays off.
     @Test
-    func probeNeverOverridesTheUsersClaudeSettings() {
-        #expect(!ClaudeUsageProbe.processArguments.contains("--settings"))
-        #expect(!ClaudeUsageProbe.processArguments.contains { $0.contains("NONESSENTIAL") })
+    func probeKeepsTheUsersTrafficOffExceptTheUsageRead() throws {
+        let arguments = ClaudeUsageProbe.processArguments
+        let index = try #require(arguments.firstIndex(of: "--settings"))
+        #expect(arguments[index + 1] == ClaudeNonessentialTraffic.probeSettings)
 
         let env = ClaudeUsageProbe.childEnvironment(base: [
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "DISABLE_TELEMETRY": "",
             "CLAUDE_CONFIG_DIR": "/tmp/claude-profile",
             "CLAUDECODE": "1",
             "CLAUDE_CODE_ENTRYPOINT": "cli",
@@ -42,9 +46,12 @@ struct ClaudeUsageProbeTests {
             "CLAUDE_PID": "42",
             "PATH": "/custom/bin",
         ])
-        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1")
+        #expect(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == nil)
+        for (key, value) in ClaudeNonessentialTraffic.quietEnvironment where !value.isEmpty {
+            #expect(env[key] == value, "\(key)")
+        }
         #expect(env["CLAUDE_CONFIG_DIR"] == "/tmp/claude-profile")
-        // Session markers still go: they would make the probe a nested session.
+        // Session markers go: they would make the probe a nested session.
         for marker in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID",
                        "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_PID"] {
             #expect(env[marker] == nil)

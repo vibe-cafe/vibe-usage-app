@@ -2,21 +2,47 @@ import Foundation
 import Testing
 @testable import VibeUsage
 
-/// `ClaudeNonessentialTraffic` decides whether the Claude probe may start
-/// Claude Code at all. Every case runs against a throwaway home and managed
-/// directory, never the real ones.
+/// `ClaudeNonessentialTraffic`: the probe's quiet environment, and whether an
+/// organization's policy forces Claude Code's nonessential traffic off. Every
+/// file case runs against a throwaway managed directory, never the real one.
 struct ClaudeNonessentialTrafficTests {
+
+    private static let key = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
+
+    /// The master switch is cleared with an empty string (Claude Code counts
+    /// `"0"` as on) and the separate switches the user may have meant are on.
+    @Test
+    func quietEnvironmentClearsOnlyTheMasterSwitch() {
+        let env = ClaudeNonessentialTraffic.quietEnvironment
+        #expect(env[Self.key] == "")
+        for key in ["DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_AUTOUPDATER",
+                    "DISABLE_BUG_COMMAND", "DISABLE_UPDATES", "DISABLE_FEEDBACK_COMMAND",
+                    "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY", "DISABLE_GROWTHBOOK",
+                    "CLAUDE_CODE_DISABLE_FEATURE_FLAGS", "CLAUDE_CODE_DISABLE_VITALS_EMITTER",
+                    "DISABLE_INSTALLATION_CHECKS",
+                    "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL", "DO_NOT_TRACK"] {
+            #expect(env[key] == "1", "\(key)")
+        }
+        #expect(env["CLAUDE_CODE_MODEL_CATALOG"] == "0")
+        #expect(env.values.filter(\.isEmpty).count == 1)
+    }
+
+    @Test
+    func probeSettingsCarryExactlyTheQuietEnvironment() throws {
+        let object = try #require(try JSONSerialization.jsonObject(
+            with: Data(ClaudeNonessentialTraffic.probeSettings.utf8)) as? [String: Any])
+        #expect(object.count == 1)
+        let env = try #require(object["env"] as? [String: String])
+        #expect(env == ClaudeNonessentialTraffic.quietEnvironment)
+    }
 
     private struct Sandbox {
         let root: URL
-        var home: URL { root.appendingPathComponent("home") }
         var managed: URL { root.appendingPathComponent("managed") }
 
         init() throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("vu-nonessential-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(
-                at: home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: managed, withIntermediateDirectories: true)
         }
 
@@ -26,131 +52,72 @@ struct ClaudeNonessentialTrafficTests {
             try Data(text.utf8).write(to: url)
         }
 
-        func disabled(
-            environment: [String: String] = [:],
-            forced: Any? = nil
-        ) -> Bool {
-            ClaudeNonessentialTraffic.isDisabledByUser(
-                environment: environment,
-                home: home,
-                managedDirectory: managed,
-                forcedManagedEnv: { forced }
-            )
+        func forced(_ profile: Any? = nil) -> Bool {
+            ClaudeNonessentialTraffic.isForcedByPolicy(
+                managedDirectory: managed, forcedManagedEnv: { profile })
         }
 
         func remove() { try? FileManager.default.removeItem(at: root) }
     }
-
-    private static let key = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 
     private static func settings(_ value: String) -> String {
         #"{"model":"x","env":{"ANTHROPIC_API_KEY":"secret","\#(key)":\#(value)}}"#
     }
 
     @Test
-    func offWhenNoSourceSetsIt() throws {
+    func noPolicyByDefault() throws {
         let box = try Sandbox()
         defer { box.remove() }
-        #expect(!box.disabled())
-        try box.write(#"{"env":{"OTHER":"1"}}"#, to: box.home.appendingPathComponent(".claude/settings.json"))
-        #expect(!box.disabled())
-    }
-
-    /// Claude Code counts any non-empty value, `"0"` and `"false"` included.
-    @Test
-    func appEnvironmentCountsAnyNonEmptyValue() throws {
-        let box = try Sandbox()
-        defer { box.remove() }
-        #expect(box.disabled(environment: [Self.key: "1"]))
-        #expect(box.disabled(environment: [Self.key: "0"]))
-        #expect(box.disabled(environment: [Self.key: "false"]))
-        #expect(!box.disabled(environment: [Self.key: ""]))
+        #expect(!box.forced())
+        try box.write(#"{"env":{"OTHER":"1"}}"#, to: box.managed.appendingPathComponent("managed-settings.json"))
+        #expect(!box.forced())
     }
 
     @Test
-    func userSettingsFileTurnsItOn() throws {
-        let box = try Sandbox()
-        defer { box.remove() }
-        try box.write(Self.settings(#""1""#), to: box.home.appendingPathComponent(".claude/settings.json"))
-        #expect(box.disabled())
-    }
-
-    @Test
-    func claudeConfigDirSettingsFileTurnsItOn() throws {
-        let box = try Sandbox()
-        defer { box.remove() }
-        let profile = box.root.appendingPathComponent("profile")
-        try box.write(Self.settings(#""1""#), to: profile.appendingPathComponent("settings.json"))
-        #expect(box.disabled(environment: ["CLAUDE_CONFIG_DIR": profile.path]))
-        // The same file is not consulted without the variable pointing at it.
-        #expect(!box.disabled())
-    }
-
-    /// The probe runs with the home directory as its working directory, so
-    /// `~/.claude/settings.local.json` is that project's local settings.
-    @Test
-    func homeProjectLocalSettingsTurnItOn() throws {
-        let box = try Sandbox()
-        defer { box.remove() }
-        try box.write(Self.settings(#""true""#), to: box.home.appendingPathComponent(".claude/settings.local.json"))
-        #expect(box.disabled())
-    }
-
-    @Test
-    func managedSettingsFileAndDropInsTurnItOn() throws {
+    func managedSettingsFileAndDropInsForceIt() throws {
         let box = try Sandbox()
         defer { box.remove() }
         try box.write(Self.settings(#""1""#), to: box.managed.appendingPathComponent("managed-settings.json"))
-        #expect(box.disabled())
+        #expect(box.forced())
 
         let other = try Sandbox()
         defer { other.remove() }
         try other.write(#"{"env":{}}"#, to: other.managed.appendingPathComponent("managed-settings.d/10-base.json"))
-        #expect(!other.disabled())
+        #expect(!other.forced())
         try other.write(Self.settings(#""1""#), to: other.managed.appendingPathComponent("managed-settings.d/20-privacy.json"))
-        #expect(other.disabled())
+        #expect(other.forced())
         // Only `.json` drop-ins count, like Claude Code.
         let third = try Sandbox()
         defer { third.remove() }
         try third.write(Self.settings(#""1""#), to: third.managed.appendingPathComponent("managed-settings.d/notes.txt"))
-        #expect(!third.disabled())
+        #expect(!third.forced())
     }
 
     @Test
-    func forcedConfigurationProfileTurnsItOn() throws {
+    func forcedConfigurationProfileForcesIt() throws {
         let box = try Sandbox()
         defer { box.remove() }
-        #expect(box.disabled(forced: [Self.key: "1"]))
-        #expect(!box.disabled(forced: [Self.key: ""]))
-        #expect(!box.disabled(forced: ["OTHER": "1"]))
-        #expect(!box.disabled(forced: "not a dictionary"))
+        #expect(box.forced([Self.key: "1"]))
+        #expect(box.forced([Self.key: "0"]))
+        #expect(!box.forced([Self.key: ""]))
+        #expect(!box.forced(["OTHER": "1"]))
+        #expect(!box.forced("not a dictionary"))
     }
 
     @Test
     func emptyMissingOrUnreadableValuesDoNotCount() throws {
         let box = try Sandbox()
         defer { box.remove() }
-        let file = box.home.appendingPathComponent(".claude/settings.json")
+        let file = box.managed.appendingPathComponent("managed-settings.json")
         try box.write(Self.settings(#""""#), to: file)
-        #expect(!box.disabled())
+        #expect(!box.forced())
         try box.write(Self.settings("null"), to: file)
-        #expect(!box.disabled())
+        #expect(!box.forced())
         try box.write("{ not json", to: file)
-        #expect(!box.disabled())
+        #expect(!box.forced())
         try box.write(#"{"env":"not an object"}"#, to: file)
-        #expect(!box.disabled())
-    }
-
-    /// `env` values should be strings. Anything else that is present errs
-    /// towards not starting Claude Code.
-    @Test
-    func nonStringValuesCountAsOn() throws {
-        let box = try Sandbox()
-        defer { box.remove() }
-        let file = box.home.appendingPathComponent(".claude/settings.json")
-        try box.write(Self.settings("1"), to: file)
-        #expect(box.disabled())
+        #expect(!box.forced())
         try box.write(Self.settings("true"), to: file)
-        #expect(box.disabled())
+        #expect(box.forced())
     }
 }

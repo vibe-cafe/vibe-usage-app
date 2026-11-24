@@ -44,10 +44,10 @@ enum ClaudeUsageProbe {
         /// usage endpoint failed (offline, or logged out). Distinct from
         /// `limitsNotApplicable` because here a retry can succeed.
         case limitsUnavailable
-        /// The user switched off Claude Code's nonessential traffic
-        /// (`ClaudeNonessentialTraffic`). Claude Code was not started: with
-        /// that switch it cannot return windows, and the probe must not turn
-        /// it back on. Changes only when the user changes the setting.
+        /// The organization's managed settings force Claude Code's
+        /// nonessential traffic off (`ClaudeNonessentialTraffic.isForcedByPolicy`).
+        /// Those outrank the probe's `--settings`, so Claude Code cannot read
+        /// the quota; it was not started. Changes only with the policy.
         case nonessentialTrafficDisabled
 
         var rateLimitFailure: RateLimitFetchFailure {
@@ -93,10 +93,10 @@ enum ClaudeUsageProbe {
 
     /// Try each discovered binary in order until one answers. Runs entirely off
     /// the main actor; honors task cancellation (panel closed mid-probe) by
-    /// terminating the child process. Starts nothing when the user switched off
-    /// Claude Code's nonessential traffic.
+    /// terminating the child process. Starts nothing when the organization's
+    /// policy forces Claude Code's nonessential traffic off.
     static func fetch(now: Date = Date()) async throws -> ProviderRateLimit {
-        if ClaudeNonessentialTraffic.isDisabledByUser() {
+        if ClaudeNonessentialTraffic.isForcedByPolicy() {
             throw ProbeError.nonessentialTrafficDisabled
         }
         return try await fetch(candidates: discoverBinaries(), now: now, timeout: timeout)
@@ -474,12 +474,14 @@ enum ClaudeUsageProbe {
     /// Claude Code releases. Keep the process arguments testable so a future
     /// CLI flag change cannot silently turn every probe into `.noResponse`.
     ///
-    /// No `--settings`: the probe never overrides the user's Claude Code
-    /// settings. It used to pass one that unset
-    /// `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, turning back on traffic the
-    /// user had switched off; `fetch` now checks that switch and starts nothing
-    /// when it is on (`ClaudeNonessentialTraffic`). Never `--bare` either: it
-    /// skips the keychain the binary needs to fetch usage.
+    /// `--settings` is process-local, in-memory JSON
+    /// (`ClaudeNonessentialTraffic.probeSettings`): the nonessential-traffic
+    /// master switch cleared — with it on, Claude Code blocks the usage read
+    /// itself — and every separate off switch on, so whatever the user turned
+    /// off stays off and the probe adds only the usage read. Claude Code
+    /// re-applies `env` from the user's settings files after spawn; flag
+    /// settings outrank them. The probe never writes those files, and never
+    /// passes `--bare` (it skips the keychain the binary needs to fetch usage).
     static let processArguments = [
         "--print",
         "--safe-mode",
@@ -490,6 +492,7 @@ enum ClaudeUsageProbe {
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose",
+        "--settings", ClaudeNonessentialTraffic.probeSettings,
     ]
 
     /// Body of the `get_usage` control request. `skip_behaviors` is
@@ -704,12 +707,14 @@ enum ClaudeUsageProbe {
         }
     }
 
-    /// The app inherits whatever launched it. The session markers Claude Code
-    /// exports into its own child processes are scrubbed, since they would
-    /// make the probe look like a nested session. Everything else passes
-    /// through unchanged — in particular `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
-    /// is the user's setting and is never removed (`fetch` does not start
-    /// Claude Code when it is on).
+    /// The app inherits whatever launched it. Before handing that to the child:
+    ///
+    /// - the session markers Claude Code exports into its own child processes
+    ///   are scrubbed, since they would make the probe look like a nested
+    ///   session;
+    /// - the nonessential-traffic master switch is removed and the separate
+    ///   off switches are set (`ClaudeNonessentialTraffic.quietEnvironment`;
+    ///   `--settings` carries the same set past the user's settings files).
     ///
     /// `CLAUDE_CONFIG_DIR` is deliberately preserved: users who relocate
     /// `~/.claude` need the probe to read the same profile they use.
@@ -725,6 +730,13 @@ enum ClaudeUsageProbe {
             "CLAUDE_PID",
         ] {
             env.removeValue(forKey: key)
+        }
+        for (key, value) in ClaudeNonessentialTraffic.quietEnvironment {
+            if value.isEmpty {
+                env.removeValue(forKey: key)
+            } else {
+                env[key] = value
+            }
         }
         // A GUI app launched from Finder gets a minimal PATH; the binary itself
         // is self-contained but may shell out for git metadata.

@@ -50,7 +50,7 @@ struct RateLimitCardViewTests {
         // user is not left wondering whether the card is broken.
         #expect(messages[3] == "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）")
         // The user's own Claude Code setting, named as such: not a failure.
-        #expect(messages[4] == "已关闭 Claude Code 非必要流量 · 按你的设置不读取")
+        #expect(messages[4] == "组织策略关闭了 Claude Code 非必要流量 · 无法读取")
     }
 
     /// The "used up" line belongs only to a source that actually reported it:
