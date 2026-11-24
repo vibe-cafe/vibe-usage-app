@@ -58,9 +58,6 @@ enum CodexUsageAPI {
     static func fetch(now: Date = Date()) async throws -> ProviderRateLimit {
         guard var auth = loadAuth() else { throw FetchError.notLoggedIn }
         var endpoint = usageURL()
-        // Direct to OpenAI: confirm the egress before the token goes out
-        // (`EgressCheck`; throws `EgressCheck.Paused`).
-        try await EgressCheck.checkCodex(url: endpoint)
 
         var (data, status) = try await send(
             url: endpoint,
@@ -119,6 +116,9 @@ enum CodexUsageAPI {
                 // sleep (popover closed mid-fetch) aborts the whole fetch.
                 try await Task.sleep(for: .milliseconds(500 * (1 << (attempt - 2))))
             }
+            // Direct to OpenAI: confirm the egress before the token goes out,
+            // on every attempt (`EgressCheck`; throws `EgressCheck.Paused`).
+            try await EgressCheck.checkCodex(url: url)
             do {
                 // Pinned to the system route for this URL: a proxy that is
                 // down fails the request instead of letting it go direct.

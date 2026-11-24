@@ -111,9 +111,11 @@ private struct EgressSettingsCard: View {
             SettingsRow(tall: true) {
                 SettingsRowLabel(
                     title: "检测网络出口",
-                    caption: appState.egressCheckEnabled
-                        ? "未检测到代理时，先匿名确认出口地区再读取"
-                        : "关闭后，未检测到代理时直接读取"
+                    caption: appState.egressRequiresLocalProxy
+                        ? "已按下面的设置，未检测到代理时直接暂停"
+                        : appState.egressCheckEnabled
+                            ? "未检测到代理时，先匿名确认出口地区再读取"
+                            : "关闭后，未检测到代理时直接读取"
                 )
                 Spacer(minLength: 8)
                 Toggle("检测网络出口", isOn: Binding(

@@ -689,7 +689,9 @@ final class AppState {
         guard isQuotaProviderSelected(provider),
               !isRateLimitRefreshing(provider),
               let snapshot = rateLimits.first(where: { $0.provider == provider }),
-              snapshot.status != .ok
+              // Numbers kept on screen while the egress check pauses the
+              // read still warn: they are not being refreshed.
+              snapshot.status != .ok || snapshot.liveFailure?.isEgressPause == true
         else { return nil }
         return snapshot
     }

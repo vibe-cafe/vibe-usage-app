@@ -47,11 +47,13 @@ enum EgressCheck {
     }
 
     /// The same two settings for the CLI, which checks Antigravity itself.
+    /// Both are always written out, so a value the user set in their own
+    /// environment for the terminal cannot override what Settings shows.
     static func cliEnvironment(_ defaults: UserDefaults = .standard) -> [String: String] {
-        var environment: [String: String] = [:]
-        if !isEnabled(defaults) { environment["VIBE_USAGE_EGRESS_CHECK"] = "0" }
-        if requiresProxy(defaults) { environment["VIBE_USAGE_REQUIRE_PROXY"] = "1" }
-        return environment
+        [
+            "VIBE_USAGE_EGRESS_CHECK": isEnabled(defaults) ? "1" : "0",
+            "VIBE_USAGE_REQUIRE_PROXY": requiresProxy(defaults) ? "1" : "0",
+        ]
     }
 
     // MARK: - Decision
@@ -101,8 +103,9 @@ enum EgressCheck {
     /// chose: OpenAI sees the relay, not this Mac, so there is nothing to check.
     static let openAIHosts: Set<String> = ["chatgpt.com", "chat.openai.com"]
 
-    /// Before Codex's account request: checked only when that URL's system
-    /// route is direct.
+    /// Before each Codex account request (every attempt: the session reads the
+    /// route again for each one, and a proxy client that quit between attempts
+    /// leaves it direct): checked only when that URL's system route is direct.
     static func checkCodex(
         url: URL,
         route: @escaping @Sendable (URL) async -> SystemProxy.Route = { await SystemProxy.routes(for: [$0]).first ?? .unresolved },
@@ -115,21 +118,79 @@ enum EgressCheck {
     }
 
     /// Before Claude Code is started: checked when any Anthropic host it
-    /// reaches goes out direct (the first such host is asked). Proxy variables
-    /// in the app's own environment go to Claude Code as they are, so they
-    /// count as a proxy (`SystemProxy.claudeLaunch`).
+    /// reaches goes out direct (the first such host is asked).
     static func checkClaude(
         base: [String: String],
+        settingsEnvironment: [String: String] = claudeSettingsProxyEnvironment(base: ProcessInfo.processInfo.environment),
         routes: @escaping @Sendable ([String]) async -> [(host: String, route: SystemProxy.Route)] = {
             await SystemProxy.routes(forHosts: $0)
         },
         defaults: UserDefaults = .standard,
         checker: Checker = .shared
     ) async throws {
-        guard !SystemProxy.hasOwnProxy(base),
-              let host = await routes(SystemProxy.claudeHosts).first(where: { $0.route == .direct })?.host
+        guard let host = await claudeTraceHost(base: base, settingsEnvironment: settingsEnvironment, routes: routes)
         else { return }
         try await requireDirect(traceHost: host, defaults: defaults, checker: checker)
+    }
+
+    /// The Anthropic host Claude Code would reach direct, judged by the proxy
+    /// it really ends up with: the app's own proxy variables, which it gets
+    /// as they are, with the `env` of its own `settings.json` on top (Claude
+    /// Code applies that over its environment; a proxy set only there is
+    /// common). With a proxy variable a host is direct only when the bypass
+    /// list names it; without one the system route decides (`claudeLaunch`
+    /// hands that proxy over), and the bypass list can still send a host
+    /// direct. The list is matched broadly (`bypassMatches`): reading a host
+    /// as direct costs one check, reading it as proxied would skip one.
+    static func claudeTraceHost(
+        base: [String: String],
+        settingsEnvironment: [String: String],
+        routes: ([String]) async -> [(host: String, route: SystemProxy.Route)]
+    ) async -> String? {
+        let effective = base.merging(settingsEnvironment) { _, setting in setting }
+        let bypass = ["no_proxy", "NO_PROXY"].lazy
+            .compactMap { effective[$0]?.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? ""
+        if SystemProxy.hasOwnProxy(effective) {
+            return SystemProxy.claudeHosts.first { bypassMatches(host: $0, list: bypass) }
+        }
+        let direct = Set(await routes(SystemProxy.claudeHosts).filter { $0.route == .direct }.map(\.host))
+        return SystemProxy.claudeHosts.first { direct.contains($0) || bypassMatches(host: $0, list: bypass) }
+    }
+
+    /// A bypass list (`NO_PROXY`) read broadly, as any of the runtimes might:
+    /// `*`, an exact host, or a domain and its subdomains (with or without a
+    /// leading `.` / `*.`); ports are ignored.
+    static func bypassMatches(host: String, list: String) -> Bool {
+        let host = host.lowercased()
+        for raw in list.split(whereSeparator: { $0 == "," || $0.isWhitespace }) {
+            var entry = raw.lowercased()
+            if entry == "*" { return true }
+            if !entry.hasPrefix("["), let colon = entry.lastIndex(of: ":") { entry = String(entry[..<colon]) }
+            if entry.hasPrefix("*.") { entry.removeFirst(2) } else if entry.hasPrefix(".") { entry.removeFirst() }
+            if !entry.isEmpty, host == entry || host.hasSuffix("." + entry) { return true }
+        }
+        return false
+    }
+
+    static let proxyEnvironmentNames = [
+        "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+    ]
+
+    /// The proxy variables in Claude Code's own `settings.json` `env`
+    /// (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`).
+    /// Only those keys are read; nothing is kept or logged.
+    static func claudeSettingsProxyEnvironment(base: [String: String]) -> [String: String] {
+        let url = DiagnosticCollector.claudeSettingsURL(environment: base)
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let env = root["env"] as? [String: Any]
+        else { return [:] }
+        var found: [String: String] = [:]
+        for name in proxyEnvironmentNames {
+            if let value = env[name] as? String { found[name] = value }
+        }
+        return found
     }
 
     // MARK: - The check itself

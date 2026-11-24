@@ -333,8 +333,13 @@ extension ProviderRateLimit.LiveFailure {
     /// A read stopped on purpose before it was sent (a policy or the egress
     /// check), not one that failed: diagnostics say 「已暂停」.
     var isPause: Bool {
+        self == .claudeBlockedByPolicy || isEgressPause
+    }
+
+    /// Paused by the egress check (`EgressCheck`): the next read checks again.
+    var isEgressPause: Bool {
         switch self {
-        case .claudeBlockedByPolicy, .egressRegionUnsupported, .egressUnconfirmed, .proxyNotDetected: return true
+        case .egressRegionUnsupported, .egressUnconfirmed, .proxyNotDetected: return true
         default: return false
         }
     }

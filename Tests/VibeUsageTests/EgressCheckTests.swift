@@ -81,11 +81,13 @@ struct EgressCheckTests {
             try await EgressCheck.requireDirect(traceHost: "chatgpt.com", defaults: manual, checker: check)
         }
         #expect(calls.value.isEmpty)
-        #expect(EgressCheck.cliEnvironment(off) == ["VIBE_USAGE_EGRESS_CHECK": "0"])
-        #expect(EgressCheck.cliEnvironment(manual) == ["VIBE_USAGE_REQUIRE_PROXY": "1"])
+        // Always both, so a value inherited from the user's own environment
+        // cannot override Settings.
+        #expect(EgressCheck.cliEnvironment(off) == ["VIBE_USAGE_EGRESS_CHECK": "0", "VIBE_USAGE_REQUIRE_PROXY": "0"])
+        #expect(EgressCheck.cliEnvironment(manual) == ["VIBE_USAGE_EGRESS_CHECK": "1", "VIBE_USAGE_REQUIRE_PROXY": "1"])
         let (plain, plainSuite) = defaults()
         defer { plain.removePersistentDomain(forName: plainSuite) }
-        #expect(EgressCheck.cliEnvironment(plain).isEmpty)
+        #expect(EgressCheck.cliEnvironment(plain) == ["VIBE_USAGE_EGRESS_CHECK": "1", "VIBE_USAGE_REQUIRE_PROXY": "0"])
         #expect(EgressCheck.isEnabled(plain))
         #expect(!EgressCheck.requiresProxy(plain))
     }
@@ -174,25 +176,51 @@ struct EgressCheckTests {
         let calls = Box<[String]>([])
         let check = checker(answer: Box("US"), calls: calls)
         let proxied: SystemProxy.Route = .http(host: "127.0.0.1", port: 7890)
-        try await EgressCheck.checkClaude(
-            base: [:], routes: { hosts in hosts.map { ($0, proxied) } }, defaults: store, checker: check
-        )
+        func run(
+            base: [String: String] = [:], settings: [String: String] = [:],
+            direct: Set<String> = []
+        ) async throws {
+            try await EgressCheck.checkClaude(
+                base: base, settingsEnvironment: settings,
+                routes: { hosts in hosts.map { ($0, direct.contains($0) ? .direct : proxied) } },
+                defaults: store, checker: check
+            )
+        }
+        try await run()
         #expect(calls.value.isEmpty)
         // The app's own proxy variables go to Claude Code as they are.
-        try await EgressCheck.checkClaude(
-            base: ["HTTPS_PROXY": "http://127.0.0.1:7890"], routes: { hosts in hosts.map { ($0, .direct) } },
-            defaults: store, checker: check
-        )
+        try await run(base: ["HTTPS_PROXY": "http://127.0.0.1:7890"], direct: Set(SystemProxy.claudeHosts))
         #expect(calls.value.isEmpty)
-        try await EgressCheck.checkClaude(
-            base: [:], routes: { hosts in hosts.map { ($0, $0 == "claude.ai" ? .direct : proxied) } },
-            defaults: store, checker: check
-        )
+        try await run(direct: ["claude.ai"])
         #expect(calls.value == ["claude.ai"])
-        try await EgressCheck.checkClaude(
-            base: [:], routes: { hosts in hosts.map { ($0, .direct) } }, defaults: store, checker: check
-        )
+        try await run(direct: Set(SystemProxy.claudeHosts))
         #expect(calls.value == ["claude.ai", "api.anthropic.com"])
+        // Which host is asked, without the checker's cache in the way.
+        func host(
+            base: [String: String] = [:], settings: [String: String] = [:], direct: Set<String> = []
+        ) async -> String? {
+            await EgressCheck.claudeTraceHost(base: base, settingsEnvironment: settings) { hosts in
+                hosts.map { ($0, direct.contains($0) ? .direct : proxied) }
+            }
+        }
+        // The app's own proxy with the user's bypass list: that host goes direct.
+        #expect(await host(base: ["HTTPS_PROXY": "http://127.0.0.1:7890", "NO_PROXY": "anthropic.com"])
+            == "api.anthropic.com")
+        // A proxy set only in Claude Code's own settings.json is a proxy.
+        #expect(await host(settings: ["HTTPS_PROXY": "http://127.0.0.1:7890"], direct: Set(SystemProxy.claudeHosts)) == nil)
+        // ...and its own bypass list, also past the system proxy, sends a host direct.
+        #expect(await host(settings: ["HTTPS_PROXY": "http://127.0.0.1:7890", "no_proxy": "claude.ai"]) == "claude.ai")
+        #expect(await host(settings: ["NO_PROXY": ".claude.ai"]) == "claude.ai")
+    }
+
+    @Test
+    func bypassListsAreReadBroadly() {
+        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "anthropic.com"))
+        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "localhost, .anthropic.com"))
+        #expect(EgressCheck.bypassMatches(host: "api.anthropic.com", list: "*.anthropic.com:443"))
+        #expect(EgressCheck.bypassMatches(host: "claude.ai", list: "*"))
+        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: "notanthropic.com"))
+        #expect(!EgressCheck.bypassMatches(host: "api.anthropic.com", list: ""))
     }
 
     @Test
@@ -255,6 +283,10 @@ struct EgressCheckTests {
         #expect(status(.egressRegionUnsupported("CN")) == "出口受限，已暂停")
         #expect(status(.egressUnconfirmed) == "出口未确认")
         #expect(status(.proxyNotDetected) == "无代理，已暂停")
+        // Numbers kept on the card while paused: Settings still says paused.
+        var keptOK = ProviderRateLimit(provider: .codex, status: .ok, liveFailure: .egressUnconfirmed)
+        keptOK.source = .cache
+        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: keptOK).text == "出口未确认")
     }
 
     @Test
@@ -312,6 +344,35 @@ struct EgressCheckTests {
         #expect(kept?.status == .ok)
         #expect(kept?.meters.first?.window.utilization == 30)
         #expect(kept?.liveFailure == .egressRegionUnsupported("CN"))
+    }
+
+    @Test @MainActor
+    func aPausedReadIsTriedAgainAtTheNextOpen() async {
+        let appState = AppState()
+        var fetches = 0
+        var paused = true
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                fetches += 1
+                if paused { throw EgressCheck.Paused(reason: .regionUnsupported("CN")) }
+                return ProviderRateLimit(
+                    provider: .codex,
+                    meters: [RateLimitMeter(id: "5h", label: "5h", window: RateLimitWindow(utilization: 10))],
+                    status: .ok, fetchedAt: Date(), source: .live
+                )
+            },
+            loadCodexCache: { nil },
+            readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData) }
+        )
+        await coordinator.refreshCodexIfNeeded()
+        paused = false
+        // Within the usual minute: not skipped, since the last read was paused.
+        await coordinator.refreshCodexIfNeeded()
+        #expect(fetches == 2)
+        #expect(appState.rateLimits.first { $0.provider == .codex }?.status == .ok)
+        await coordinator.refreshCodexIfNeeded()
+        #expect(fetches == 2)
     }
 
     @Test @MainActor
