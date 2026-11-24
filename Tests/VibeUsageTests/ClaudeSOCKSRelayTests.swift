@@ -83,7 +83,7 @@ struct ClaudeSOCKSRelayTests {
         let launch = await SystemProxy.claudeLaunch(
             base: ["PATH": "/usr/bin", "no_proxy": "corp.example"],
             routes: { hosts in hosts.map { (host: $0, route: .socks(host: "127.0.0.1", port: 7891)) } },
-            startRelay: { try await ClaudeSOCKSRelay.start(route: { _ in .unresolved }) }
+            startRelay: { route in try await ClaudeSOCKSRelay.start(route: route) }
         )
         let relay = try #require(launch.relay)
         defer { relay.stop() }
@@ -94,13 +94,36 @@ struct ClaudeSOCKSRelayTests {
         #expect(noProxy.contains("corp.example") && noProxy.contains("127.0.0.1"))
     }
 
+    /// The relay keeps the routes resolved at launch: a proxy client that
+    /// restarts mid-probe (no system proxy for a moment) cannot make it
+    /// connect directly. A host the PAC sent direct stays direct.
+    @Test
+    func theRelayKeepsTheLaunchRoutes() async throws {
+        let captured = RouteBox()
+        let launch = await SystemProxy.claudeLaunch(
+            base: ["PATH": "/usr/bin"],
+            routes: { hosts in hosts.map { host in
+                (host: host, route: host == "claude.ai" ? .direct : .socks(host: "127.0.0.1", port: 7891))
+            } },
+            startRelay: { route in
+                captured.route = route
+                return try await ClaudeSOCKSRelay.start(route: route)
+            }
+        )
+        defer { launch.relay?.stop() }
+        let route = try #require(captured.route)
+        #expect(await route(URL(string: "https://api.anthropic.com:443/")!) == .socks(host: "127.0.0.1", port: 7891))
+        #expect(await route(URL(string: "https://statsig.anthropic.com:443/")!) == .socks(host: "127.0.0.1", port: 7891))
+        #expect(await route(URL(string: "https://claude.ai:443/")!) == .direct)
+    }
+
     @Test
     func aRelayThatCannotStartFailsClosed() async {
         struct Refused: Error {}
         let launch = await SystemProxy.claudeLaunch(
             base: ["PATH": "/usr/bin"],
             routes: { hosts in hosts.map { (host: $0, route: .socks(host: "127.0.0.1", port: 7891)) } },
-            startRelay: { throw Refused() }
+            startRelay: { _ in throw Refused() }
         )
         #expect(launch.relay == nil)
         #expect(launch.environment["HTTPS_PROXY"] == SystemProxy.failClosedURL)
@@ -111,14 +134,14 @@ struct ClaudeSOCKSRelayTests {
         let http = await SystemProxy.claudeLaunch(
             base: ["PATH": "/usr/bin"],
             routes: { hosts in hosts.map { (host: $0, route: .http(host: "127.0.0.1", port: 7890)) } },
-            startRelay: { Issue.record("no relay expected"); throw CancellationError() }
+            startRelay: { _ in Issue.record("no relay expected"); throw CancellationError() }
         )
         #expect(http.relay == nil)
         #expect(http.environment["HTTPS_PROXY"] == "http://127.0.0.1:7890")
         let own = await SystemProxy.claudeLaunch(
             base: ["HTTPS_PROXY": "http://10.0.0.2:3128"],
             routes: { _ in Issue.record("system routes not read"); return [] },
-            startRelay: { Issue.record("no relay expected"); throw CancellationError() }
+            startRelay: { _ in Issue.record("no relay expected"); throw CancellationError() }
         )
         #expect(own.relay == nil)
         #expect(own.environment["HTTPS_PROXY"] == "http://10.0.0.2:3128")
@@ -248,6 +271,8 @@ private final class LocalServer: @unchecked Sendable {
 }
 
 private final class ServerBox: @unchecked Sendable { var server: LocalServer? }
+
+private final class RouteBox: @unchecked Sendable { var route: (@Sendable (URL) async -> SystemProxy.Route)? }
 
 private final class Fired: @unchecked Sendable {
     private let lock = NSLock()

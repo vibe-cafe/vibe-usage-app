@@ -620,6 +620,7 @@ final class RateLimitCoordinator {
         if !visible {
             cancelCodexRefresh()
             cancelClaudeRefresh()
+            cancelOpenCodeGoRefresh()
             cancelCLIRefresh()
         }
     }

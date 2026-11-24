@@ -37,20 +37,29 @@ extension LoginLaunch {
     static let proxyWaitLimit: TimeInterval = 120
     static let proxyPollInterval: TimeInterval = 2
 
-    /// Waits until the system proxy the CLI would use for `url` accepts a
-    /// connection (PAC included), at most `limit`. True when it came up,
-    /// false at the limit. With no system proxy yet it keeps waiting: many
-    /// proxy clients set the system proxy only once they have started, and
-    /// whether this user relies on a proxy at all is not known here (that
-    /// question is a separate change). A proxy that never answers just runs
-    /// out the limit; requests sent to it afterwards fail instead of going
-    /// direct.
+    /// The URLs whose routes tell whether the user's proxy is up: the sync
+    /// server and the vendors the app reads. A PAC often sends the sync
+    /// server direct and only the vendors through the proxy.
+    static func proxyProbeURLs(server: URL) -> [URL] {
+        [server] + (SystemProxy.claudeHosts + ["chatgpt.com", "cursor.com", "opencode.ai"])
+            .compactMap { URL(string: "https://\($0)/") }
+    }
+
+    /// Waits until a proxy the app would use accepts a connection, at most
+    /// `limit`: the user's own proxy variable (`ownProxy`), or the system
+    /// route (PAC included) of any of `urls`. True when one came up, false at
+    /// the limit. With no proxy yet it keeps waiting: many proxy clients set
+    /// the system proxy only once they have started, and whether this user
+    /// relies on a proxy at all is not known here (that question is a
+    /// separate change). A proxy that never answers just runs out the limit;
+    /// requests sent to it afterwards fail instead of going direct.
     static func waitForProxy(
-        url: URL,
+        urls: [URL],
+        ownProxy: (host: String, port: Int)? = nil,
         limit: TimeInterval = proxyWaitLimit,
         interval: TimeInterval = proxyPollInterval,
-        route: @escaping @Sendable (URL) async -> SystemProxy.Route = { url in
-            await SystemProxy.routes(for: [url]).first ?? .direct
+        routes: @escaping @Sendable ([URL]) async -> [SystemProxy.Route] = { urls in
+            await SystemProxy.routes(for: urls)
         },
         accepts: @escaping @Sendable (String, Int) async -> Bool = LoginLaunch.accepts,
         now: @escaping @Sendable () -> Date = Date.init,
@@ -60,12 +69,16 @@ extension LoginLaunch {
     ) async -> Bool {
         let deadline = now().addingTimeInterval(limit)
         while !Task.isCancelled {
-            switch await route(url) {
-            case let .http(host, port), let .socks(host, port):
-                if await accepts(host, port) { return true }
-            case .direct, .unresolved:
-                break
+            var endpoints: [(String, Int)] = ownProxy.map { [($0.host, $0.port)] } ?? []
+            for route in await routes(urls) {
+                switch route {
+                case let .http(host, port), let .socks(host, port):
+                    if !endpoints.contains(where: { $0 == (host, port) }) { endpoints.append((host, port)) }
+                case .direct, .unresolved:
+                    break
+                }
             }
+            for (host, port) in endpoints where await accepts(host, port) { return true }
             if now() >= deadline { return false }
             await sleep(interval)
         }
@@ -77,7 +90,7 @@ extension LoginLaunch {
         guard let endpointPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return false }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: .tcp)
         return await withCheckedContinuation { continuation in
-            let once = AcceptOnce(continuation)
+            let once = AcceptOnce(continuation) { connection.cancel() }
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready: once.finish(true)
@@ -87,7 +100,6 @@ extension LoginLaunch {
             }
             connection.start(queue: .global(qos: .utility))
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) { once.finish(false) }
-            once.onFinish = { connection.cancel() }
         }
     }
 }
@@ -95,18 +107,20 @@ extension LoginLaunch {
 private final class AcceptOnce: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Bool, Never>?
-    var onFinish: (() -> Void)?
+    private let cleanup: @Sendable () -> Void
 
-    init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
+    init(_ continuation: CheckedContinuation<Bool, Never>, cleanup: @escaping @Sendable () -> Void) {
+        self.continuation = continuation
+        self.cleanup = cleanup
+    }
 
     func finish(_ value: Bool) {
         lock.lock()
         let pending = continuation
         continuation = nil
-        let cleanup = onFinish
         lock.unlock()
         guard let pending else { return }
-        cleanup?()
+        cleanup()
         pending.resume(returning: value)
     }
 }

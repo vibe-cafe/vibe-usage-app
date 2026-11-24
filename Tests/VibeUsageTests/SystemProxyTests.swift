@@ -288,8 +288,8 @@ struct SystemProxyTests {
         let clock = FakeClock()
         let routes = RouteScript([.direct, .unresolved, .http(host: "127.0.0.1", port: 7890)])
         let up = await LoginLaunch.waitForProxy(
-            url: URL(string: "https://vibefriends.com/")!,
-            route: { _ in routes.next() },
+            urls: [URL(string: "https://vibefriends.com/")!],
+            routes: { urls in urls.map { _ in routes.next() } },
             accepts: { host, port in host == "127.0.0.1" && port == 7890 },
             now: { clock.now },
             sleep: { clock.advance($0) }
@@ -305,8 +305,8 @@ struct SystemProxyTests {
         let clock = FakeClock()
         let answered = Counter()
         let up = await LoginLaunch.waitForProxy(
-            url: URL(string: "https://vibefriends.com/")!,
-            route: { _ in .socks(host: "127.0.0.1", port: 7891) },
+            urls: [URL(string: "https://vibefriends.com/")!],
+            routes: { urls in urls.map { _ in .socks(host: "127.0.0.1", port: 7891) } },
             accepts: { _, _ in answered.increment() >= 3 },
             now: { clock.now },
             sleep: { clock.advance($0) }
@@ -315,8 +315,8 @@ struct SystemProxyTests {
 
         let never = FakeClock()
         let gaveUp = await LoginLaunch.waitForProxy(
-            url: URL(string: "https://vibefriends.com/")!,
-            route: { _ in .direct },
+            urls: [URL(string: "https://vibefriends.com/")!],
+            routes: { urls in urls.map { _ in .direct } },
             accepts: { _, _ in true },
             now: { never.now },
             sleep: { never.advance($0) }
@@ -324,6 +324,34 @@ struct SystemProxyTests {
         #expect(!gaveUp)
         #expect(never.elapsed >= LoginLaunch.proxyWaitLimit)
         #expect(never.elapsed < LoginLaunch.proxyWaitLimit + LoginLaunch.proxyPollInterval + 1)
+    }
+
+    /// A PAC that sends the sync server direct and only the vendors through
+    /// the proxy, or a proxy named only in the app's environment, is up as
+    /// soon as that proxy answers.
+    @Test
+    func aSplitPACOrAnOwnProxyVariableIsSeenAtOnce() async {
+        let clock = FakeClock()
+        let urls = LoginLaunch.proxyProbeURLs(server: URL(string: "https://vibefriends.com/")!)
+        #expect(urls.contains { $0.host == "api.anthropic.com" } && urls.contains { $0.host == "chatgpt.com" })
+        let split = await LoginLaunch.waitForProxy(
+            urls: urls,
+            routes: { urls in urls.map { $0.host == "vibefriends.com" ? .direct : .http(host: "127.0.0.1", port: 7890) } },
+            accepts: { _, port in port == 7890 },
+            now: { clock.now }, sleep: { clock.advance($0) }
+        )
+        #expect(split)
+        #expect(clock.elapsed == 0)
+        let own = await LoginLaunch.waitForProxy(
+            urls: urls, ownProxy: (host: "127.0.0.1", port: 6152),
+            routes: { urls in urls.map { _ in .direct } },
+            accepts: { _, port in port == 6152 },
+            now: { clock.now }, sleep: { clock.advance($0) }
+        )
+        #expect(own)
+        #expect(SystemProxy.ownProxyEndpoint(["HTTPS_PROXY": "127.0.0.1:6152"])! == ("127.0.0.1", 6152))
+        #expect(SystemProxy.ownProxyEndpoint(["ALL_PROXY": "socks5://10.0.0.2"])! == ("10.0.0.2", 1080))
+        #expect(SystemProxy.ownProxyEndpoint(["PATH": "/bin"]) == nil)
     }
 
     /// The real reachability check: a listening local port answers, a closed

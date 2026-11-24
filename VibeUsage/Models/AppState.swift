@@ -383,9 +383,10 @@ final class AppState {
         reloadConfig()
 
         if launchWaitsForProxy, launchProxyWait == nil {
-            let url = Self.launchProbeURL()
+            let urls = LoginLaunch.proxyProbeURLs(server: Self.launchProbeURL())
+            let own = SystemProxy.ownProxyEndpoint(ProcessInfo.processInfo.environment)
             launchProxyWait = Task.detached(priority: .utility) {
-                let up = await LoginLaunch.waitForProxy(url: url)
+                let up = await LoginLaunch.waitForProxy(urls: urls, ownProxy: own)
                 debugLog("[launch] \(up ? "proxy is up" : "proxy wait ran out") — network reads go ahead")
             }
         }
@@ -475,6 +476,8 @@ final class AppState {
         }
         config = latest
         isConfigured = latest?.apiKey != nil
+        // A reset drops the launch sync that has not started yet.
+        if latest == nil { launchSyncTask?.cancel() }
     }
 
     /// Save the server selected by device authorization and start the scheduler.
@@ -495,6 +498,8 @@ final class AppState {
     func triggerSync(_ trigger: SyncRecord.Trigger = .manual) async {
         guard syncStatus != .syncing else { return }
         syncStatus = .syncing
+        // Any sync, manual ones too, waits for a login launch's proxy.
+        await waitForLaunchNetwork()
 
         let startedAt = Date()
         let (result, outcome) = await SyncEngine.shared.runSync()

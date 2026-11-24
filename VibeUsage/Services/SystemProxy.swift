@@ -322,11 +322,6 @@ enum SystemProxy {
         return env
     }
 
-    /// For Claude Code: HTTP only (it does not support SOCKS).
-    static func claudeEnvironment(base: [String: String]) async -> [String: String] {
-        await claudeLaunch(base: base).environment
-    }
-
     /// Claude Code's environment, plus the relay it needs when the system
     /// routes Anthropic's hosts through SOCKS only (`ClaudeSOCKSRelay`; the
     /// caller stops it when the probe ends). Claude Code speaks only HTTP
@@ -335,14 +330,26 @@ enum SystemProxy {
     static func claudeLaunch(
         base: [String: String],
         routes resolve: ([String]) async -> [(host: String, route: Route)] = { await routes(forHosts: $0) },
-        startRelay: () async throws -> ClaudeSOCKSRelay = { try await ClaudeSOCKSRelay.start() }
+        startRelay: (@escaping @Sendable (URL) async -> Route) async throws -> ClaudeSOCKSRelay = {
+            try await ClaudeSOCKSRelay.start(route: $0)
+        }
     ) async -> (environment: [String: String], relay: ClaudeSOCKSRelay?) {
         var env = base
         let routes = hasOwnProxy(base) ? [] : await resolve(claudeHosts)
         let socksOnly = routes.contains { if case .socks = $0.route { return true }; return false }
             && !routes.contains { if case .http = $0.route { return true }; return false }
         if socksOnly {
-            let relay = try? await startRelay()
+            // The relay keeps the routes resolved here for the whole probe:
+            // a proxy client that restarts mid-probe briefly leaves no system
+            // proxy, which must not turn into a direct connection. A host the
+            // PAC sent direct stays direct (the user's rule); any other
+            // Anthropic host takes the SOCKS proxy.
+            let fixed = Dictionary(routes.map { ($0.host.lowercased(), $0.route) }, uniquingKeysWith: { first, _ in first })
+            let socks = routes.first { if case .socks = $0.route { return true }; return false }?.route ?? .unresolved
+            let relayRoute: @Sendable (URL) async -> Route = { url in
+                fixed[(url.host ?? "").lowercased()] ?? socks
+            }
+            let relay = try? await startRelay(relayRoute)
             let proxyURL = relay?.proxyURL ?? failClosedURL
             env["HTTPS_PROXY"] = proxyURL
             env["HTTP_PROXY"] = proxyURL
@@ -354,6 +361,18 @@ enum SystemProxy {
         let variables = proxyVariables(routes: routes, base: base, allowSOCKS: false, nodeSwitch: false)
         env.merge(variables) { _, proxy in proxy }
         return (env, nil)
+    }
+
+    /// `host:port` of the proxy the app's own environment names for https
+    /// (the CLI's order), for a reachability check; nil when there is none.
+    static func ownProxyEndpoint(_ base: [String: String]) -> (host: String, port: Int)? {
+        let names = ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"]
+        guard let raw = names.lazy.compactMap({ base[$0]?.trimmingCharacters(in: .whitespaces) })
+                .first(where: { !$0.isEmpty }) else { return nil }
+        let text = raw.contains("://") ? raw : "http://\(raw)"
+        guard let url = URL(string: text), let host = url.host, !host.isEmpty else { return nil }
+        let defaults = ["http": 80, "https": 443, "socks5": 1080, "socks5h": 1080, "socks": 1080]
+        return (host, url.port ?? defaults[url.scheme?.lowercased() ?? ""] ?? 80)
     }
 
     static func hasOwnProxy(_ base: [String: String]) -> Bool {

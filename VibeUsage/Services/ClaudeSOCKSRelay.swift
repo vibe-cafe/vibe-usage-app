@@ -16,11 +16,13 @@ import Security
 /// - **What it carries:** `CONNECT` to Anthropic's and Claude's own hosts on
 ///   port 443 (`allowedDomains`), nothing else (`403` / `405`). It never sees
 ///   inside TLS: bytes are copied as they are.
-/// - **Where it sends them:** the route the system gives that host now (PAC
-///   included): a SOCKS proxy gets a SOCKS5 handshake with the host *name*,
+/// - **Where it sends them:** the route resolved for that host when the
+///   probe started (`SystemProxy.claudeLaunch` keeps them for the whole
+///   probe, so a proxy client restarting mid-probe cannot turn a connection
+///   direct): a SOCKS proxy gets a SOCKS5 handshake with the host *name*,
 ///   never a locally resolved address; an HTTP proxy gets the `CONNECT`
-///   chained; the user's own direct rule connects directly; an unresolvable
-///   route is refused (`502`), never sent direct.
+///   chained; a host the PAC sends direct (the user's own rule) connects
+///   directly; an unresolvable route is refused (`502`), never sent direct.
 /// - **When it runs:** started by `ClaudeUsageProbe.fetch` when the system
 ///   routes Anthropic's hosts through SOCKS only, stopped (listener and every
 ///   connection) as soon as that probe finishes.
