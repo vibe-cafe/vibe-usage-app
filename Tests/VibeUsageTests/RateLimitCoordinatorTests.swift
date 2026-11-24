@@ -1358,16 +1358,26 @@ struct RateLimitCoordinatorTests {
                     window: RateLimitWindow(utilization: utilization, resetsAt: resetsAt, windowDuration: 18_000))],
                 status: .ok, fetchedAt: Date(), dataAsOf: dataAsOf, source: .live)
         }
+        // Used after the reset and the next read failed: the CLI leaves the 5h
+        // window out and dates the answer when the use was seen.
+        let weekly = ProviderRateLimit(provider: .antigravity,
+            meters: [RateLimitMeter(id: "gemini-weekly", label: "7d",
+                window: RateLimitWindow(utilization: 10, resetsAt: Date(timeIntervalSinceNow: 86_400), windowDuration: 604_800))],
+            status: .ok, fetchedAt: Date(), dataAsOf: Date(), source: .cache, liveFailure: .cliReportedFailure)
         var answers = [snapshot(40, resetsAt: reset, dataAsOf: readAt), snapshot(0, resetsAt: nil, dataAsOf: reset),
-                       snapshot(0, resetsAt: nil, dataAsOf: reset)]
+                       snapshot(0, resetsAt: nil, dataAsOf: reset), weekly]
         let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in [answers.removeFirst()] })
         await coordinator.refreshCLIProviders([.antigravity])
         #expect(appState.rateLimits.first { $0.provider == .antigravity }?.meters.first?.window.utilization == 40)
         await coordinator.refreshCLIProviders([.antigravity])
         #expect(appState.rateLimits.first { $0.provider == .antigravity }?.meters.first?.window.utilization == 0)
         await coordinator.refreshCLIProviders([.antigravity])
-        let card = appState.rateLimits.first { $0.provider == .antigravity }
+        var card = appState.rateLimits.first { $0.provider == .antigravity }
         #expect(card?.meters.first?.window.utilization == 0)
         #expect(card?.liveFailure == nil)
+        await coordinator.refreshCLIProviders([.antigravity])
+        card = appState.rateLimits.first { $0.provider == .antigravity }
+        #expect(card?.meters.map(\.id) == ["gemini-weekly"])
+        #expect(card?.liveFailure == .cliReportedFailure)
     }
 }
