@@ -15,7 +15,7 @@ struct ClaudeNonessentialTrafficTests {
     func quietEnvironmentClearsOnlyTheMasterSwitch() {
         let env = ClaudeNonessentialTraffic.quietEnvironment
         #expect(env[Self.key] == "")
-        for key in ["DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_AUTOUPDATER",
+        for key in ["CLAUDE_CODE_DISABLE_FAST_MODE", "DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING", "DISABLE_AUTOUPDATER",
                     "DISABLE_BUG_COMMAND", "DISABLE_UPDATES", "DISABLE_FEEDBACK_COMMAND",
                     "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY", "DISABLE_GROWTHBOOK",
                     "CLAUDE_CODE_DISABLE_FEATURE_FLAGS", "CLAUDE_CODE_DISABLE_VITALS_EMITTER",
@@ -91,6 +91,31 @@ struct ClaudeNonessentialTrafficTests {
         defer { third.remove() }
         try third.write(Self.settings(#""1""#), to: third.managed.appendingPathComponent("managed-settings.d/notes.txt"))
         #expect(!third.forced())
+    }
+
+    /// Claude Code merges the files in order: a later drop-in that clears
+    /// the key undoes the base file.
+    @Test
+    func aLaterDropInCanClearIt() throws {
+        let box = try Sandbox()
+        defer { box.remove() }
+        try box.write(Self.settings(#""1""#), to: box.managed.appendingPathComponent("managed-settings.json"))
+        try box.write(Self.settings(#""""#), to: box.managed.appendingPathComponent("managed-settings.d/50-lift.json"))
+        #expect(!box.forced())
+        try box.write(Self.settings(#""0""#), to: box.managed.appendingPathComponent("managed-settings.d/90-again.json"))
+        #expect(box.forced())
+    }
+
+    /// One managed source: a forced profile with an `env` decides on its own,
+    /// the files apply only without one.
+    @Test
+    func aForcedProfileOutranksTheFiles() throws {
+        let box = try Sandbox()
+        defer { box.remove() }
+        try box.write(Self.settings(#""1""#), to: box.managed.appendingPathComponent("managed-settings.json"))
+        #expect(box.forced())
+        #expect(!box.forced(["OTHER": "1"]))
+        #expect(box.forced([Self.key: "1"]))
     }
 
     @Test

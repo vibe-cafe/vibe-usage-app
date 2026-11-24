@@ -17,10 +17,11 @@ import Foundation
 /// separate switches on (`quietEnvironment`, passed both in the environment
 /// and in an in-memory `--settings`, which outranks the user's files): what
 /// the user switched off stays off, and the probe adds only the usage read.
-/// Measured, the probe then reaches `api.anthropic.com` only, three
-/// requests: the usage read plus two Claude Code makes at every start that no
-/// separate switch covers (its start-up configuration and the organization's
-/// fast-mode status) — same host and same account as the usage read.
+/// Measured, the probe then reaches `api.anthropic.com` only: the usage read
+/// plus the start-up configuration (`/api/claude_cli/bootstrap`), which no
+/// separate switch covers — same host and same account. For an account in an
+/// organization, Claude Code also refreshes its invite-eligibility record
+/// there when the cached one is missing or stale.
 ///
 /// Cleared only for the probe's own process and never written anywhere. An
 /// organization's managed settings outrank `--settings`; when those force the
@@ -37,6 +38,7 @@ enum ClaudeNonessentialTraffic {
     /// with `"0"`.
     static let quietEnvironment: [String: String] = [
         variable: "",
+        "CLAUDE_CODE_DISABLE_FAST_MODE": "1",
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
         "DISABLE_AUTOUPDATER": "1",
@@ -63,12 +65,14 @@ enum ClaudeNonessentialTraffic {
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }()
 
-    /// Whether the organization's managed settings force the switch on —
-    /// `/Library/Application Support/ClaudeCode/managed-settings.json`, every
-    /// `managed-settings.d/*.json` beside it, or a configuration profile's
-    /// forced `env` in `com.anthropic.claudecode`. Those outrank the probe's
-    /// `--settings`, so Claude Code could not read the quota. The user's own
-    /// files and environment do not count here: the probe handles those.
+    /// Whether the organization's managed settings force the switch on, read
+    /// the way Claude Code picks its managed source: a configuration profile's
+    /// forced `env` in `com.anthropic.claudecode` when there is one, else
+    /// `/Library/Application Support/ClaudeCode/managed-settings.json` merged
+    /// with every `managed-settings.d/*.json` after it (a later file that sets
+    /// the key wins, `""` included). Those outrank the probe's `--settings`,
+    /// so Claude Code could not read the quota. The user's own files and
+    /// environment do not count here: the probe handles those.
     /// Server-managed settings from the claude.ai console are fetched by
     /// Claude Code and are not visible here; with those, the probe runs and
     /// Claude Code answers without windows.
@@ -90,10 +94,14 @@ enum ClaudeNonessentialTraffic {
             .filter { $0.pathExtension == "json" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent })
 
-        for file in files where isOn(envValue(inSettingsFile: file)) {
-            return true
+        if let profile = forcedManagedEnv() as? [String: Any] {
+            return isOn(profile[variable])
         }
-        return isOn((forcedManagedEnv() as? [String: Any])?[variable])
+        var value: Any?
+        for file in files {
+            if let set = envValue(inSettingsFile: file) { value = set }
+        }
+        return isOn(value)
     }
 
     /// The `env` dictionary of a configuration profile, only when the profile
@@ -105,8 +113,9 @@ enum ClaudeNonessentialTraffic {
         return CFPreferencesCopyAppValue(key, domain)
     }
 
-    /// The variable's value in one settings file's top-level `env`, or nil
-    /// when the file, the object or the key is missing or unreadable.
+    /// The variable's value in one settings file's top-level `env` (`NSNull`
+    /// for an explicit null), or nil when the file, the object or the key is
+    /// missing or unreadable.
     static func envValue(inSettingsFile url: URL) -> Any? {
         guard let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
