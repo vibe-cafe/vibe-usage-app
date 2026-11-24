@@ -1196,6 +1196,48 @@ struct RateLimitCoordinatorTests {
         #expect(card() == live)
     }
 
+    /// 403 is the endpoint's answer for the current workspace: after a
+    /// reading from a workspace with Go, switching OpenCode to one without it
+    /// must not keep showing the first workspace's numbers.
+    @Test @MainActor
+    func openCodeGoNotEntitledReplacesAnEarlierReading() async {
+        let (appState, defaults, suite) = selectedAppState([.opencodeGo])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let live = ProviderRateLimit(
+            provider: .opencodeGo,
+            meters: [RateLimitMeter(id: "rolling", label: "5h", window: RateLimitWindow(utilization: 12))],
+            status: .ok,
+            fetchedAt: Date(timeIntervalSince1970: 100),
+            dataAsOf: Date(timeIntervalSince1970: 100),
+            source: .live
+        )
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchOpenCodeGoLive: {
+                switch calls.next() {
+                case 1: return live
+                case 2: throw OpenCodeGoUsageAPI.FetchError.notSubscribed
+                default: throw OpenCodeGoUsageAPI.FetchError.signInExpired
+                }
+            }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .opencodeGo } }
+
+        await coordinator.refreshOpenCodeGo()
+        #expect(card() == live)
+        await coordinator.refreshOpenCodeGo()
+        #expect(card()?.status == .noData)
+        #expect(card()?.emptyReason == .notEntitled)
+        #expect(card()?.meters.isEmpty == true)
+
+        // An expired sign-in on a cold card is a settled empty state.
+        appState.rateLimits = []
+        await coordinator.refreshOpenCodeGo()
+        #expect(card()?.status == .noData)
+        #expect(card()?.liveFailure == .credentialsExpired)
+    }
+
     /// Turning monitoring off removes the card; a failure that arrives after
     /// that must not write a card (or a reason) back.
     @Test @MainActor

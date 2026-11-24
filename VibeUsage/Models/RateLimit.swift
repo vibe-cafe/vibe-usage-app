@@ -290,6 +290,9 @@ struct ProviderRateLimit: Equatable, Identifiable {
         // Native HTTP providers (Codex, OpenCode Go)
         case credentialsNotFound
         case credentialsRejected
+        /// A saved sign-in whose token lapsed and that only its own app may
+        /// renew (OpenCode account): opening that app renews it.
+        case credentialsExpired
         case endpointTimedOut
         case endpointUnreachable
         case endpointHTTPStatus(Int)

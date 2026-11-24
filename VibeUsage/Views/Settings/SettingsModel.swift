@@ -116,11 +116,16 @@ enum SettingsQuotaStatus {
     ) -> (kind: SettingsStatusKind, text: String) {
         if let snapshot = warningSnapshot {
             let needsLogin = snapshot.liveFailure == .credentialsNotFound || snapshot.liveFailure == .credentialsRejected
+            // OpenCode Go reads OpenCode's own login, so the word says where.
+            let loginText = product.provider == .opencodeGo ? "需登录 OpenCode" : "需要登录"
+            if snapshot.liveFailure == .credentialsExpired, snapshot.status != .ok, snapshot.emptyReason == nil {
+                return (.warning, product.provider == .opencodeGo ? "需打开 OpenCode" : "登录已过期")
+            }
             switch snapshot.status {
             case .unauthorized where product.provider == .zCode:
                 return (.warning, zCodeKeyConfigured ? "API Key 无效" : "需要 API Key")
             case .unauthorized:
-                return (.warning, snapshot.needsAgyCLI ? "需要 agy 命令行" : "需要登录")
+                return (.warning, snapshot.needsAgyCLI ? "需要 agy 命令行" : loginText)
             case .noData:
                 switch snapshot.emptyReason {
                 case .notEntitled: return (.warning, "未订阅")
@@ -128,9 +133,9 @@ enum SettingsQuotaStatus {
                 case .nonessentialTrafficDisabled: return (.warning, "组织策略不允许")
                 case .limitReached: return (.warning, "额度已用满")
                 case .noWindow: return (.warning, "暂无额度窗口")
-                case nil: return (.warning, needsLogin ? "需要登录" : "暂无配额数据")
+                case nil: return (.warning, needsLogin ? loginText : "暂无配额数据")
                 }
-            case .retryableError: return (.warning, needsLogin ? "需要登录" : "读取失败")
+            case .retryableError: return (.warning, needsLogin ? loginText : "读取失败")
             case .error: return (.error, "读取失败")
             case .disabled: return (.warning, "未启用")
             case .ok: break
