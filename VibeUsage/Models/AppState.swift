@@ -900,6 +900,10 @@ final class AppState {
         coord.panelVisibilityChanged(visible: isRateLimitPanelVisible)
     }
 
+    /// Seconds the launch sync waits; set once for a login-item launch
+    /// (`LoginLaunch`) so the user's proxy client can start first.
+    var launchSyncDelay: TimeInterval = 0
+
     private func startScheduler() {
         syncScheduler = SyncScheduler(interval: Self.syncInterval) { [weak self] in
             await self?.triggerSync(.scheduled)
@@ -910,7 +914,12 @@ final class AppState {
         // the CLI subprocess (which can take 5-30s, or hang if Node isn't installed).
         Task { await fetchUsageData() }
         // Run the full sync (CLI upload + fetch) in parallel as the background pipeline.
-        Task { await triggerSync(.launch) }
+        let delay = launchSyncDelay
+        launchSyncDelay = 0
+        Task {
+            if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            await triggerSync(.launch)
+        }
     }
 
     // MARK: - Diagnostics

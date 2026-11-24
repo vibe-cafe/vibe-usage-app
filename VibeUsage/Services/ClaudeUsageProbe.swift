@@ -90,7 +90,12 @@ enum ClaudeUsageProbe {
     /// the main actor; honors task cancellation (panel closed mid-probe) by
     /// terminating the child process.
     static func fetch(now: Date = Date()) async throws -> ProviderRateLimit {
-        try await fetch(candidates: discoverBinaries(), now: now, timeout: timeout)
+        // Claude Code reads proxy variables, never system settings: hand it
+        // the system proxy for Anthropic's hosts (`SystemProxy`).
+        let environment = await SystemProxy.claudeEnvironment(base: ProcessInfo.processInfo.environment)
+        return try await fetch(
+            candidates: discoverBinaries(), now: now, timeout: timeout, environment: environment
+        )
     }
 
     /// Injectable entry point for lifecycle tests. `timeout` is an overall
@@ -99,7 +104,8 @@ enum ClaudeUsageProbe {
         candidates: [Binary],
         now: Date = Date(),
         timeout: TimeInterval,
-        attemptLog lastAttempts: AttemptLogStore = Self.lastAttempts
+        attemptLog lastAttempts: AttemptLogStore = Self.lastAttempts,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) async throws -> ProviderRateLimit {
         let recorder = AttemptRecorder()
         guard !candidates.isEmpty else {
@@ -127,7 +133,8 @@ enum ClaudeUsageProbe {
                     candidate: candidate,
                     timeout: min(candidateTimeout, remaining),
                     recorder: recorder,
-                    slot: slot
+                    slot: slot,
+                    environment: environment
                 )
                 guard let payload = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
                     throw ProbeError.noResponse
@@ -507,13 +514,14 @@ enum ClaudeUsageProbe {
         candidate: Binary,
         timeout: TimeInterval,
         recorder: AttemptRecorder,
-        slot: Int
+        slot: Int,
+        environment: [String: String]
     ) async throws -> Data {
         let process = Process()
         process.executableURL = candidate.url
         process.arguments = processArguments
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
-        process.environment = childEnvironment()
+        process.environment = childEnvironment(base: environment)
 
         let stdin = makeRequestPipe()
         let stdout = Pipe()
@@ -715,8 +723,10 @@ enum ClaudeUsageProbe {
     ///
     /// `CLAUDE_CONFIG_DIR` is deliberately preserved: users who relocate
     /// `~/.claude` need the probe to read the same profile they use.
-    static func childEnvironment() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+    static func childEnvironment(
+        base: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var env = base
         for key in [
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
             "CLAUDECODE",

@@ -18,9 +18,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appState = AppState()
     private let updaterViewModel = UpdaterViewModel()
     private var menuBarController: MenuBarController?
+    /// Set for a login-item launch (`LoginLaunch`): the first activation in
+    /// this window does not open the dashboard by itself.
+    private var activationPanelQuietUntil: Date?
+    private var launchedAsLoginItem = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // The open-application event is current only while launching.
+        launchedAsLoginItem = LoginLaunch.isLoginItemLaunch()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ActivationCoordinator.shared.applyDockPreference()
+        if launchedAsLoginItem {
+            // Start quietly: the proxy client may not be up yet, and quotas
+            // are read only when the user opens the dashboard.
+            debugLog("[launch] login item launch — no automatic dashboard, first sync in \(Int(LoginLaunch.firstSyncDelay))s")
+            activationPanelQuietUntil = Date().addingTimeInterval(LoginLaunch.quietActivationWindow)
+            appState.launchSyncDelay = LoginLaunch.firstSyncDelay
+        }
         appState.initialize()
         menuBarController = MenuBarController(appState: appState, updaterViewModel: updaterViewModel)
         #if DEBUG
@@ -32,6 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
+        if let quietUntil = activationPanelQuietUntil {
+            activationPanelQuietUntil = nil
+            if Date() < quietUntil { return }
+        }
         DispatchQueue.main.async { [weak self] in
             self?.menuBarController?.presentPanelForAppActivation()
         }

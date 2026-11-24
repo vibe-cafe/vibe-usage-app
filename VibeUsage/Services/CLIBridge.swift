@@ -61,7 +61,9 @@ enum CLIBridge {
         environmentKeysToRemove: Set<String> = []
     ) async throws -> String {
         guard let runtime = await RuntimeDetector.detect() else { throw CLIError.noRuntime }
-        var env = runtime.environment(base: ProcessInfo.processInfo.environment)
+        var env = await SystemProxy.cliEnvironment(
+            base: runtime.environment(base: ProcessInfo.processInfo.environment)
+        )
         // Per-call credential injection (quota fetches): drop the other
         // regions' keys first so a stale key can never leak into a request.
         environmentKeysToRemove.forEach { env.removeValue(forKey: $0) }

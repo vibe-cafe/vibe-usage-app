@@ -57,9 +57,12 @@ actor SyncEngine {
         }
 
         do {
+            let environment = await SystemProxy.cliEnvironment(
+                base: runtime.environment(base: ProcessInfo.processInfo.environment)
+            )
             let output = try await CLIProcessRunner.run(
                 executable: runtime.executablePath, arguments: runtime.arguments(["sync"]),
-                environment: runtime.environment(base: ProcessInfo.processInfo.environment), timeout: 120
+                environment: environment, timeout: 120
             )
             return (interpret(output), Self.outcome(for: output))
         } catch {
