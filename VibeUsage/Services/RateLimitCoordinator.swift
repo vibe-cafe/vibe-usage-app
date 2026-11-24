@@ -416,18 +416,23 @@ final class RateLimitCoordinator {
             let failure = Self.classify(error)
             let reason = Self.liveFailure(error)
             guard !Task.isCancelled, appState.isQuotaProviderSelected(.opencodeGo) else { return }
-            // A live reading already on screen survives a transient blip: its
-            // 「数据截至」 note states the age honestly, which beats replacing a
-            // real reading with an error. Only a cold card commits a status.
-            if currentSnapshot(.opencodeGo)?.status != .ok {
+            if failure == .notApplicable {
+                // 403 EntitlementError: the account has no Go plan. That is the
+                // endpoint's answer, not a failed read, so the card says so
+                // instead of offering a retry that cannot succeed. It replaces a
+                // reading already on screen too: after the user switches
+                // OpenCode to a workspace without Go, keeping the numbers would
+                // show the previous workspace's quota as this one's.
+                debugLog("[rate-limit] opencode go not entitled for this account")
+                upsert(ProviderRateLimit(provider: .opencodeGo, status: .noData,
+                    fetchedAt: Date(), emptyReason: .notEntitled))
+            } else if currentSnapshot(.opencodeGo)?.status != .ok {
+                // A live reading already on screen survives a transient blip:
+                // its source note states the age honestly, which beats replacing
+                // a real reading with an error. Only a cold card commits a status.
                 switch failure {
                 case .notApplicable:
-                    // 403 EntitlementError: the account has no Go plan. That is
-                    // the endpoint's answer, not a failed read, so the card says
-                    // so once instead of offering a retry that cannot succeed.
-                    debugLog("[rate-limit] opencode go not entitled for this account")
-                    upsert(ProviderRateLimit(provider: .opencodeGo, status: .noData,
-                        fetchedAt: Date(), emptyReason: .notEntitled))
+                    break
                 case .absent:
                     upsert(ProviderRateLimit(provider: .opencodeGo, status: .noData,
                         fetchedAt: Date(), liveFailure: reason))
