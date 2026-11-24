@@ -786,6 +786,36 @@ struct RateLimitCoordinatorTests {
         #expect(appState.isClaudeRateLimitRefreshing == false)
     }
 
+    /// Switching the setting off again brings the live numbers back on the
+    /// next refresh, with no leftover reason on the card.
+    @Test @MainActor
+    func claudeCardRecoversWhenNonessentialTrafficIsSwitchedBackOn() async {
+        let appState = AppState()
+        appState.claudeRateLimitEnabled = true
+        var disabled = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            claudeNonessentialTrafficDisabled: { disabled },
+            fetchClaudeLive: { self.claudeSnapshot(utilization: 30, dataAsOf: Date()) },
+            loadClaudeCache: { nil }
+        )
+        func card() -> ProviderRateLimit? { appState.rateLimits.first { $0.provider == .claudeCode } }
+
+        await coordinator.refreshClaude()
+        #expect(card()?.status == .ok)
+
+        disabled = true
+        await coordinator.refreshClaude()
+        #expect(card()?.emptyReason == .nonessentialTrafficDisabled)
+        #expect(card()?.fiveHour == nil)
+
+        disabled = false
+        await coordinator.refreshClaude()
+        #expect(card()?.status == .ok)
+        #expect(card()?.emptyReason == nil)
+        #expect(card()?.fiveHour?.utilization == 30)
+    }
+
     /// The probe re-checks the setting itself. If it flips between the
     /// coordinator's check and the probe's, the card says the same thing.
     @Test @MainActor

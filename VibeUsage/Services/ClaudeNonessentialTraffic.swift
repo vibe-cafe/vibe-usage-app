@@ -33,8 +33,12 @@ import Foundation
 /// claude.ai console are fetched by Claude Code and are not visible here; with
 /// those, the probe still runs and Claude Code answers without windows.
 ///
-/// Only the one key is read. Nothing else in these files (which can hold API
-/// keys in `env`) is parsed out, kept, logged, or put in diagnostics.
+/// Only that one key is used. Each file is parsed in memory and everything
+/// else in it (`env` can hold API keys) is dropped right away — never kept,
+/// logged, or put in diagnostics.
+///
+/// This gates the quota read only. Copying diagnostics still runs
+/// `claude --version` (user-initiated, no quota request), unchanged.
 enum ClaudeNonessentialTraffic {
     static let variable = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
     static let managedDirectoryPath = "/Library/Application Support/ClaudeCode"
