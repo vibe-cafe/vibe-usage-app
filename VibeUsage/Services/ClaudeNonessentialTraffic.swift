@@ -21,17 +21,19 @@ import Foundation
 /// Measured through a proxy, the probe then reaches `api.anthropic.com` only:
 /// the usage read plus the start-up configuration
 /// (`/api/claude_cli/bootstrap`), which no separate switch covers. From the
-/// code, Claude Code may also, on the same host and account: preconnect
-/// (`HEAD /api/hello`, only without a proxy variable), refresh the account
-/// profile when its copy is missing or over a day old, read a Team /
-/// Enterprise organization's policy limits, refresh an eligible
-/// organization account's invite eligibility when its cached copy is missing
-/// or stale, and renew an expired login with its own login service.
+/// code, Claude Code may also: preconnect to its API address (`HEAD
+/// /api/hello`, skipped when an `HTTP(S)_PROXY` variable is set), refresh the
+/// account profile when its copy is missing or over a day old, read a Team /
+/// Enterprise organization's remote settings and policy limits, refresh an
+/// eligible Pro / Max account's invite eligibility (personal plans included)
+/// when its cached copy is missing or a day old, and renew an expired login
+/// with its own login service. A third-party provider setup starts no probe
+/// (`ClaudeThirdPartyProvider`).
 ///
 /// Cleared only for the probe's own process and never written anywhere. An
 /// organization's managed settings outrank `--settings`; when those force the
 /// switch on (`isForcedByPolicy`), Claude Code cannot read the quota and the
-/// app does not start it.
+/// app starts no quota probe.
 enum ClaudeNonessentialTraffic {
     static let variable = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
     static let managedDirectoryPath = "/Library/Application Support/ClaudeCode"
