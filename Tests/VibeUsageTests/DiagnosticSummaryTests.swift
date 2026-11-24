@@ -339,6 +339,14 @@ struct DiagnosticSummaryTests {
                                             isRefreshing: false, now: now)
             == "已开启 · 本机已检测 · 正常 · 2 个窗口 · 来源：缓存 · 数据时间：30 小时前 · 实时读取失败：Claude 配额读取超时")
 
+        // Under an organization's policy the live read is paused, not failed.
+        var paused = cached
+        paused.source = .desktopRecord
+        paused.liveFailure = .claudeBlockedByPolicy
+        #expect(DiagnosticSummary.quotaText(snapshot: paused, isSelected: true, isDetected: true,
+                                            isRefreshing: false, now: now)
+            == "已开启 · 本机已检测 · 正常 · 2 个窗口 · 来源：Claude 桌面端记录 · 数据时间：30 小时前 · 实时读取已暂停：组织策略关闭了 Claude Code 非必要流量")
+
         let failed = ProviderRateLimit(provider: .claudeCode, status: .retryableError,
                                        liveFailure: .claudeLaunchFailed)
         #expect(DiagnosticSummary.quotaText(snapshot: failed, isSelected: true, isDetected: true,

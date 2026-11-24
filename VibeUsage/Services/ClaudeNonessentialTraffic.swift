@@ -18,11 +18,15 @@ import Foundation
 /// and in an in-memory `--settings`, which outranks the user's files): every
 /// feature that has a switch of its own stays off. What the master switch
 /// alone would also have stopped is listed below.
-/// Measured, the probe then reaches `api.anthropic.com` only: the usage read
-/// plus the start-up configuration (`/api/claude_cli/bootstrap`), which no
-/// separate switch covers — same host and same account. For an account in an
-/// organization, Claude Code also refreshes its invite-eligibility record
-/// there when the cached one is missing or stale.
+/// Measured through a proxy, the probe then reaches `api.anthropic.com` only:
+/// the usage read plus the start-up configuration
+/// (`/api/claude_cli/bootstrap`), which no separate switch covers. From the
+/// code, Claude Code may also, on the same host and account: preconnect
+/// (`HEAD /api/hello`, only without a proxy variable), refresh the account
+/// profile when its copy is missing or over a day old, read a Team /
+/// Enterprise organization's policy limits, refresh an eligible
+/// organization account's invite eligibility when its cached copy is missing
+/// or stale, and renew an expired login with its own login service.
 ///
 /// Cleared only for the probe's own process and never written anywhere. An
 /// organization's managed settings outrank `--settings`; when those force the
@@ -67,16 +71,17 @@ enum ClaudeNonessentialTraffic {
     }()
 
     /// Whether the organization's managed settings force the switch on, read
-    /// the way Claude Code picks its managed source: a configuration profile's
-    /// forced `env` in `com.anthropic.claudecode` when there is one, else
-    /// `/Library/Application Support/ClaudeCode/managed-settings.json` merged
-    /// with every `managed-settings.d/*.json` after it (a later file that sets
-    /// the key wins, `""` included). Those outrank the probe's `--settings`,
+    /// the way Claude Code 2.1.330 merges a managed `env` — key by key, the
+    /// highest source that sets the key winning, `""` included: a
+    /// configuration profile's forced `env` in `com.anthropic.claudecode`,
+    /// else `/Library/Application Support/ClaudeCode/managed-settings.json`
+    /// merged with every `managed-settings.d/*.json` after it (a later file
+    /// that sets the key wins). Those outrank the probe's `--settings`,
     /// so Claude Code could not read the quota. The user's own files and
     /// environment do not count here: the probe handles those.
     /// Server-managed settings from the claude.ai console are fetched by
     /// Claude Code and are not visible here; with those, the probe runs and
-    /// Claude Code answers without windows.
+    /// Claude Code may answer from its own recent snapshot or without windows.
     ///
     /// Only that one key is used. Each file is parsed in memory and the rest
     /// is dropped right away — never kept, logged, or put in diagnostics.
@@ -95,8 +100,11 @@ enum ClaudeNonessentialTraffic {
             .filter { $0.pathExtension == "json" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent })
 
-        if let profile = forcedManagedEnv() as? [String: Any] {
-            return isOn(profile[variable])
+        // `env` is merged key by key across managed sources: the highest
+        // source that sets this key decides (an explicit "" included); one
+        // that does not set it leaves the decision to the next.
+        if let profile = forcedManagedEnv() as? [String: Any], let set = profile[variable] {
+            return isOn(set)
         }
         var value: Any?
         for file in files {

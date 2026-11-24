@@ -106,15 +106,17 @@ struct ClaudeNonessentialTrafficTests {
         #expect(box.forced())
     }
 
-    /// One managed source: a forced profile with an `env` decides on its own,
-    /// the files apply only without one.
+    /// A managed `env` merges key by key: a profile that sets the key wins
+    /// (an explicit "" lifts the file's "1"); one that sets only other keys
+    /// leaves it to the files.
     @Test
-    func aForcedProfileOutranksTheFiles() throws {
+    func aForcedProfileOutranksTheFilesKeyByKey() throws {
         let box = try Sandbox()
         defer { box.remove() }
         try box.write(Self.settings(#""1""#), to: box.managed.appendingPathComponent("managed-settings.json"))
         #expect(box.forced())
-        #expect(!box.forced(["OTHER": "1"]))
+        #expect(box.forced(["HTTPS_PROXY": "http://proxy.corp:3128"]))
+        #expect(!box.forced([Self.key: ""]))
         #expect(box.forced([Self.key: "1"]))
     }
 
