@@ -379,7 +379,7 @@ enum SystemProxy {
         var urls: [URL] = []
         let npmrc = try? String(contentsOf: home.appendingPathComponent(".npmrc"), encoding: .utf8)
         if let registry = launcherRegistry(npmrc: npmrc) { urls.append(registry) }
-        if let apiURL, let url = URL(string: apiURL), url.host != nil { urls.append(url) }
+        if let apiURL, !apiURL.isEmpty, let url = UsageServer(apiURL).siteURL, url.host != nil { urls.append(url) }
         return urls.filter { !cliHosts.contains($0.host ?? "") }
     }
 
