@@ -551,7 +551,13 @@ final class RateLimitCoordinator {
                         // when it carries the same timestamp (Grok re-reading
                         // the same log event), while a CLI cache answer still
                         // marks the card as showing older data.
-                        if !upsertIfNewer(snapshot) {
+                        // Antigravity is the exception: the CLI answers from
+                        // its own record, which can drop a window (used after
+                        // its reset) without a newer timestamp, so its answer
+                        // is always the whole current view.
+                        if provider == .antigravity {
+                            upsert(snapshot)
+                        } else if !upsertIfNewer(snapshot) {
                             if let reason = snapshot.liveFailure {
                                 markLiveFailure(reason, on: provider)
                             } else {
@@ -618,6 +624,20 @@ final class RateLimitCoordinator {
         }
     }
 
+    /// Antigravity is read at most every 5 minutes on popover open
+    /// (maintainer, 2026-11-24, 《Antigravity额度读取-封号风险与新做法》). The
+    /// CLI decides whether Google is asked at all — only after Antigravity was
+    /// used, never more often than this — so asking the CLI sooner only spawns
+    /// a process that answers from its record.
+    nonisolated static let antigravityRefreshInterval: TimeInterval = 5 * 60
+
+    nonisolated static func popoverRefreshInterval(
+        for provider: ProviderRateLimit.Provider,
+        default maxAge: TimeInterval
+    ) -> TimeInterval {
+        provider == .antigravity ? antigravityRefreshInterval : maxAge
+    }
+
     func refreshCLIProvidersIfNeeded(
         _ providers: [ProviderRateLimit.Provider],
         maxAge: TimeInterval = 60
@@ -626,7 +646,8 @@ final class RateLimitCoordinator {
             // A read the egress check paused is tried again at every open.
             if currentSnapshot(provider)?.liveFailure?.isEgressPause == true { return true }
             guard let last = lastCLIFetchAt[provider] else { return true }
-            return Date().timeIntervalSince(last) >= maxAge
+            return Date().timeIntervalSince(last)
+                >= Self.popoverRefreshInterval(for: provider, default: maxAge)
         }
         await refreshCLIProviders(stale)
     }
