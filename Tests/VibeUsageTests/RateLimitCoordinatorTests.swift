@@ -1060,7 +1060,8 @@ struct RateLimitCoordinatorTests {
         }
         appState.rateLimits = [reading(.kimiCode), reading(.grok)]
         let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in
-            [ProviderRateLimit(provider: .kimiCode, status: .retryableError, fetchedAt: Date(), source: .live)]
+            [ProviderRateLimit(provider: .kimiCode, status: .retryableError, fetchedAt: Date(),
+                               source: .live, liveFailure: .loginRefreshFailed)]
         })
 
         await coordinator.refreshCLIProviders([.kimiCode, .grok])
@@ -1068,12 +1069,36 @@ struct RateLimitCoordinatorTests {
         let kimi = appState.rateLimits.first { $0.provider == .kimiCode }
         let grok = appState.rateLimits.first { $0.provider == .grok }
         #expect(kimi?.meters == reading(.kimiCode).meters)
-        #expect(kimi?.liveFailure == .cliReportedFailure)
+        #expect(kimi?.liveFailure == .loginRefreshFailed)
         #expect(grok?.meters == reading(.grok).meters)
         #expect(grok?.liveFailure == .cliNoResult)
     }
 
     // MARK: - A later success clears the reason (#60 review)
+
+    @Test @MainActor
+    func localReadWhilePausedStillWarns() async {
+        let (appState, defaults, suite) = selectedAppState([.grok])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let calls = Calls()
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in
+            let reason: ProviderRateLimit.LiveFailure = switch calls.next() {
+            case 1: .egressUnconfirmed
+            case 2: .proxyUnsupported
+            default: .programOutdated
+            }
+            return [ProviderRateLimit(provider: .grok,
+                meters: [RateLimitMeter(id: "weekly", label: "7d", window: RateLimitWindow(utilization: 30))],
+                status: .ok, fetchedAt: Date(), source: .localLog, liveFailure: reason)]
+        })
+        for pause in [ProviderRateLimit.LiveFailure.egressUnconfirmed, .proxyUnsupported] {
+            await coordinator.refreshCLIProviders([.grok])
+            #expect(appState.quotaTabShowsWarning(.grok))
+            #expect(appState.quotaWarningSnapshot(for: .grok)?.liveFailure == pause)
+        }
+        await coordinator.refreshCLIProviders([.grok])
+        #expect(!appState.quotaTabShowsWarning(.grok))
+    }
 
     /// Counts fetch calls from inside `@MainActor` fetch closures.
     @MainActor

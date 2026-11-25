@@ -33,32 +33,34 @@ struct SettingsWindowTests {
             failure: ProviderRateLimit.LiveFailure? = nil
         ) -> (SettingsStatusKind, String) {
             SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: .init(
-                provider: product.provider, status: status, emptyReason: emptyReason, liveFailure: failure
+                provider: product.provider, status: status, fetchedAt: Date(), emptyReason: emptyReason, liveFailure: failure
             ))
         }
 
-        #expect(status(.unauthorized) == (.warning, "需登录 OpenCode"))
+        #expect(status(.unauthorized) == (.warning, "需登录"))
         #expect(status(.noData, emptyReason: .notEntitled, failure: .credentialsRejected) == (.warning, "未订阅"))
-        #expect(status(.noData, failure: .credentialsExpired) == (.warning, "需打开 OpenCode"))
-        #expect(status(.noData, emptyReason: .sessionWithoutPlanLimits) == (.warning, "无订阅额度"))
-        #expect(status(.noData, emptyReason: .nonessentialTrafficDisabled) == (.warning, "组织策略不允许"))
-        #expect(status(.noData, emptyReason: .limitReached) == (.warning, "额度已用满"))
-        #expect(status(.noData, emptyReason: .noWindow) == (.warning, "暂无额度窗口"))
-        for failure in [ProviderRateLimit.LiveFailure.credentialsNotFound, .credentialsRejected] {
-            #expect(status(.noData, failure: failure) == (.warning, "需登录 OpenCode"))
-            #expect(status(.retryableError, failure: failure) == (.warning, "需登录 OpenCode"))
+        #expect(status(.noData, failure: .credentialsExpired) == (.warning, "需打开"))
+        #expect(status(.noData, emptyReason: .sessionWithoutPlanLimits) == (.warning, "不适用"))
+        #expect(status(.noData, emptyReason: .nonessentialTrafficDisabled) == (.warning, "已禁止"))
+        #expect(status(.noData, emptyReason: .limitReached) == (.warning, "已用满"))
+        #expect(status(.noData, emptyReason: .noWindow) == (.warning, "无窗口"))
+        for state in [ProviderRateLimit.Status.noData, .retryableError] {
+            #expect(status(state, failure: .credentialsNotFound) == (.warning, "需登录"))
+            #expect(status(state, failure: .credentialsRejected) == (.warning, "已失效"))
         }
-        #expect(status(.noData) == (.warning, "暂无配额数据"))
-        #expect(status(.noData, failure: .endpointUnreachable) == (.warning, "暂无配额数据"))
-        #expect(status(.retryableError, failure: .endpointTimedOut) == (.warning, "读取失败"))
-        #expect(status(.error("fixture")) == (.error, "读取失败"))
+        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false,
+            warningSnapshot: .init(provider: .opencodeGo, status: .noData)) == (.warning, "未读取"))
+        #expect(status(.noData) == (.warning, "无数据"))
+        #expect(status(.noData, failure: .endpointUnreachable) == (.warning, "连不上"))
+        #expect(status(.retryableError, failure: .endpointTimedOut) == (.warning, "超时"))
+        #expect(status(.error("fixture")) == (.error, "出错"))
         #expect(status(.disabled) == (.warning, "未启用"))
 
         // Other native providers keep their own words.
         let codex = QuotaProduct(provider: .codex, availability: .ready, isDetected: true)
         #expect(SettingsQuotaStatus.status(for: codex, zCodeKeyConfigured: false, warningSnapshot: .init(
             provider: .codex, status: .noData, liveFailure: .credentialsNotFound
-        )) == (.warning, "需要登录"))
+        )) == (.warning, "需登录"))
     }
 
     // MARK: - Navigation
@@ -152,17 +154,17 @@ struct SettingsWindowTests {
         let snapshot = ProviderRateLimit(provider: .zCode, status: .unauthorized)
 
         #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: snapshot)
-            == (.warning, "需要 API Key"))
+            == (.warning, "需 Key"))
         #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: true, warningSnapshot: snapshot)
-            == (.warning, "API Key 无效"))
+            == (.warning, "Key 无效"))
     }
 
     @Test
     func statusColumnNamesWhatIsMissingBeforeLocalDetection() {
         let zCode = { (detected: Bool) in QuotaProduct(provider: .zCode, availability: .ready, isDetected: detected) }
 
-        #expect(SettingsQuotaStatus.status(for: zCode(true), zCodeKeyConfigured: false) == (.warning, "需要 API Key"))
-        #expect(SettingsQuotaStatus.status(for: zCode(false), zCodeKeyConfigured: false) == (.warning, "需要 API Key"))
+        #expect(SettingsQuotaStatus.status(for: zCode(true), zCodeKeyConfigured: false) == (.warning, "需 Key"))
+        #expect(SettingsQuotaStatus.status(for: zCode(false), zCodeKeyConfigured: false) == (.warning, "需 Key"))
         #expect(SettingsQuotaStatus.status(for: zCode(true), zCodeKeyConfigured: true) == (.ok, "已检测"))
         #expect(SettingsQuotaStatus.status(for: zCode(false), zCodeKeyConfigured: true) == (.none, "未检测到"))
 

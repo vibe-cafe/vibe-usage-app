@@ -3,27 +3,136 @@ import Testing
 @testable import VibeUsage
 
 struct QuotaCLIBridgeTests {
+    private func snapshot(
+        _ provider: ProviderRateLimit.Provider, status: String, source: String = "live",
+        fields: [String: Any] = [:]
+    ) throws -> ProviderRateLimit {
+        var product = fields
+        product["id"] = provider.rawValue
+        product["status"] = status
+        product["source"] = source
+        product["fetchedAt"] = "2026-11-20T00:00:00Z"
+        product["meters"] = status == "ok" ? [["id": "weekly", "label": "7d", "utilization": 30]] : []
+        product["message"] = "private fixture"
+        let data = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "products": [product]])
+        let envelope = try QuotaCLIBridge.decode(String(decoding: data, as: UTF8.self))
+        return try #require(QuotaCLIBridge.snapshots(from: envelope).first)
+    }
+
+    private func settings(_ snapshot: ProviderRateLimit, keyConfigured: Bool = false) -> String {
+        SettingsQuotaStatus.status(
+            for: QuotaProduct(provider: snapshot.provider, availability: .ready, isDetected: true),
+            zCodeKeyConfigured: keyConfigured, warningSnapshot: snapshot
+        ).text
+    }
+
     @Test @MainActor
-    func agyInstallAndLoginFailuresReachAllThreeSurfaces() throws {
-        let product = QuotaProduct(provider: .antigravity, availability: .ready, isDetected: true)
-        for (cliStatus, shortText, cardText) in [
-            ("missing_credentials", "需要 agy 命令行", "请安装 agy 命令行并登录后重试"),
-            ("unauthorized", "需要登录", "请在 agy 中登录后重试"),
-            ("expired_credentials", "需要登录", "请在 agy 中登录后重试"),
-        ] {
-            let envelope = try QuotaCLIBridge.decode("""
-            {"schemaVersion":1,"products":[{"id":"antigravity","status":"\(cliStatus)","meters":[],
-            "source":"live","fetchedAt":"2026-11-20T00:00:00Z","message":"private fixture"}]}
-            """)
-            let snapshot = try #require(QuotaCLIBridge.snapshots(from: envelope).first)
-            #expect(snapshot.status == .unauthorized)
-            #expect(SettingsQuotaStatus.status(
-                for: product, zCodeKeyConfigured: false, warningSnapshot: snapshot
-            ) == (.warning, shortText))
-            #expect(RateLimitCardView.agyAuthorizationText(for: snapshot) == cardText)
-            #expect(DiagnosticSummary.quotaText(
-                snapshot: snapshot, isSelected: true, isDetected: true, isRefreshing: false, now: Date()
-            ) == "已开启 · 本机已检测 · \(cardText)")
+    func signInStatusesDistinguishMissingFromRejectedForEveryCLIProduct() throws {
+        let cases: [(ProviderRateLimit.Provider, String, String, String, String)] = [
+            (.kimiCode, "请先登录 Kimi Code", "需登录", "登录已失效，请重新登录", "已失效"),
+            (.cursor, "请先登录 Cursor", "需登录", "登录已失效，请重新登录", "已失效"),
+            (.zCode, "请在设置中配置 BigModel API Key", "需 Key", "API Key 无效，请在设置中更换", "Key 无效"),
+            (.antigravity, "请安装 agy 或 Antigravity", "未安装", "请在 Antigravity 中登录", "已失效"),
+            (.grok, "请先登录", "需登录", "登录已失效，请重新登录", "已失效"),
+        ]
+        for (provider, missing, missingStatus, rejected, rejectedStatus) in cases {
+            for code in ["missing_credentials", "unauthorized", "expired_credentials"] {
+                let result = try snapshot(provider, status: code)
+                let isMissing = code == "missing_credentials"
+                #expect(result.status == .unauthorized)
+                #expect(RateLimitCardView.authorizationText(for: result) == (isMissing ? missing : rejected))
+                #expect(settings(result, keyConfigured: isMissing) == (isMissing ? missingStatus : rejectedStatus))
+            }
+        }
+        let zAI = try snapshot(.zCode, status: "missing_credentials")
+        #expect(RateLimitCardView.authorizationText(for: zAI, zCodeRegion: .zAI) == "请在设置中配置 Z.ai API Key")
+        let agy = try snapshot(.antigravity, status: "missing_credentials", fields: ["failureReason": "programNotFound"])
+        #expect(agy.liveFailure == .programNotFound)
+        #expect(DiagnosticSummary.quotaText(snapshot: agy, isSelected: true, isDetected: true,
+            isRefreshing: false, now: Date()) == "已开启 · 本机已检测 · 请安装 agy 或 Antigravity")
+    }
+
+    @Test @MainActor
+    func failureCodesReachCardAndSettingsWithoutTheCLIMessage() throws {
+        let cases: [(String, ProviderRateLimit.LiveFailure, String, String)] = [
+            ("credentialsMissing", .credentialsNotFound, "运行 grok login 后可实时读取", "需登录"),
+            ("credentialsRejected", .credentialsRejected, "登录已失效", "已失效"),
+            ("credentialsUnreadable", .credentialsUnreadable, "读不到登录信息", "读不了"),
+            ("credentialsEncrypted", .credentialsEncrypted, "登录信息已加密，暂时读不了", "不支持"),
+            ("loginRefreshFailed", .loginRefreshFailed, "登录续期失败", "续期失败"),
+            ("programNotFound", .programNotFound, "未找到 Grok 命令行", "未安装"),
+            ("programOutdated", .programOutdated, "版本较旧，升级后可实时读取", "需升级"),
+            ("programNoAnswer", .programNoAnswer, "没有返回额度", "无响应"),
+            ("timedOut", .endpointTimedOut, "读取超时", "超时"),
+            ("unreachable", .endpointUnreachable, "连接失败", "连不上"),
+            ("httpStatus", .endpointHTTPStatus(502), "接口报错 502", "接口报错"),
+            ("unrecognizedResponse", .endpointUnrecognized, "返回数据无法识别", "数据异常"),
+            ("localRecordUnreadable", .localRecordUnreadable, "读不了本机记录", "读不了"),
+            ("internalError", .cliFailed, "配额 CLI 出错", "CLI 出错"),
+        ]
+        for (code, failure, card, short) in cases {
+            let result = try snapshot(.grok, status: "retryable_error", fields: ["failureReason": code, "httpStatus": 502])
+            #expect(result.liveFailure == failure)
+            #expect(RateLimitCardView.retryableErrorText(for: result).title == card)
+            #expect(settings(result) == short)
+        }
+        let noNumber = try snapshot(.kimiCode, status: "retryable_error", fields: ["failureReason": "httpStatus"])
+        #expect(RateLimitCardView.retryableErrorText(for: noNumber).title == "接口报错")
+        let encrypted = try snapshot(.cursor, status: "unsupported", fields: ["failureReason": "credentialsEncrypted"])
+        #expect(encrypted.status == .noData)
+        #expect(RateLimitCardView.emptyStateText(for: encrypted, isDetected: true) == "登录信息已加密，暂时读不了")
+        let unknown = try snapshot(.cursor, status: "retryable_error", fields: ["failureReason": "future"])
+        #expect(unknown.liveFailure == nil)
+        #expect(RateLimitCardView.retryableErrorText(for: unknown).title == "暂时读不到额度")
+    }
+
+    @Test @MainActor
+    func emptyCodesExplainTheProviderRecord() throws {
+        let cases: [(ProviderRateLimit.Provider, String, ProviderRateLimit.EmptyReason, String, String)] = [
+            (.kimiCode, "limitReached", .limitReached, "额度已用满 · 等待重置", "已用满"),
+            (.kimiCode, "noWindow", .noWindow, "没有生效的额度窗口", "无窗口"),
+            (.zCode, "notEntitled", .notEntitled, "未订阅 ZCode", "未订阅"),
+            (.cursor, "sessionWithoutPlanLimits", .sessionWithoutPlanLimits, "当前登录方式不含订阅额度", "不适用"),
+            (.grok, "periodEnded", .periodEnded, "账期已结束 · 用一次 Grok 后更新", "待更新"),
+            (.antigravity, "periodEnded", .periodEnded, "额度已重置 · 下次读取时更新", "待更新"),
+            (.cursor, "periodEnded", .periodEnded, "上个周期已结束", "待更新"),
+            (.grok, "noLocalRecord", .noLocalRecord, "暂无记录 · 用一次 Grok 后更新", "无记录"),
+            (.antigravity, "noLocalRecord", .noLocalRecord, "用过 Antigravity 后显示", "无记录"),
+            (.cursor, "noLocalRecord", .noLocalRecord, "本机暂无记录", "无记录"),
+        ]
+        for (provider, code, reason, card, short) in cases {
+            let result = try snapshot(provider, status: "no_data", fields: ["emptyReason": code, "failureReason": "timedOut"])
+            #expect(result.emptyReason == reason)
+            #expect(result.liveFailure == .endpointTimedOut)
+            #expect(RateLimitCardView.emptyStateText(for: result, isDetected: true) == card)
+            #expect(settings(result) == short)
+        }
+        let unknown = try snapshot(.grok, status: "no_data", fields: ["emptyReason": "future"])
+        #expect(unknown.emptyReason == nil)
+        #expect(RateLimitCardView.emptyStateText(for: unknown, isDetected: true) == "没读到额度，原因未知")
+    }
+
+    @Test @MainActor
+    func cacheAndLocalMetersCarryTheLiveFailureOrPause() throws {
+        for (source, label) in [("cache", "缓存"), ("local", "本地日志")] {
+            let result = try snapshot(.grok, status: "ok", source: source, fields: ["failureReason": "httpStatus", "httpStatus": 503])
+            #expect(result.status == .ok)
+            #expect(RateLimitCardView.staleDataNote(for: result) == "来源：\(label) · 接口报错 503")
+            let unknown = try snapshot(.grok, status: "ok", source: source, fields: ["failureReason": "future"])
+            #expect(unknown.liveFailure == (source == "cache" ? .cliReportedFailure : nil))
+        }
+        for (code, card) in [("proxyUnsupported", "代理无法照着走，已暂停读取"), ("proxyNotDetected", "未检测到代理，已暂停读取"),
+                             ("egressUnconfirmed", "无法确认网络出口，已暂停读取"), ("egressRegionUnsupported", "网络出口在香港，已暂停读取")] {
+            let fields = ["pauseReason": code, "egressRegion": "HK"]
+            let paused = try snapshot(.grok, status: "unsupported", fields: fields)
+            #expect(paused.status == .noData)
+            #expect(paused.liveFailure?.isPause == true)
+            #expect(RateLimitCardView.emptyStateText(for: paused, isDetected: true) == card)
+            let local = try snapshot(.grok, status: "ok", source: "local", fields: fields)
+            #expect(local.status == .ok)
+            #expect(local.meters.first?.window.utilization == 30)
+            #expect(RateLimitCardView.staleDataNote(for: local) == "来源：本地日志 · \(card)")
+            #expect(settings(local) == "已暂停")
         }
     }
 

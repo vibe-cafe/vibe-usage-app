@@ -19,8 +19,9 @@ enum QuotaCLIBridge {
         var source: String
         var message: String?
         var emptyReason: String?
-        /// Why an `unsupported` read was deliberately not sent (the CLI's
-        /// egress check); `egressRegion` comes with `egressRegionUnsupported`.
+        var failureReason: String?
+        var httpStatus: Int?
+        /// A paused live read can still report meters from a local record.
         var pauseReason: String?
         var egressRegion: String?
     }
@@ -127,25 +128,24 @@ enum QuotaCLIBridge {
             else { throw ProtocolError.unknownProduct(product.id) }
 
             let status: ProviderRateLimit.Status
-            // A cached answer follows a failed live read. Only the structured
-            // status and source are safe to show, never the CLI's message.
-            var liveFailure: ProviderRateLimit.LiveFailure? = product.source == "cache" ? .cliReportedFailure : nil
+            var liveFailure = failure(reason: product.failureReason, httpStatus: product.httpStatus)
             switch product.status {
             case "ok": status = product.meters.isEmpty ? .noData : .ok
-            case "no_data": status = .noData
-            case "unsupported":
-                status = .noData
-                if let pause = pauseFailure(reason: product.pauseReason, region: product.egressRegion) {
-                    liveFailure = pause
-                }
+            case "no_data", "unsupported": status = .noData
             case "missing_credentials":
                 status = .unauthorized
-                if provider == .antigravity { liveFailure = .credentialsNotFound }
+                liveFailure = liveFailure ?? (provider == .antigravity ? .programNotFound : .credentialsNotFound)
             case "expired_credentials", "unauthorized":
                 status = .unauthorized
-                if provider == .antigravity { liveFailure = .credentialsRejected }
+                liveFailure = liveFailure ?? .credentialsRejected
             case "retryable_error": status = .retryableError
             default: status = .error("无法识别本地配额状态")
+            }
+            if product.status == "ok" || product.status == "unsupported" {
+                liveFailure = pauseFailure(reason: product.pauseReason, region: product.egressRegion) ?? liveFailure
+            }
+            if liveFailure == nil, product.source == "cache" {
+                liveFailure = .cliReportedFailure
             }
             return ProviderRateLimit(
                 provider: provider,
@@ -170,15 +170,46 @@ enum QuotaCLIBridge {
                 status: status,
                 fetchedAt: product.fetchedAt,
                 dataAsOf: product.dataAsOf,
-                emptyReason: product.emptyReason == "noWindow" ? .noWindow : nil,
+                emptyReason: emptyReason(product.emptyReason),
                 source: source(product.source),
                 liveFailure: liveFailure
             )
         }
     }
 
-    /// The CLI's `pauseReason`, as the card's own fixed reason. Unknown codes
-    /// stay nil (the card then says nothing was read, as before).
+    private static func emptyReason(_ reason: String?) -> ProviderRateLimit.EmptyReason? {
+        switch reason {
+        case "limitReached": .limitReached
+        case "noWindow": .noWindow
+        case "notEntitled": .notEntitled
+        case "sessionWithoutPlanLimits": .sessionWithoutPlanLimits
+        case "periodEnded": .periodEnded
+        case "noLocalRecord": .noLocalRecord
+        default: nil
+        }
+    }
+
+    private static func failure(reason: String?, httpStatus: Int?) -> ProviderRateLimit.LiveFailure? {
+        switch reason {
+        case "credentialsMissing": .credentialsNotFound
+        case "credentialsRejected": .credentialsRejected
+        case "credentialsUnreadable": .credentialsUnreadable
+        case "credentialsEncrypted": .credentialsEncrypted
+        case "loginRefreshFailed": .loginRefreshFailed
+        case "programNotFound": .programNotFound
+        case "programOutdated": .programOutdated
+        case "programNoAnswer": .programNoAnswer
+        case "timedOut": .endpointTimedOut
+        case "unreachable": .endpointUnreachable
+        case "httpStatus": .endpointHTTPStatus(httpStatus)
+        case "unrecognizedResponse": .endpointUnrecognized
+        case "localRecordUnreadable": .localRecordUnreadable
+        case "internalError": .cliFailed
+        default: nil
+        }
+    }
+
+    /// Unknown pause codes stay nil.
     static func pauseFailure(reason: String?, region: String?) -> ProviderRateLimit.LiveFailure? {
         switch reason {
         case "egressRegionUnsupported":
@@ -186,6 +217,7 @@ enum QuotaCLIBridge {
             return .egressRegionUnsupported(code ?? "")
         case "egressUnconfirmed": return .egressUnconfirmed
         case "proxyNotDetected": return .proxyNotDetected
+        case "proxyUnsupported": return .proxyUnsupported
         default: return nil
         }
     }

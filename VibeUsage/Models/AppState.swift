@@ -686,7 +686,7 @@ final class AppState {
               let snapshot = rateLimits.first(where: { $0.provider == provider }),
               // Numbers kept on screen while the egress check pauses the
               // read still warn: they are not being refreshed.
-              snapshot.status != .ok || snapshot.liveFailure?.isEgressPause == true
+              snapshot.status != .ok || snapshot.liveFailure?.isNetworkPause == true
         else { return nil }
         return snapshot
     }

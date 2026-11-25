@@ -127,25 +127,45 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    static func agyAuthorizationText(for snapshot: ProviderRateLimit) -> String {
-        snapshot.needsAgyCLI ? "请安装 agy 命令行并登录后重试" : "请在 agy 中登录后重试"
+    static func authorizationText(for snapshot: ProviderRateLimit, zCodeRegion: ZCodeQuotaRegion = .bigModel) -> String {
+        if let failure = snapshot.liveFailure, failure != .credentialsNotFound, failure != .credentialsRejected {
+            return liveFailureText(failure, provider: snapshot.provider)
+        }
+        let missing = snapshot.liveFailure == .credentialsNotFound
+        switch snapshot.provider {
+        case .zCode:
+            return missing ? "请在设置中配置 \(zCodeRegion.apiKeyName)" : "API Key 无效，请在设置中更换"
+        case .antigravity: return "请在 Antigravity 中登录"
+        case .opencodeGo: return "请在 OpenCode 中重新登录后重试"
+        case .kimiCode where missing, .cursor where missing:
+            return "请先登录 \(snapshot.provider.displayName)"
+        default: return missing ? "请先登录" : "登录已失效，请重新登录"
+        }
     }
 
-    /// Status line for an enabled product whose card has no meters to draw.
-    /// Only ever states what the data channel actually reported: the live
-    /// Codex endpoint's own reason (`emptyReason`), local detection, or —
-    /// when neither exists — that nothing has been read yet. Never invents
-    /// "used up" for a source that cannot tell.
+    /// A settled card prefers the source's empty reason, then the live read's failure.
     static func emptyStateText(for snapshot: ProviderRateLimit, isDetected: Bool) -> String {
         switch snapshot.emptyReason {
         case .limitReached:
-            return "本期订阅配额已用满 · 等待额度重置"
+            return "额度已用满 · 等待重置"
         case .noWindow:
-            return "当前没有生效的额度窗口"
+            return "没有生效的额度窗口"
         case .notEntitled:
             return "未订阅 \(snapshot.provider.displayName)"
         case .sessionWithoutPlanLimits:
-            return "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）"
+            return "当前登录方式不含订阅额度"
+        case .periodEnded:
+            switch snapshot.provider {
+            case .grok: return "账期已结束 · 用一次 Grok 后更新"
+            case .antigravity: return "额度已重置 · 下次读取时更新"
+            default: return "上个周期已结束"
+            }
+        case .noLocalRecord:
+            switch snapshot.provider {
+            case .grok: return "暂无记录 · 用一次 Grok 后更新"
+            case .antigravity: return "用过 Antigravity 后显示"
+            default: return "本机暂无记录"
+            }
         case .nonessentialTrafficDisabled:
             return "组织策略关闭了 Claude Code 非必要流量 · 无法读取"
         case nil:
@@ -154,9 +174,8 @@ struct RateLimitCardView: View {
             if let failure = snapshot.liveFailure {
                 return liveFailureText(failure, provider: snapshot.provider)
             }
-            return isDetected
-                ? "暂未读取到订阅配额数据"
-                : "未检测到本机安装或登录"
+            if snapshot.fetchedAt == nil { return "尚未读取" }
+            return isDetected ? "没读到额度，原因未知" : "未检测到安装"
         }
     }
 
@@ -166,7 +185,7 @@ struct RateLimitCardView: View {
     /// back to, so its source is always the live read.
     static func retryableErrorText(for snapshot: ProviderRateLimit) -> (title: String, detail: String) {
         let title = snapshot.liveFailure.map { liveFailureText($0, provider: snapshot.provider) }
-            ?? "暂时无法读取订阅配额"
+            ?? "暂时读不到额度"
         return (title, "来源：实时读取")
     }
 
@@ -197,34 +216,39 @@ struct RateLimitCardView: View {
         _ failure: ProviderRateLimit.LiveFailure,
         provider: ProviderRateLimit.Provider
     ) -> String {
-        let name = provider.displayName
         switch failure {
-        case .claudeBinaryNotFound: return "未找到 Claude Code 程序"
-        case .claudeLaunchFailed: return "Claude 启动失败"
-        case .claudeTimedOut: return "Claude 配额读取超时"
-        case .claudeNoResponse: return "Claude 没有响应配额请求"
-        case .claudeNoWindows: return "Claude 没有返回额度窗口"
+        case .claudeBinaryNotFound: return "未找到 Claude Code"
+        case .claudeLaunchFailed: return "启动失败"
+        case .claudeTimedOut, .endpointTimedOut, .cliTimedOut: return "读取超时"
+        case .claudeNoResponse: return "没有响应"
+        case .claudeNoWindows, .programNoAnswer: return "没有返回额度"
         case .claudeBlockedByPolicy: return "组织策略关闭了 Claude Code 非必要流量"
-        // OpenCode Go has no login of its own here: the card reads OpenCode's.
         case .credentialsNotFound where provider == .opencodeGo: return "在 OpenCode 里登录后自动显示"
-        case .credentialsNotFound: return "未找到 \(name) 登录信息"
-        case .credentialsRejected: return "\(name) 登录已失效"
+        case .credentialsNotFound where provider == .grok: return "运行 grok login 后可实时读取"
+        case .credentialsNotFound: return "未找到登录信息"
         case .credentialsExpired where provider == .opencodeGo: return "打开 OpenCode 后自动显示"
-        case .credentialsExpired: return "\(name) 登录已过期"
-        case .endpointTimedOut: return "\(name) 配额接口请求超时"
-        case .endpointUnreachable: return "\(name) 配额接口连接失败"
-        case let .endpointHTTPStatus(status): return "\(name) 配额接口返回错误 \(status)"
-        case .endpointUnrecognized: return "\(name) 配额接口返回了无法识别的数据"
-        case .cliRuntimeMissing: return "没有可用的 Node.js 或 Bun"
-        case .cliTimedOut: return "配额 CLI 读取超时"
-        case .cliFailed: return "配额 CLI 运行失败"
-        case .cliUnrecognizedOutput: return "配额 CLI 返回了无法识别的数据"
-        case .cliSchemaMismatch: return "配额 CLI 协议版本不兼容"
-        case .cliNoResult: return "配额 CLI 没有返回这个产品"
+        case .credentialsRejected, .credentialsExpired: return "登录已失效"
+        case .credentialsUnreadable: return "读不到登录信息"
+        case .credentialsEncrypted: return "登录信息已加密，暂时读不了"
+        case .loginRefreshFailed: return "登录续期失败"
+        case .programNotFound where provider == .antigravity: return "请安装 agy 或 Antigravity"
+        case .programNotFound where provider == .grok: return "未找到 Grok 命令行"
+        case .programNotFound: return "未找到程序"
+        case .programOutdated: return "版本较旧，升级后可实时读取"
+        case .localRecordUnreadable: return "读不了本机记录"
+        case .endpointUnreachable: return "连接失败"
+        case let .endpointHTTPStatus(status): return status.map { "接口报错 \($0)" } ?? "接口报错"
+        case .endpointUnrecognized: return "返回数据无法识别"
+        case .cliRuntimeMissing: return "缺少 Node.js"
+        case .cliFailed: return "配额 CLI 出错"
+        case .cliUnrecognizedOutput: return "配额 CLI 输出无法识别"
+        case .cliSchemaMismatch: return "配额 CLI 版本不兼容"
+        case .cliNoResult: return "配额 CLI 没有返回结果"
         case .cliReportedFailure: return "实时读取失败"
         case let .egressRegionUnsupported(region): return "网络出口\(egressPlace(region))，已暂停读取"
         case .egressUnconfirmed: return "无法确认网络出口，已暂停读取"
         case .proxyNotDetected: return "未检测到代理，已暂停读取"
+        case .proxyUnsupported: return "代理无法照着走，已暂停读取"
         }
     }
 
@@ -338,26 +362,8 @@ private struct ProviderCard: View {
             // Kept as a graceful landing for a snapshot written by an older build.
             messageContent(text: "订阅配额未启用", action: "重试")
         case .unauthorized:
-            if snapshot.provider == .zCode {
-                messageContent(
-                    text: "请在设置中配置 \(appState.zCodeQuotaRegion.apiKeyName)",
-                    action: "重试"
-                )
-            } else if snapshot.provider == .kimiCode {
-                // The shared CLI has already attempted Kimi's standard OAuth
-                // refresh before this status reaches the app.
-                messageContent(text: "请重新登录 Kimi Code 后重试", action: "重试")
-            } else if snapshot.provider == .cursor {
-                messageContent(text: "请在 Cursor 中重新登录后重试", action: "重试")
-            } else if snapshot.provider == .antigravity {
-                messageContent(text: RateLimitCardView.agyAuthorizationText(for: snapshot), action: "重试")
-            } else if snapshot.provider == .opencodeGo {
-                // The key comes from OpenCode's own auth.json; only OpenCode
-                // can re-issue it, so point there rather than at the card.
-                messageContent(text: "请在 OpenCode 中重新登录后重试", action: "重试")
-            } else {
-                messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
-            }
+            messageContent(text: RateLimitCardView.authorizationText(for: snapshot, zCodeRegion: appState.zCodeQuotaRegion),
+                           action: "重试")
         case .retryableError:
             let text = RateLimitCardView.retryableErrorText(for: snapshot)
             messageContent(text: text.title, detail: text.detail, action: "重试")

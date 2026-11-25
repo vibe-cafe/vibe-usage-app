@@ -569,7 +569,7 @@ final class RateLimitCoordinator {
                                 || provider == .cursor || provider == .antigravity {
                         upsert(snapshot)
                     } else {
-                        markLiveFailure(.cliReportedFailure, on: provider)
+                        markLiveFailure(snapshot.liveFailure ?? .cliReportedFailure, on: provider)
                     }
                     #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                     TestDiagnosticLog.recordQuotaResult(snapshot)

@@ -109,14 +109,27 @@ final class SettingsNavigation {
 
 /// The 订阅配额 table's 状态 column: local detection, or what is missing.
 enum SettingsQuotaStatus {
-    /// A read paused by the egress check, whether or not older numbers stay
-    /// on the card.
-    static func egressPauseText(_ failure: ProviderRateLimit.LiveFailure?) -> String? {
+    private static func failureText(_ failure: ProviderRateLimit.LiveFailure, provider: ProviderRateLimit.Provider) -> String {
         switch failure {
-        case .egressRegionUnsupported: return "出口受限，已暂停"
-        case .egressUnconfirmed: return "出口未确认"
-        case .proxyNotDetected: return "无代理，已暂停"
-        default: return nil
+        case .credentialsNotFound: return provider == .zCode ? "需 Key" : "需登录"
+        case .credentialsRejected: return provider == .zCode ? "Key 无效" : "已失效"
+        case .credentialsExpired: return provider == .opencodeGo ? "需打开" : "已失效"
+        case .programNotFound, .claudeBinaryNotFound: return "未安装"
+        case .programOutdated: return "需升级"
+        case .claudeBlockedByPolicy: return "已禁止"
+        case .egressRegionUnsupported, .egressUnconfirmed, .proxyNotDetected, .proxyUnsupported: return "已暂停"
+        case .claudeTimedOut, .cliTimedOut, .endpointTimedOut: return "超时"
+        case .endpointUnreachable: return "连不上"
+        case .endpointHTTPStatus: return "接口报错"
+        case .endpointUnrecognized, .cliUnrecognizedOutput: return "数据异常"
+        case .credentialsUnreadable, .localRecordUnreadable: return "读不了"
+        case .credentialsEncrypted: return "不支持"
+        case .loginRefreshFailed: return "续期失败"
+        case .programNoAnswer, .claudeNoWindows, .claudeNoResponse: return "无响应"
+        case .claudeLaunchFailed: return "启动失败"
+        case .cliRuntimeMissing: return "缺 Node"
+        case .cliFailed, .cliSchemaMismatch, .cliNoResult: return "CLI 出错"
+        case .cliReportedFailure: return "失败"
         }
     }
 
@@ -126,37 +139,32 @@ enum SettingsQuotaStatus {
         warningSnapshot: ProviderRateLimit? = nil
     ) -> (kind: SettingsStatusKind, text: String) {
         if let snapshot = warningSnapshot {
-            let needsLogin = snapshot.liveFailure == .credentialsNotFound || snapshot.liveFailure == .credentialsRejected
-            // OpenCode Go reads OpenCode's own login, so the word says where.
-            let loginText = product.provider == .opencodeGo ? "需登录 OpenCode" : "需要登录"
-            if snapshot.emptyReason == nil, let pause = egressPauseText(snapshot.liveFailure) {
-                return (.warning, pause)
-            }
-            if snapshot.liveFailure == .credentialsExpired, snapshot.status != .ok, snapshot.emptyReason == nil {
-                return (.warning, product.provider == .opencodeGo ? "需打开 OpenCode" : "登录已过期")
-            }
+            let reason = snapshot.liveFailure.map { failureText($0, provider: product.provider) }
             switch snapshot.status {
-            case .unauthorized where product.provider == .zCode:
-                return (.warning, zCodeKeyConfigured ? "API Key 无效" : "需要 API Key")
             case .unauthorized:
-                return (.warning, snapshot.needsAgyCLI ? "需要 agy 命令行" : loginText)
+                if let reason { return (.warning, reason) }
+                if product.provider == .zCode { return (.warning, zCodeKeyConfigured ? "Key 无效" : "需 Key") }
+                return (.warning, product.provider == .opencodeGo ? "需登录" : "已失效")
             case .noData:
                 switch snapshot.emptyReason {
                 case .notEntitled: return (.warning, "未订阅")
-                case .sessionWithoutPlanLimits: return (.warning, "无订阅额度")
-                case .nonessentialTrafficDisabled: return (.warning, "组织策略不允许")
-                case .limitReached: return (.warning, "额度已用满")
-                case .noWindow: return (.warning, "暂无额度窗口")
-                case nil: return (.warning, needsLogin ? loginText : "暂无配额数据")
+                case .sessionWithoutPlanLimits: return (.warning, "不适用")
+                case .nonessentialTrafficDisabled: return (.warning, "已禁止")
+                case .limitReached: return (.warning, "已用满")
+                case .noWindow: return (.warning, "无窗口")
+                case .periodEnded: return (.warning, "待更新")
+                case .noLocalRecord: return (.warning, "无记录")
+                case nil: return (.warning, reason ?? (snapshot.fetchedAt == nil ? "未读取" : "无数据"))
                 }
-            case .retryableError: return (.warning, needsLogin ? loginText : "读取失败")
-            case .error: return (.error, "读取失败")
+            case .retryableError: return (.warning, reason ?? "失败")
+            case .error: return (.error, "出错")
             case .disabled: return (.warning, "未启用")
-            case .ok: break
+            case .ok:
+                if snapshot.liveFailure?.isNetworkPause == true { return (.warning, "已暂停") }
             }
         }
         if product.provider == .zCode, product.availability == .ready, !zCodeKeyConfigured {
-            return (.warning, "需要 API Key")
+            return (.warning, "需 Key")
         }
         return (product.isDetected ? .ok : .none, product.statusText)
     }
