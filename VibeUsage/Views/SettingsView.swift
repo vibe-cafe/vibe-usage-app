@@ -131,14 +131,15 @@ struct SettingsSidebar: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 18, height: 18)
+            // The row is about 131 pt wide. The version always shows in full
+            // (an 8 pt gap and a fixed-width name cut 「0.7.10」 to 「0.7.…」);
+            // when the row is too narrow the gap shrinks to 4 pt and then the
+            // name is shortened instead (the external-test 「Vibe Usage Test」).
+            // 关于 shows both in full.
             Text(AppConfig.displayName)
                 .font(SettingsTheme.caption)
                 .lineLimit(1)
-                .fixedSize()
                 .padding(.leading, 8)
-            // The row is about 131 pt wide; with an 8 pt gap a two-digit patch
-            // number (「0.7.10」) was cut to 「0.7.…」. The version keeps its
-            // full width and the gap gives way instead.
             Spacer(minLength: 4)
             Text(SettingsVersion.short)
                 .font(.system(size: 11, design: .monospaced))
