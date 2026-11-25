@@ -315,8 +315,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case egressRegionUnsupported(String)
         /// The egress could not be confirmed (no answer, unknown country).
         case egressUnconfirmed
-        /// No proxy detected and the user said this Mac relies on a local
-        /// proxy client (「这台电脑上网靠本机代理软件」).
+        /// No proxy detected and the user chose 「暂停读取」 for 「没检测到代理时」
+        /// (Settings → 订阅配额 → 隐私保护).
         case proxyNotDetected
     }
 
