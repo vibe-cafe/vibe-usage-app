@@ -457,3 +457,13 @@ struct SettingsLinksTests {
         #expect(bounds.minX >= -0.01 && bounds.maxX <= 24.01 && bounds.maxY <= 24.01)
     }
 }
+
+/// AGY reports "sign in" alike for a never-signed-in and a lapsed login.
+struct SettingsQuotaAgyLoginTests {
+    @Test
+    func agySignInReadsAsNeedsLoginNotExpired() {
+        let product = QuotaProduct(provider: .antigravity, availability: .ready, isDetected: true)
+        let snapshot = ProviderRateLimit(provider: .antigravity, status: .unauthorized, liveFailure: .credentialsRejected)
+        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: snapshot) == (.warning, "需登录"))
+    }
+}

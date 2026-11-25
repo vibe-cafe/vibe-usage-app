@@ -112,7 +112,8 @@ enum SettingsQuotaStatus {
     private static func failureText(_ failure: ProviderRateLimit.LiveFailure, provider: ProviderRateLimit.Provider) -> String {
         switch failure {
         case .credentialsNotFound: return provider == .zCode ? "需 Key" : "需登录"
-        case .credentialsRejected: return provider == .zCode ? "Key 无效" : "已失效"
+        // AGY reports "sign in" the same way whether it was never signed in or lapsed.
+        case .credentialsRejected: return provider == .zCode ? "Key 无效" : provider == .antigravity ? "需登录" : "已失效"
         case .credentialsExpired: return provider == .opencodeGo ? "需打开" : "已失效"
         case .programNotFound, .claudeBinaryNotFound: return "未安装"
         case .programOutdated: return "需升级"

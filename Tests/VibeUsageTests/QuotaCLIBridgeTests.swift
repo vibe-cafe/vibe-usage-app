@@ -32,7 +32,7 @@ struct QuotaCLIBridgeTests {
             (.kimiCode, "请先登录 Kimi Code", "需登录", "登录已失效，请重新登录", "已失效"),
             (.cursor, "请先登录 Cursor", "需登录", "登录已失效，请重新登录", "已失效"),
             (.zCode, "请在设置中配置 BigModel API Key", "需 Key", "API Key 无效，请在设置中更换", "Key 无效"),
-            (.antigravity, "请安装 agy 或 Antigravity", "未安装", "请在 Antigravity 中登录", "已失效"),
+            (.antigravity, "请安装 agy 或 Antigravity", "未安装", "请在 Antigravity 中登录", "需登录"),
             (.grok, "请先登录", "需登录", "登录已失效，请重新登录", "已失效"),
         ]
         for (provider, missing, missingStatus, rejected, rejectedStatus) in cases {
