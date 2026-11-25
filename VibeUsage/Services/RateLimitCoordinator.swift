@@ -216,7 +216,11 @@ final class RateLimitCoordinator {
     /// Mirrors `fetchUsageDataIfNeeded` so popover-open doesn't re-hit the
     /// endpoint when the user toggles the popover repeatedly.
     func refreshCodexIfNeeded(maxAge: TimeInterval = 60) async {
-        if let last = lastCodexFetchAt, Date().timeIntervalSince(last) < maxAge {
+        // A read the egress check paused is tried again at every open: a proxy
+        // turned on meanwhile is picked up at once (the check keeps its own
+        // one-minute answer, so this sends nothing new while still direct).
+        if currentSnapshot(.codex)?.liveFailure?.isEgressPause != true,
+           let last = lastCodexFetchAt, Date().timeIntervalSince(last) < maxAge {
             return
         }
         await refreshCodex()
@@ -359,7 +363,8 @@ final class RateLimitCoordinator {
     /// Refresh Claude only if the last read was over `maxAge` seconds ago.
     /// Mirrors `refreshCodexIfNeeded` for the debounced popover-open path.
     func refreshClaudeIfNeeded(maxAge: TimeInterval = 60) async {
-        if let last = lastClaudeFetchAt, Date().timeIntervalSince(last) < maxAge {
+        if currentSnapshot(.claudeCode)?.liveFailure?.isEgressPause != true,
+           let last = lastClaudeFetchAt, Date().timeIntervalSince(last) < maxAge {
             return
         }
         await refreshClaude()
@@ -618,6 +623,8 @@ final class RateLimitCoordinator {
         maxAge: TimeInterval = 60
     ) async {
         let stale = providers.filter { provider in
+            // A read the egress check paused is tried again at every open.
+            if currentSnapshot(provider)?.liveFailure?.isEgressPause == true { return true }
             guard let last = lastCLIFetchAt[provider] else { return true }
             return Date().timeIntervalSince(last) >= maxAge
         }

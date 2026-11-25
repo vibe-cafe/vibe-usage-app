@@ -150,6 +150,9 @@ enum SystemProxy {
         "api.kimi.com", "auth.kimi.com", "open.bigmodel.cn", "api.z.ai",
         "opencode.ai", "cursor.com", "cli-chat-proxy.grok.com",
         "daily-cloudcode-pa.googleapis.com", "generativelanguage.googleapis.com",
+        // The CLI's egress check asks one of these for Google, and only when
+        // its own route is direct too, so a PAC answer for them must reach it.
+        "chatgpt.com", "api.anthropic.com",
     ]
 
     /// Hosts the Claude Code probe reaches (Claude Code's network docs).

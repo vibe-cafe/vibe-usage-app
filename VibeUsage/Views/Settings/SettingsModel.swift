@@ -109,6 +109,17 @@ final class SettingsNavigation {
 
 /// The 订阅配额 table's 状态 column: local detection, or what is missing.
 enum SettingsQuotaStatus {
+    /// A read paused by the egress check, whether or not older numbers stay
+    /// on the card.
+    static func egressPauseText(_ failure: ProviderRateLimit.LiveFailure?) -> String? {
+        switch failure {
+        case .egressRegionUnsupported: return "出口受限，已暂停"
+        case .egressUnconfirmed: return "出口未确认"
+        case .proxyNotDetected: return "无代理，已暂停"
+        default: return nil
+        }
+    }
+
     static func status(
         for product: QuotaProduct,
         zCodeKeyConfigured: Bool,
@@ -118,6 +129,9 @@ enum SettingsQuotaStatus {
             let needsLogin = snapshot.liveFailure == .credentialsNotFound || snapshot.liveFailure == .credentialsRejected
             // OpenCode Go reads OpenCode's own login, so the word says where.
             let loginText = product.provider == .opencodeGo ? "需登录 OpenCode" : "需要登录"
+            if snapshot.emptyReason == nil, let pause = egressPauseText(snapshot.liveFailure) {
+                return (.warning, pause)
+            }
             if snapshot.liveFailure == .credentialsExpired, snapshot.status != .ok, snapshot.emptyReason == nil {
                 return (.warning, product.provider == .opencodeGo ? "需打开 OpenCode" : "登录已过期")
             }
