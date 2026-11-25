@@ -1332,4 +1332,52 @@ struct RateLimitCoordinatorTests {
         #expect(card?.sevenDay?.utilization == 30)
         #expect(card?.liveFailure == .endpointUnreachable)
     }
+
+    @Test
+    func antigravityIsAskedAtMostEveryFiveMinutesOnPopoverOpen() {
+        #expect(RateLimitCoordinator.popoverRefreshInterval(for: .antigravity, default: 60) == 300)
+        for provider in [ProviderRateLimit.Provider.kimiCode, .zCode, .grok, .cursor] {
+            #expect(RateLimitCoordinator.popoverRefreshInterval(for: provider, default: 60) == 60)
+        }
+        #expect(QuotaProductRow.note(for: .antigravity) == "Google 表示不支持第三方读取额度")
+        #expect(QuotaProductRow.note(for: .cursor) == nil)
+    }
+
+    /// The CLI answers Antigravity from its own record: after a reset it shows
+    /// the window as 0% (unused) or leaves it out (used since), under the same
+    /// `dataAsOf`. The card always takes that answer as is.
+    @Test @MainActor
+    func antigravityRecoveredWindowReplacesTheStalePercentage() async {
+        let (appState, defaults, suite) = selectedAppState([.antigravity])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let readAt = Date(timeIntervalSinceNow: -7_200)
+        let reset = Date(timeIntervalSinceNow: -3_600)
+        func snapshot(_ utilization: Double, resetsAt: Date?, dataAsOf: Date) -> ProviderRateLimit {
+            ProviderRateLimit(provider: .antigravity,
+                meters: [RateLimitMeter(id: "gemini-5h", label: "5h",
+                    window: RateLimitWindow(utilization: utilization, resetsAt: resetsAt, windowDuration: 18_000))],
+                status: .ok, fetchedAt: Date(), dataAsOf: dataAsOf, source: .live)
+        }
+        // Used after the reset and the next read failed: the CLI leaves the 5h
+        // window out under the same timestamp; the card must drop that row.
+        let weekly = ProviderRateLimit(provider: .antigravity,
+            meters: [RateLimitMeter(id: "gemini-weekly", label: "7d",
+                window: RateLimitWindow(utilization: 10, resetsAt: Date(timeIntervalSinceNow: 86_400), windowDuration: 604_800))],
+            status: .ok, fetchedAt: Date(), dataAsOf: reset, source: .cache, liveFailure: .cliReportedFailure)
+        var answers = [snapshot(40, resetsAt: reset, dataAsOf: readAt), snapshot(0, resetsAt: nil, dataAsOf: reset),
+                       snapshot(0, resetsAt: nil, dataAsOf: reset), weekly]
+        let coordinator = RateLimitCoordinator(appState: appState, fetchCLIQuotas: { _, _, _ in [answers.removeFirst()] })
+        await coordinator.refreshCLIProviders([.antigravity])
+        #expect(appState.rateLimits.first { $0.provider == .antigravity }?.meters.first?.window.utilization == 40)
+        await coordinator.refreshCLIProviders([.antigravity])
+        #expect(appState.rateLimits.first { $0.provider == .antigravity }?.meters.first?.window.utilization == 0)
+        await coordinator.refreshCLIProviders([.antigravity])
+        var card = appState.rateLimits.first { $0.provider == .antigravity }
+        #expect(card?.meters.first?.window.utilization == 0)
+        #expect(card?.liveFailure == nil)
+        await coordinator.refreshCLIProviders([.antigravity])
+        card = appState.rateLimits.first { $0.provider == .antigravity }
+        #expect(card?.meters.map(\.id) == ["gemini-weekly"])
+        #expect(card?.liveFailure == .cliReportedFailure)
+    }
 }
