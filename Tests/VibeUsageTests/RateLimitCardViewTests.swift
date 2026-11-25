@@ -168,6 +168,7 @@ struct RateLimitCardViewTests {
             .endpointUnreachable, .endpointHTTPStatus(503), .endpointUnrecognized,
             .cliRuntimeMissing, .cliTimedOut, .cliFailed, .cliUnrecognizedOutput,
             .cliSchemaMismatch, .cliNoResult, .cliReportedFailure,
+            .egressRegionUnsupported("CN"), .egressUnconfirmed, .proxyNotDetected,
         ]
         let texts = all.map { RateLimitCardView.liveFailureText($0, provider: .codex) }
         #expect(Set(texts).count == all.count)

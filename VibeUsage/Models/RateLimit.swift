@@ -308,6 +308,16 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// cache). Its specific reason exists only as free text, which the app
         /// deliberately does not display.
         case cliReportedFailure
+        // Paused on purpose (network-privacy principle, rule 3; `EgressCheck`,
+        // or the CLI's `pauseReason`): the read went out direct and the egress
+        // check said no. Nothing was sent; the next read checks again.
+        /// The egress is in a region the vendor does not serve (two letters).
+        case egressRegionUnsupported(String)
+        /// The egress could not be confirmed (no answer, unknown country).
+        case egressUnconfirmed
+        /// No proxy detected and the user said this Mac relies on a local
+        /// proxy client (「这台电脑上网靠本机代理软件」).
+        case proxyNotDetected
     }
 
     var liveFailure: LiveFailure?
@@ -320,6 +330,20 @@ struct ProviderRateLimit: Equatable, Identifiable {
 }
 
 extension ProviderRateLimit.LiveFailure {
+    /// A read stopped on purpose before it was sent (a policy or the egress
+    /// check), not one that failed: diagnostics say 「已暂停」.
+    var isPause: Bool {
+        self == .claudeBlockedByPolicy || isEgressPause
+    }
+
+    /// Paused by the egress check (`EgressCheck`): the next read checks again.
+    var isEgressPause: Bool {
+        switch self {
+        case .egressRegionUnsupported, .egressUnconfirmed, .proxyNotDetected: return true
+        default: return false
+        }
+    }
+
     /// URLSession failures split only into "timed out" and "could not
     /// connect"; the error's own description is not kept.
     static func transport(_ error: Error) -> Self {

@@ -293,6 +293,15 @@ final class AppState {
             ActivationCoordinator.shared.applyDockPreference()
         }
     }
+    /// 「检测网络出口」 (`EgressCheck`), default on; read again at every check
+    /// and passed to the CLI, so a change applies to the next read.
+    var egressCheckEnabled: Bool = true {
+        didSet { UserDefaults.standard.set(egressCheckEnabled, forKey: EgressCheck.enabledKey) }
+    }
+    /// 「这台电脑上网靠本机代理软件」 (`EgressCheck`), default off.
+    var egressRequiresLocalProxy: Bool = false {
+        didSet { UserDefaults.standard.set(egressRequiresLocalProxy, forKey: EgressCheck.requireProxyKey) }
+    }
 
     // MARK: - Menu Bar Stats (matches current time range, no filters)
 
@@ -356,6 +365,8 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
+        self.egressCheckEnabled = EgressCheck.isEnabled()
+        self.egressRequiresLocalProxy = EgressCheck.requiresProxy()
         initializeQuotaProducts()
 
         #if DEBUG
@@ -388,7 +399,7 @@ final class AppState {
             let urls = LoginLaunch.proxyProbeURLs(server: Self.launchProbeURL())
             launchProxyWait = Task.detached(priority: .utility) {
                 let up = await LoginLaunch.waitForProxy(urls: urls)
-                debugLog("[launch] \(up ? "proxy is up" : "proxy wait ran out") — network reads go ahead")
+                debugLog("[launch] \(up ? "proxy is up or none configured" : "proxy wait ran out") — network reads go ahead")
             }
         }
         if isConfigured {
@@ -678,7 +689,9 @@ final class AppState {
         guard isQuotaProviderSelected(provider),
               !isRateLimitRefreshing(provider),
               let snapshot = rateLimits.first(where: { $0.provider == provider }),
-              snapshot.status != .ok
+              // Numbers kept on screen while the egress check pauses the
+              // read still warn: they are not being refreshed.
+              snapshot.status != .ok || snapshot.liveFailure?.isEgressPause == true
         else { return nil }
         return snapshot
     }
@@ -940,8 +953,8 @@ final class AppState {
 
     /// The URL whose route decides whether the user's proxy is up: the server
     /// the CLI syncs to.
-    private static func launchProbeURL() -> URL {
-        URL(string: ConfigManager.load()?.apiUrl ?? "") ?? URL(string: "https://vibefriends.com/")!
+    nonisolated static func launchProbeURL(apiURL: String? = ConfigManager.load()?.apiUrl) -> URL {
+        UsageServer(apiURL).siteURL ?? URL(string: AppConfig.defaultApiUrl)!
     }
     /// The launch sync, cancelled when the scheduler is started again
     /// (relink) or the configuration is reset.

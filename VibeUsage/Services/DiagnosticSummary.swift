@@ -376,7 +376,7 @@ enum DiagnosticSummary {
             if let dataAsOf = snapshot.dataAsOf { parts.append("数据时间：\(age(from: dataAsOf, to: now))") }
             if let failure = snapshot.liveFailure {
                 // A policy stops the live read before it starts: paused, not failed.
-                let label = failure == .claudeBlockedByPolicy ? "实时读取已暂停" : "实时读取失败"
+                let label = failure.isPause ? "实时读取已暂停" : "实时读取失败"
                 parts.append("\(label)：\(RateLimitCardView.liveFailureText(failure, provider: snapshot.provider))")
             }
         case .noData:

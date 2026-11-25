@@ -82,6 +82,9 @@ enum RuntimeDetector {
                 env["PATH"] = directory + (base["PATH"].map { ":\($0)" } ?? "")
             }
             env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
+            // The egress-check settings, for the reads the CLI makes itself
+            // (Antigravity): `EgressCheck.cliEnvironment`.
+            env.merge(EgressCheck.cliEnvironment()) { _, appValue in appValue }
             #if DEBUG
             env["VIBE_USAGE_DEV"] = "1"
             #endif

@@ -216,6 +216,11 @@ struct SystemProxyTests {
         // The server keeps its real scheme and port: a PAC answers per URL.
         #expect(SystemProxy.configuredCLIURLs(home: home, apiURL: "http://usage.intra:8080").map(\.absoluteString)
             == ["https://registry.npmmirror.com/", "http://usage.intra:8080"])
+        // A config still holding the legacy production name resolves to vibefriends.com (already in cliHosts).
+        #expect(SystemProxy.configuredCLIURLs(home: home, apiURL: "https://vibecafe.ai").map(\.absoluteString)
+            == ["https://registry.npmmirror.com/"])
+        #expect(AppState.launchProbeURL(apiURL: "https://vibecafe.ai").absoluteString == "https://vibefriends.com")
+        #expect(AppState.launchProbeURL(apiURL: "http://usage.intra:8080").absoluteString == "http://usage.intra:8080")
     }
 
     // MARK: - Pinned sessions, against a stand-in proxy
@@ -286,7 +291,7 @@ struct SystemProxyTests {
     @Test
     func loginLaunchGoesAheadOnceTheProxyAnswers() async {
         let clock = FakeClock()
-        let routes = RouteScript([.direct, .unresolved, .http(host: "127.0.0.1", port: 7890)])
+        let routes = RouteScript([.unresolved, .unresolved, .http(host: "127.0.0.1", port: 7890)])
         let up = await LoginLaunch.waitForProxy(
             urls: [URL(string: "https://vibefriends.com/")!],
             routes: { urls in urls.map { _ in routes.next() } },
@@ -316,14 +321,32 @@ struct SystemProxyTests {
         let never = FakeClock()
         let gaveUp = await LoginLaunch.waitForProxy(
             urls: [URL(string: "https://vibefriends.com/")!],
-            routes: { urls in urls.map { _ in .direct } },
-            accepts: { _, _ in true },
+            routes: { urls in urls.map { _ in .http(host: "127.0.0.1", port: 7890) } },
+            accepts: { _, _ in false },
             now: { never.now },
             sleep: { never.advance($0) }
         )
         #expect(!gaveUp)
         #expect(never.elapsed >= LoginLaunch.proxyWaitLimit)
         #expect(never.elapsed < LoginLaunch.proxyWaitLimit + LoginLaunch.proxyPollInterval + 1)
+    }
+
+    /// With no proxy configured at all a login launch no longer waits two
+    /// minutes: there is nothing to wait for, and the vendor reads that would
+    /// go out direct are gated by the egress check (`EgressCheck`).
+    @Test
+    func aLoginLaunchWithoutAProxyGoesAheadAtOnce() async {
+        let clock = FakeClock()
+        let probed = Counter()
+        let up = await LoginLaunch.waitForProxy(
+            urls: LoginLaunch.proxyProbeURLs(server: URL(string: "https://vibefriends.com/")!),
+            routes: { urls in urls.map { _ in .direct } },
+            accepts: { _, _ in probed.increment() > 0 },
+            now: { clock.now }, sleep: { clock.advance($0) }
+        )
+        #expect(up)
+        #expect(clock.elapsed == 0)
+        #expect(probed.increment() == 1)
     }
 
     /// A PAC that sends the sync server direct and only the vendors through

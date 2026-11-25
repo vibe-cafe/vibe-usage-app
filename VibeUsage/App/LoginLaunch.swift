@@ -3,11 +3,13 @@ import Network
 import ServiceManagement
 
 /// Whether this launch is macOS starting the app as a login item. Such a
-/// launch behaves as any other on screen, but its network reads — the first
-/// sync and every live quota read — wait until the user's proxy is up
-/// (`waitForProxy`, at most two minutes), since the proxy client may not be
-/// running yet right after login (network-privacy principle, workspace
-/// AGENTS.md, rules 1, 2 and 6).
+/// launch behaves as any other on screen, but when a proxy is configured its
+/// network reads — the first sync and every live quota read — wait until that
+/// proxy accepts connections (`waitForProxy`, at most two minutes), since the
+/// proxy client may not be running yet right after login (network-privacy
+/// principle, workspace AGENTS.md, rules 1, 2 and 6). With no proxy
+/// configured nothing waits: a vendor read that would go out direct is gated
+/// by the egress check instead (`EgressCheck`, rule 3).
 ///
 /// macOS marks a login-item launch on the open-application Apple Event
 /// (`keyAELaunchedAsLogInItem`). Whether that mark is set for a
@@ -50,12 +52,16 @@ extension LoginLaunch {
 
     /// Waits until the system route (PAC included) of any of `urls` points at
     /// a proxy that accepts a connection, at most `limit`. True when one came
-    /// up, false at the limit. A proxy variable in the app's own environment
-    /// does not count: the app's own requests (Codex, OpenCode Go) follow the
-    /// system settings only. With no proxy yet it keeps waiting: many proxy clients set
-    /// the system proxy only once they have started, and whether this user
-    /// relies on a proxy at all is not known here (that question is a
-    /// separate change). A proxy that never answers just runs out the limit;
+    /// up or when no proxy is configured at all (every route direct: nothing
+    /// to wait for), false at the limit. A PAC that cannot be evaluated yet
+    /// counts as configured (the proxy client often serves the PAC itself). A
+    /// proxy variable in the app's own environment does not count: the app's
+    /// own requests (Codex, OpenCode Go) follow the system settings only.
+    /// Before 2026-11-24 a launch with no proxy waited the full two minutes,
+    /// since some proxy clients set the system proxy only once started; now
+    /// such a launch goes ahead at once and the vendor reads that would go
+    /// out direct pause on a wrong egress (`EgressCheck`) until a later read
+    /// sees the proxy. A proxy that never answers just runs out the limit;
     /// requests sent to it afterwards fail instead of going direct.
     static func waitForProxy(
         urls: [URL],
@@ -73,14 +79,18 @@ extension LoginLaunch {
         let deadline = now().addingTimeInterval(limit)
         while !Task.isCancelled {
             var endpoints: [(String, Int)] = []
+            var unresolved = false
             for route in await routes(urls) {
                 switch route {
                 case let .http(host, port), let .socks(host, port):
                     if !endpoints.contains(where: { $0 == (host, port) }) { endpoints.append((host, port)) }
-                case .direct, .unresolved:
+                case .unresolved:
+                    unresolved = true
+                case .direct:
                     break
                 }
             }
+            if endpoints.isEmpty, !unresolved { return true }
             for (host, port) in endpoints where await accepts(host, port) { return true }
             if now() >= deadline { return false }
             await sleep(interval)
