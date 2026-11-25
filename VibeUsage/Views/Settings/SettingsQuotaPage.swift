@@ -46,7 +46,7 @@ struct SettingsQuotaPage: View {
                     .foregroundStyle(SettingsTheme.secondaryText)
                     .padding(.horizontal, 2)
                     .padding(.top, 8)
-                SettingsSectionTitle(title: "网络")
+                SettingsSectionTitle(title: "隐私保护")
                 EgressSettingsCard()
             }
             .onAppear { reveal(navigation.focusedProvider, proxy: proxy) }
@@ -99,45 +99,36 @@ struct SettingsQuotaPage: View {
 // MARK: - Header
 
 /// 工具 · 状态 · 面板卡片, aligned with the row columns.
-/// The egress check's two settings (`EgressCheck`): Codex, Claude and
-/// Antigravity read without a detected proxy only after an anonymous check of
-/// the egress country, unless the check is off; the manual switch pauses
-/// them whenever no proxy is detected.
+/// The egress check's one setting (`EgressCheck.Mode`), a pop-up menu like
+/// System Settings' 「显示滚动条」: what Codex, Claude and Antigravity do when
+/// no proxy is detected. The grey line under it follows the option chosen.
 private struct EgressSettingsCard: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
         SettingsCard {
-            SettingsRow(tall: true) {
-                SettingsRowLabel(
-                    title: "检测网络出口",
-                    caption: appState.egressRequiresLocalProxy
-                        ? "已按下面的设置，未检测到代理时直接暂停"
-                        : appState.egressCheckEnabled
-                            ? "未检测到代理时，先匿名确认出口地区再读取"
-                            : "关闭后，未检测到代理时直接读取"
-                )
+            SettingsRow {
+                SettingsRowLabel(title: "没检测到代理时")
                 Spacer(minLength: 8)
-                Toggle("检测网络出口", isOn: Binding(
-                    get: { appState.egressCheckEnabled },
-                    set: { appState.egressCheckEnabled = $0 }
-                ))
-                .toggleStyle(.settingsSwitch)
-            }
-            SettingsSeparator()
-            SettingsRow(tall: true) {
-                SettingsRowLabel(
-                    title: "这台电脑上网靠本机代理软件",
-                    caption: "未检测到代理时，暂停读取 Codex、Claude、Antigravity"
-                )
-                Spacer(minLength: 8)
-                Toggle("这台电脑上网靠本机代理软件", isOn: Binding(
-                    get: { appState.egressRequiresLocalProxy },
-                    set: { appState.egressRequiresLocalProxy = $0 }
-                ))
-                .toggleStyle(.settingsSwitch)
+                Picker("没检测到代理时", selection: Binding(
+                    get: { appState.egressMode },
+                    set: { appState.egressMode = $0 }
+                )) {
+                    ForEach(EgressCheck.Mode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
             }
         }
+        Text(appState.egressMode.caption)
+            .font(SettingsTheme.caption)
+            .foregroundStyle(SettingsTheme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 2)
+            .padding(.top, 8)
     }
 }
 

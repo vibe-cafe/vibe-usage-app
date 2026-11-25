@@ -293,14 +293,10 @@ final class AppState {
             ActivationCoordinator.shared.applyDockPreference()
         }
     }
-    /// 「检测网络出口」 (`EgressCheck`), default on; read again at every check
-    /// and passed to the CLI, so a change applies to the next read.
-    var egressCheckEnabled: Bool = true {
-        didSet { UserDefaults.standard.set(egressCheckEnabled, forKey: EgressCheck.enabledKey) }
-    }
-    /// 「这台电脑上网靠本机代理软件」 (`EgressCheck`), default off.
-    var egressRequiresLocalProxy: Bool = false {
-        didSet { UserDefaults.standard.set(egressRequiresLocalProxy, forKey: EgressCheck.requireProxyKey) }
+    /// 「没检测到代理时」 (`EgressCheck.Mode`), default 「自动判断」; read again
+    /// at every check and passed to the CLI, so a change applies to the next read.
+    var egressMode: EgressCheck.Mode = .auto {
+        didSet { EgressCheck.setMode(egressMode) }
     }
 
     // MARK: - Menu Bar Stats (matches current time range, no filters)
@@ -365,8 +361,7 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
-        self.egressCheckEnabled = EgressCheck.isEnabled()
-        self.egressRequiresLocalProxy = EgressCheck.requiresProxy()
+        self.egressMode = EgressCheck.mode()
         initializeQuotaProducts()
 
         #if DEBUG

@@ -32,18 +32,63 @@ enum EgressCheck {
 
     // MARK: - Settings (the app's own preferences)
 
-    /// 「检测网络出口」, default on. Off: a direct read is sent as before.
-    static let enabledKey = "egressCheckEnabled"
-    /// 「这台电脑上网靠本机代理软件」, default off. On: a direct read always
-    /// pauses, and no check is sent.
-    static let requireProxyKey = "egressRequireLocalProxy"
+    /// Settings → 订阅配额 → 隐私保护 → 「没检测到代理时」, one of three
+    /// (the maintainer's wording, 2026-11-25).
+    enum Mode: String, CaseIterable, Identifiable {
+        /// 「自动判断（推荐）」, the default: check the egress first.
+        case auto
+        /// 「暂停读取」: a direct read always pauses, and no check is sent.
+        case pause
+        /// 「照常读取」: no check; a direct read is sent as before.
+        case allow
 
-    static func isEnabled(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: enabledKey) as? Bool ?? true
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .auto: return "自动判断（推荐）"
+            case .pause: return "暂停读取"
+            case .allow: return "照常读取"
+            }
+        }
+
+        /// The grey line under the menu, for the option chosen.
+        var caption: String {
+            switch self {
+            case .auto: return "网络在中国大陆等地区时，暂停读取 Codex、Claude、Antigravity，避免真实 IP 和账号一起暴露。"
+            case .pause: return "暂停读取 Codex、Claude、Antigravity，检测到代理后自动继续。"
+            case .allow: return "照常读取 Codex、Claude、Antigravity，厂商可能看到你的真实 IP。"
+            }
+        }
     }
 
+    static let modeKey = "egressMode"
+    /// The two switches that came before the menu (development builds only,
+    /// never released): read once to pick the matching option, then removed.
+    static let legacyEnabledKey = "egressCheckEnabled"
+    static let legacyRequireProxyKey = "egressRequireLocalProxy"
+
+    static func mode(_ defaults: UserDefaults = .standard) -> Mode {
+        if let raw = defaults.string(forKey: modeKey) { return Mode(rawValue: raw) ?? .auto }
+        if defaults.bool(forKey: legacyRequireProxyKey) { return .pause }
+        if defaults.object(forKey: legacyEnabledKey) as? Bool == false { return .allow }
+        return .auto
+    }
+
+    static func setMode(_ mode: Mode, _ defaults: UserDefaults = .standard) {
+        defaults.set(mode.rawValue, forKey: modeKey)
+        defaults.removeObject(forKey: legacyEnabledKey)
+        defaults.removeObject(forKey: legacyRequireProxyKey)
+    }
+
+    /// Off only for 「照常读取」.
+    static func isEnabled(_ defaults: UserDefaults = .standard) -> Bool {
+        mode(defaults) != .allow
+    }
+
+    /// On only for 「暂停读取」.
     static func requiresProxy(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: requireProxyKey)
+        mode(defaults) == .pause
     }
 
     /// The same two settings for the CLI, which checks Antigravity itself.

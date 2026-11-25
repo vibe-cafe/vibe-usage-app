@@ -27,9 +27,46 @@ struct EgressCheckTests {
     private func defaults(enabled: Bool? = nil, requireProxy: Bool = false) -> (UserDefaults, String) {
         let suite = "EgressCheckTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
-        if let enabled { defaults.set(enabled, forKey: EgressCheck.enabledKey) }
-        if requireProxy { defaults.set(true, forKey: EgressCheck.requireProxyKey) }
+        if requireProxy {
+            EgressCheck.setMode(.pause, defaults)
+        } else if enabled == false {
+            EgressCheck.setMode(.allow, defaults)
+        }
         return (defaults, suite)
+    }
+
+    @Test
+    func theMenuIsStoredAsOneValueAndTheOldSwitchesMapOntoIt() {
+        let suite = "EgressCheckTests.\(UUID().uuidString)"
+        let store = UserDefaults(suiteName: suite)!
+        defer { store.removePersistentDomain(forName: suite) }
+        #expect(EgressCheck.mode(store) == .auto)
+        // The two switches of development builds pick the matching option.
+        store.set(false, forKey: EgressCheck.legacyEnabledKey)
+        #expect(EgressCheck.mode(store) == .allow)
+        store.set(true, forKey: EgressCheck.legacyRequireProxyKey)
+        #expect(EgressCheck.mode(store) == .pause)
+        store.set(true, forKey: EgressCheck.legacyEnabledKey)
+        #expect(EgressCheck.mode(store) == .pause)
+        // Choosing an option stores it and drops the old switches.
+        EgressCheck.setMode(.auto, store)
+        #expect(EgressCheck.mode(store) == .auto)
+        #expect(store.object(forKey: EgressCheck.legacyEnabledKey) == nil)
+        #expect(store.object(forKey: EgressCheck.legacyRequireProxyKey) == nil)
+        // A value this build does not know falls back to the default.
+        store.set("somethingNew", forKey: EgressCheck.modeKey)
+        #expect(EgressCheck.mode(store) == .auto)
+        // What each option means for the checks and for the CLI.
+        for (mode, enabled, requires) in [(EgressCheck.Mode.auto, true, false), (.pause, true, true), (.allow, false, false)] {
+            EgressCheck.setMode(mode, store)
+            #expect(EgressCheck.isEnabled(store) == enabled)
+            #expect(EgressCheck.requiresProxy(store) == requires)
+            #expect(EgressCheck.cliEnvironment(store) == [
+                "VIBE_USAGE_EGRESS_CHECK": enabled ? "1" : "0",
+                "VIBE_USAGE_REQUIRE_PROXY": requires ? "1" : "0",
+            ])
+        }
+        #expect(EgressCheck.Mode.allCases.map(\.title) == ["自动判断（推荐）", "暂停读取", "照常读取"])
     }
 
     @Test
