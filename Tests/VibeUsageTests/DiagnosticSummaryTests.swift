@@ -166,7 +166,7 @@ struct DiagnosticSummaryTests {
         #expect(report.contains("CLAUDE_CONFIG_DIR 已设"))
         #expect(report.contains("系统代理：有（HTTPS，外部地址）"))
         #expect(report.contains("HTTPS_PROXY 有"))
-        #expect(report.contains("Claude 配额读取超时"))
+        #expect(report.contains("读取超时"))
         #expect(report.contains("被信号 15 结束"))
         #expect(report.contains("App 进程环境中 ANTHROPIC/CLAUDE 开头的：ANTHROPIC_AUTH_TOKEN"))
     }
@@ -337,7 +337,7 @@ struct DiagnosticSummaryTests {
         )
         #expect(DiagnosticSummary.quotaText(snapshot: cached, isSelected: true, isDetected: true,
                                             isRefreshing: false, now: now)
-            == "已开启 · 本机已检测 · 正常 · 2 个窗口 · 来源：缓存 · 数据时间：30 小时前 · 实时读取失败：Claude 配额读取超时")
+            == "已开启 · 本机已检测 · 正常 · 2 个窗口 · 来源：缓存 · 数据时间：30 小时前 · 实时读取失败：读取超时")
 
         // Under an organization's policy the live read is paused, not failed.
         var paused = cached
@@ -351,7 +351,7 @@ struct DiagnosticSummaryTests {
                                        liveFailure: .claudeLaunchFailed)
         #expect(DiagnosticSummary.quotaText(snapshot: failed, isSelected: true, isDetected: true,
                                             isRefreshing: false, now: now)
-            == "已开启 · 本机已检测 · Claude 启动失败 · 来源：实时读取")
+            == "已开启 · 本机已检测 · 启动失败 · 来源：实时读取")
 
         #expect(DiagnosticSummary.quotaText(snapshot: nil, isSelected: false, isDetected: false,
                                             isRefreshing: false, now: now)
@@ -386,7 +386,7 @@ struct DiagnosticSummaryTests {
         // their own section, so an update since then is not blamed.
         #expect(lines == [
             "Claude 读取记录（最近一次，2 分钟前）：",
-            "  候选 1：~/.local/bin/claude · initialize 0.9s · get_usage 未完成 · Claude 配额读取超时 · 被信号 15 结束",
+            "  候选 1：~/.local/bin/claude · initialize 0.9s · get_usage 未完成 · 读取超时 · 被信号 15 结束",
             "  候选 2：PATH 第 2 项中的 claude · Claude 启动失败",
             "  另有 1 个候选因总时限用完未尝试",
             "当前安装的 Claude Code（生成报告时检查，按查找顺序）：",

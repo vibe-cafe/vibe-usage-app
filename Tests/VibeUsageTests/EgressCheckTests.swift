@@ -327,13 +327,13 @@ struct EgressCheckTests {
             SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false,
                 warningSnapshot: ProviderRateLimit(provider: .codex, status: .noData, liveFailure: failure)).text
         }
-        #expect(status(.egressRegionUnsupported("CN")) == "出口受限，已暂停")
-        #expect(status(.egressUnconfirmed) == "出口未确认")
-        #expect(status(.proxyNotDetected) == "无代理，已暂停")
+        #expect(status(.egressRegionUnsupported("CN")) == "已暂停")
+        #expect(status(.egressUnconfirmed) == "已暂停")
+        #expect(status(.proxyNotDetected) == "已暂停")
         // Numbers kept on the card while paused: Settings still says paused.
         var keptOK = ProviderRateLimit(provider: .codex, status: .ok, liveFailure: .egressUnconfirmed)
         keptOK.source = .cache
-        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: keptOK).text == "出口未确认")
+        #expect(SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, warningSnapshot: keptOK).text == "已暂停")
     }
 
     @Test
@@ -429,7 +429,11 @@ struct EgressCheckTests {
         defer { store.removePersistentDomain(forName: suite) }
         store.set(true, forKey: QuotaSelectionPreferences.initializedKey)
         store.set([ProviderRateLimit.Provider.antigravity.rawValue], forKey: QuotaSelectionPreferences.selectedIDsKey)
-        let appState = AppState(quotaDefaults: store, quotaProductDiscoverer: {
+        struct EmptyKeyStore: ZCodeAPIKeyStoring {
+            func load(for region: ZCodeQuotaRegion) throws -> String? { nil }
+            func store(_ value: String?, for region: ZCodeQuotaRegion) throws {}
+        }
+        let appState = AppState(quotaDefaults: store, zCodeAPIKeyStore: EmptyKeyStore(), quotaProductDiscoverer: {
             QuotaProductRegistry.catalog.map { provider, availability in
                 QuotaProduct(provider: provider, availability: availability, isDetected: provider == .antigravity)
             }

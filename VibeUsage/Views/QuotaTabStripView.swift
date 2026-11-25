@@ -115,7 +115,7 @@ struct QuotaTabStripView: View {
         guard isEnabled else { return "\(provider.displayName) · \(status) · 未启用" }
         guard showsWarning else { return "\(provider.displayName) · \(status)" }
         // A paused read keeps sound numbers: only the reading stopped.
-        let paused = appState.rateLimits.first { $0.provider == provider }?.liveFailure?.isEgressPause == true
+        let paused = appState.rateLimits.first { $0.provider == provider }?.liveFailure?.isNetworkPause == true
         return "\(provider.displayName) · \(status) · \(paused ? "读取已暂停" : "数据异常")"
     }
 

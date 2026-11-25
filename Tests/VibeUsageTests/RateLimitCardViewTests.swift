@@ -8,7 +8,7 @@ struct RateLimitCardViewTests {
         _ provider: ProviderRateLimit.Provider,
         reason: ProviderRateLimit.EmptyReason? = nil
     ) -> ProviderRateLimit {
-        ProviderRateLimit(provider: provider, status: .noData, emptyReason: reason)
+        ProviderRateLimit(provider: provider, status: .noData, fetchedAt: Date(), emptyReason: reason)
     }
 
     /// "暂无数据" must say *why*, so each distinguishable reason reads
@@ -42,15 +42,11 @@ struct RateLimitCardViewTests {
             RateLimitCardView.emptyStateText(for: emptySnapshot(.claudeCode), isDetected: false),
         ]
 
-        #expect(Set(messages).count == messages.count)
-        // A missing subscription is a fact about the account, not an idle
-        // window, so it names the product instead of guessing.
-        #expect(messages[2] == "未订阅 OpenCode Go")
-        // A Claude session without plan limits names its login method, so the
-        // user is not left wondering whether the card is broken.
-        #expect(messages[3] == "当前登录方式不含订阅额度（API Key / Bedrock / Vertex）")
-        // The user's own Claude Code setting, named as such: not a failure.
-        #expect(messages[4] == "组织策略关闭了 Claude Code 非必要流量 · 无法读取")
+        #expect(messages == ["额度已用满 · 等待重置", "没有生效的额度窗口", "未订阅 OpenCode Go",
+                             "当前登录方式不含订阅额度", "组织策略关闭了 Claude Code 非必要流量 · 无法读取",
+                             "没读到额度，原因未知", "未检测到安装"])
+        let placeholder = ProviderRateLimit(provider: .grok, status: .noData, fetchedAt: nil)
+        #expect(RateLimitCardView.emptyStateText(for: placeholder, isDetected: true) == "尚未读取")
     }
 
     /// The "used up" line belongs only to a source that actually reported it:
@@ -88,15 +84,15 @@ struct RateLimitCardViewTests {
 
         #expect(Set(texts.map(\.title)).count == reasons.count)
         #expect(texts.map(\.title) == [
-            "未找到 Claude Code 程序", "Claude 启动失败", "Claude 配额读取超时",
-            "Claude 没有响应配额请求", "Claude 没有返回额度窗口",
+            "未找到 Claude Code", "启动失败", "读取超时",
+            "没有响应", "没有返回额度",
         ])
         #expect(texts.allSatisfy { $0.detail == "来源：实时读取" })
 
         // An adapter that cannot name a reason keeps the generic headline.
         let generic = RateLimitCardView.retryableErrorText(
             for: ProviderRateLimit(provider: .kimiCode, status: .retryableError))
-        #expect(generic.title == "暂时无法读取订阅配额")
+        #expect(generic.title == "暂时读不到额度")
         #expect(generic.detail == "来源：实时读取")
     }
 
@@ -117,13 +113,13 @@ struct RateLimitCardViewTests {
         }
 
         #expect(RateLimitCardView.staleDataNote(for: ok(.cache, .claudeTimedOut))
-            == "来源：缓存 · Claude 配额读取超时")
+            == "来源：缓存 · 读取超时")
         #expect(RateLimitCardView.staleDataNote(for: ok(.desktopRecord, .claudeBinaryNotFound))
-            == "来源：Claude 桌面端记录 · 未找到 Claude Code 程序")
+            == "来源：Claude 桌面端记录 · 未找到 Claude Code")
         #expect(RateLimitCardView.staleDataNote(for: ok(.live, .claudeLaunchFailed))
-            == "来源：上次实时读取 · Claude 启动失败")
+            == "来源：上次实时读取 · 启动失败")
         #expect(RateLimitCardView.staleDataNote(for: ok(.localLog, .endpointHTTPStatus(502), provider: .codex))
-            == "来源：本地日志 · Codex 配额接口返回错误 502")
+            == "来源：本地日志 · 接口报错 502")
         #expect(RateLimitCardView.staleDataNote(for: ok(.cache, .cliReportedFailure, provider: .kimiCode))
             == "来源：缓存 · 实时读取失败")
 
@@ -139,12 +135,12 @@ struct RateLimitCardViewTests {
     func emptyCardPrefersTheLiveReadReasonOverDetection() {
         let noBinary = ProviderRateLimit(provider: .claudeCode, status: .noData,
                                          liveFailure: .claudeBinaryNotFound)
-        #expect(RateLimitCardView.emptyStateText(for: noBinary, isDetected: true) == "未找到 Claude Code 程序")
-        #expect(RateLimitCardView.emptyStateText(for: noBinary, isDetected: false) == "未找到 Claude Code 程序")
+        #expect(RateLimitCardView.emptyStateText(for: noBinary, isDetected: true) == "未找到 Claude Code")
+        #expect(RateLimitCardView.emptyStateText(for: noBinary, isDetected: false) == "未找到 Claude Code")
 
         let notLoggedIn = ProviderRateLimit(provider: .codex, status: .noData,
                                             liveFailure: .credentialsNotFound)
-        #expect(RateLimitCardView.emptyStateText(for: notLoggedIn, isDetected: true) == "未找到 Codex 登录信息")
+        #expect(RateLimitCardView.emptyStateText(for: notLoggedIn, isDetected: true) == "未找到登录信息")
 
         // OpenCode Go has no login of its own: the card says where to log in.
         let goMissing = ProviderRateLimit(provider: .opencodeGo, status: .noData, liveFailure: .credentialsNotFound)
@@ -171,7 +167,6 @@ struct RateLimitCardViewTests {
             .egressRegionUnsupported("CN"), .egressUnconfirmed, .proxyNotDetected,
         ]
         let texts = all.map { RateLimitCardView.liveFailureText($0, provider: .codex) }
-        #expect(Set(texts).count == all.count)
         #expect(texts.allSatisfy { !$0.contains("/") && !$0.contains("~") })
     }
 
@@ -224,5 +219,33 @@ struct RateLimitCardViewTests {
             #expect(RateLimitCardView.cardID(provider) != provider.rawValue)
         }
         #expect(RateLimitCardView.cardID(.codex) == "quota-card-codex")
+    }
+}
+
+/// #190 review follow-ups: wording the spec keeps, and the legacy fallbacks.
+@MainActor
+struct RateLimitCardViewReasonTests {
+    @Test
+    func loginCardsKeepProductSpecificWording() {
+        let codex = ProviderRateLimit(provider: .codex, status: .unauthorized, liveFailure: .credentialsRejected)
+        #expect(RateLimitCardView.authorizationText(for: codex) == "登录已失效，请重新登录")
+        // Shipped OpenCode wording stays as it is.
+        let openCode = ProviderRateLimit(provider: .opencodeGo, status: .unauthorized, liveFailure: .credentialsRejected)
+        #expect(RateLimitCardView.authorizationText(for: openCode) == "请在 OpenCode 中重新登录后重试")
+    }
+
+    @Test
+    func legacyUnsupportedWithoutAReasonSaysTheReasonIsUnknown() throws {
+        let envelope = try QuotaCLIBridge.decode(#"{"schemaVersion":1,"products":[{"id":"cursor","status":"unsupported","meters":[],"fetchedAt":"2026-11-25T00:00:00Z","source":"live","message":"anything"}]}"#)
+        let snapshot = try #require(try QuotaCLIBridge.snapshots(from: envelope).first)
+        #expect(RateLimitCardView.emptyStateText(for: snapshot, isDetected: true) == "没读到额度，原因未知")
+    }
+
+    @Test
+    func anUnreadableLocalRecordIsNotCalledALiveRead() {
+        let grok = ProviderRateLimit(provider: .grok, status: .retryableError, source: .localLog, liveFailure: .localRecordUnreadable)
+        #expect(RateLimitCardView.retryableErrorText(for: grok) == ("读不了本机记录", "来源：本地日志"))
+        let kimi = ProviderRateLimit(provider: .kimiCode, status: .retryableError, source: .live, liveFailure: .endpointTimedOut)
+        #expect(RateLimitCardView.retryableErrorText(for: kimi) == ("读取超时", "来源：实时读取"))
     }
 }
