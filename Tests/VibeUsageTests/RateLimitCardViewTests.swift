@@ -221,3 +221,31 @@ struct RateLimitCardViewTests {
         #expect(RateLimitCardView.cardID(.codex) == "quota-card-codex")
     }
 }
+
+/// #190 review follow-ups: wording the spec keeps, and the legacy fallbacks.
+@MainActor
+struct RateLimitCardViewReasonTests {
+    @Test
+    func loginCardsKeepProductSpecificWording() {
+        let codex = ProviderRateLimit(provider: .codex, status: .unauthorized, liveFailure: .credentialsRejected)
+        #expect(RateLimitCardView.authorizationText(for: codex) == "登录已失效，请重新登录")
+        // Shipped OpenCode wording stays as it is.
+        let openCode = ProviderRateLimit(provider: .opencodeGo, status: .unauthorized, liveFailure: .credentialsRejected)
+        #expect(RateLimitCardView.authorizationText(for: openCode) == "请在 OpenCode 中重新登录后重试")
+    }
+
+    @Test
+    func legacyUnsupportedWithoutAReasonSaysTheReasonIsUnknown() throws {
+        let envelope = try QuotaCLIBridge.decode(#"{"schemaVersion":1,"products":[{"id":"cursor","status":"unsupported","meters":[],"fetchedAt":"2026-11-25T00:00:00Z","source":"live","message":"anything"}]}"#)
+        let snapshot = try #require(try QuotaCLIBridge.snapshots(from: envelope).first)
+        #expect(RateLimitCardView.emptyStateText(for: snapshot, isDetected: true) == "没读到额度，原因未知")
+    }
+
+    @Test
+    func anUnreadableLocalRecordIsNotCalledALiveRead() {
+        let grok = ProviderRateLimit(provider: .grok, status: .retryableError, source: .localLog, liveFailure: .localRecordUnreadable)
+        #expect(RateLimitCardView.retryableErrorText(for: grok) == ("读不了本机记录", "来源：本地日志"))
+        let kimi = ProviderRateLimit(provider: .kimiCode, status: .retryableError, source: .live, liveFailure: .endpointTimedOut)
+        #expect(RateLimitCardView.retryableErrorText(for: kimi) == ("读取超时", "来源：实时读取"))
+    }
+}

@@ -186,7 +186,12 @@ struct RateLimitCardView: View {
     static func retryableErrorText(for snapshot: ProviderRateLimit) -> (title: String, detail: String) {
         let title = snapshot.liveFailure.map { liveFailureText($0, provider: snapshot.provider) }
             ?? "暂时读不到额度"
-        return (title, "来源：实时读取")
+        // A local record that could not be read (Grok's log) is not a live read.
+        switch snapshot.source {
+        case .localLog: return (title, "来源：本地日志")
+        case .cache: return (title, "来源：缓存")
+        default: return (title, "来源：实时读取")
+        }
     }
 
     /// One quiet line under the meters when they are *not* from this
