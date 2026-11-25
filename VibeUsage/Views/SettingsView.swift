@@ -136,10 +136,14 @@ struct SettingsSidebar: View {
                 .lineLimit(1)
                 .fixedSize()
                 .padding(.leading, 8)
-            Spacer(minLength: 8)
+            // The row is about 131 pt wide; with an 8 pt gap a two-digit patch
+            // number (「0.7.10」) was cut to 「0.7.…」. The version keeps its
+            // full width and the gap gives way instead.
+            Spacer(minLength: 4)
             Text(SettingsVersion.short)
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
+                .fixedSize()
         }
         .foregroundStyle(SettingsTheme.secondaryText)
         .padding(.horizontal, 8)
