@@ -53,6 +53,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   ├── Utils/
 │   │   ├── Formatters.swift       # Number, cost, date, time formatting
 │   │   ├── DiagnosticRedactor.swift # Last-line filter over the copied diagnostic summary
+│   │   ├── DateOrder.swift        # Module-local Date <= / >= (never delete; see Known Constraints)
 │   │   └── Log.swift              # Debug logging
 │   └── Resources/
 │       ├── Assets.xcassets/       # App icon, menu bar icon
@@ -561,3 +562,4 @@ Multiple authorized Macs can retain release capability at the same time; provisi
 - `swift run` skips Sparkle initialization (no Info.plist in non-bundle builds)
 - Debug builds (`#if DEBUG`) use `localhost:3000` and `config.dev.json`
 - The bundled Node makes the app ~240 MB larger installed; Sparkle still downloads a zip (format unchanged on purpose), the DMG uses ULMO compression (macOS 10.15+)
+- **Never delete `VibeUsage/Utils/DateOrder.swift`.** Xcode 27.2's SDK marks Foundation's `Date` `<=` / `>=` `@backDeployed(before: macOS 27.2)` (swift-foundation#2230): built with it, code that compares two `Date` values with `<=` / `>=` directly (not through a generic `Comparable`, which dispatches to Foundation's own conformance) calls Foundation's copy, weakly linked, whenever the system reports 27.2 or later. Early macOS 27.2 betas (26B5086k, 26B5091g) report 27.2 but do not export those symbols, so the call jumps to address 0: 0.7.9, the first release built with Xcode 27.2, crashed (`EXC_BAD_ACCESS` at `0x0`) in `BarChartView.chartData` each time the panel opened. The file's operators shadow Foundation's for those comparisons in this module and use only `<` / `>`, so the binary imports neither; `nm -m` on a release build must show no `_$s10Foundation4DateV2leoiy…` / `…2geoiy…` import, weak or strong. A test file that `@testable import`s VibeUsage sees both declarations, so `<=` / `>=` between two dates there is ambiguous on the 27.2 SDK: compare with `<` / `>` in tests (`DateOrderTests` exercises the app's own uses instead).
