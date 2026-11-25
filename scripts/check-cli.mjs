@@ -40,8 +40,12 @@ export function verifyPackage(packageRoot, specifier = releasePackage()) {
   try {
     // No inherited credentials, NODE_OPTIONS, or user config. The selected
     // providers have no credentials/logs in these disposable directories.
+    // HOME and a system-only PATH keep the CLI from finding the release
+    // machine's own `grok` (`~/.local/bin`, a PATH entry): since the Grok
+    // active read, a found binary is started and asks xAI with its login.
     const environment = {
-      PATH: process.env.PATH || '',
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      HOME: fixtureRoot,
       TMPDIR: fixtureRoot,
       VIBE_USAGE_CONFIG_DIR: join(fixtureRoot, 'config'),
       VIBE_USAGE_STATE_DIR: join(fixtureRoot, 'state'),

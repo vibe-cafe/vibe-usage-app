@@ -100,7 +100,7 @@ struct SettingsQuotaPage: View {
 
 /// 工具 · 状态 · 面板卡片, aligned with the row columns.
 /// The egress check's one setting (`EgressCheck.Mode`), a pop-up menu like
-/// System Settings' 「显示滚动条」: what Codex, Claude and Antigravity do when
+/// System Settings' 「显示滚动条」: what Codex, Claude, Grok and Antigravity do when
 /// no proxy is detected. The grey line under it follows the option chosen.
 private struct EgressSettingsCard: View {
     @Environment(AppState.self) private var appState

@@ -18,8 +18,8 @@ import Foundation
 /// and the card says why (`LiveFailure.egress…`). The next read checks again.
 ///
 /// The app checks Codex (`chatgpt.com`) and Claude (Anthropic's hosts, all of
-/// which have a trace page). Antigravity is checked by the CLI, which gets the
-/// two settings below as environment variables (`cliEnvironment`).
+/// which have a trace page). Grok and Antigravity are checked by the CLI, which
+/// gets the two settings below as environment variables (`cliEnvironment`).
 enum EgressCheck {
     /// Regions the paused vendors (OpenAI, Anthropic, xAI, Google) do not
     /// serve and our users may be in.
@@ -55,9 +55,9 @@ enum EgressCheck {
         /// The grey line under the menu, for the option chosen.
         var caption: String {
             switch self {
-            case .auto: return "网络在中国大陆等地区时，暂停读取 Codex、Claude、Antigravity，避免真实 IP 和账号一起暴露。"
-            case .pause: return "暂停读取 Codex、Claude、Antigravity，检测到代理后自动继续。"
-            case .allow: return "照常读取 Codex、Claude、Antigravity，厂商可能看到你的真实 IP。"
+            case .auto: return "网络在中国大陆等地区时，暂停读取 Codex、Claude、Grok、Antigravity，避免真实 IP 和账号一起暴露。"
+            case .pause: return "暂停读取 Codex、Claude、Grok、Antigravity，检测到代理后自动继续。"
+            case .allow: return "照常读取 Codex、Claude、Grok、Antigravity，厂商可能看到你的真实 IP。"
             }
         }
     }
