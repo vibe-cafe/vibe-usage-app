@@ -220,10 +220,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
     /// Codex's live usage endpoint reports enforced windows exhaustively and
     /// its `rate_limit` object carries `allowed` / `limit_reached`, so an
     /// answer without any window is a fact — "used up for this period" or
-    /// "nothing enforced right now" — not a read failure. Every other source
-    /// (session JSONL, on-disk cache, the other providers) cannot tell the two
-    /// apart from "that product has no data here", so it leaves this nil and
-    /// the card stays neutral rather than guessing.
+    /// "nothing enforced right now". CLI adapters may likewise name a known
+    /// empty reason. A source without that evidence leaves the reason nil.
     enum EmptyReason: Equatable {
         /// `limit_reached == true`: this period's quota is consumed.
         case limitReached
@@ -238,6 +236,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// genuinely do not apply. Also a definitive answer — retrying cannot
         /// produce windows, so the card explains instead of offering one.
         case sessionWithoutPlanLimits
+        case periodEnded
+        case noLocalRecord
         /// The organization's managed settings force Claude Code's
         /// nonessential traffic off, which also blocks its usage read, so the
         /// app did not start Claude Code (`ClaudeNonessentialTraffic`). Not a
@@ -295,18 +295,23 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case credentialsExpired
         case endpointTimedOut
         case endpointUnreachable
-        case endpointHTTPStatus(Int)
+        case endpointHTTPStatus(Int?)
         case endpointUnrecognized
         // Shared quota CLI
+        case credentialsUnreadable
+        case credentialsEncrypted
+        case loginRefreshFailed
+        case programNotFound
+        case programOutdated
+        case programNoAnswer
+        case localRecordUnreadable
         case cliRuntimeMissing
         case cliTimedOut
         case cliFailed
         case cliUnrecognizedOutput
         case cliSchemaMismatch
         case cliNoResult
-        /// The CLI reported `retryable_error` (and may have answered from its
-        /// cache). Its specific reason exists only as free text, which the app
-        /// deliberately does not display.
+        /// A failed live CLI read with no known structured reason.
         case cliReportedFailure
         // Paused on purpose (network-privacy principle, rule 3; `EgressCheck`,
         // or the CLI's `pauseReason`): the read went out direct and the egress
@@ -318,22 +323,22 @@ struct ProviderRateLimit: Equatable, Identifiable {
         /// No proxy detected and the user chose 「暂停读取」 for 「没检测到代理时」
         /// (Settings → 订阅配额 → 隐私保护).
         case proxyNotDetected
+        case proxyUnsupported
     }
 
     var liveFailure: LiveFailure?
-
-    /// For AGY alone the CLI's missing_credentials means it could not find
-    /// the agy executable. A rejected login means it did find and run agy.
-    var needsAgyCLI: Bool {
-        provider == .antigravity && status == .unauthorized && liveFailure == .credentialsNotFound
-    }
 }
 
 extension ProviderRateLimit.LiveFailure {
     /// A read stopped on purpose before it was sent (a policy or the egress
     /// check), not one that failed: diagnostics say 「已暂停」.
     var isPause: Bool {
-        self == .claudeBlockedByPolicy || isEgressPause
+        self == .claudeBlockedByPolicy || isNetworkPause
+    }
+
+    /// Paused cards keep the network warning even when they have numbers.
+    var isNetworkPause: Bool {
+        self == .proxyUnsupported || isEgressPause
     }
 
     /// Paused by the egress check (`EgressCheck`): the next read checks again.

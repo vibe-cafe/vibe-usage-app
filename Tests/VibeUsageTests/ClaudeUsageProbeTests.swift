@@ -578,7 +578,7 @@ struct ClaudeUsageProbeTests {
             ClaudeUsageProbe.ProbeError.launchFailed("/Users/张三/-Users-张三-Coding-秘密项目/claude sk-ant-abc123")
         )
         let text = RateLimitCardView.liveFailureText(try! #require(error.liveFailure), provider: .claudeCode)
-        #expect(text == "Claude 启动失败")
+        #expect(text == "启动失败")
     }
 
     @Test
