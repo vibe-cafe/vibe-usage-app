@@ -148,7 +148,10 @@ enum SystemProxy {
     static let cliHosts = [
         "vibefriends.com", "registry.npmjs.org",
         "api.kimi.com", "auth.kimi.com", "open.bigmodel.cn", "api.z.ai",
-        "opencode.ai", "cursor.com", "cli-chat-proxy.grok.com",
+        "opencode.ai", "cursor.com",
+        // The official `grok` the CLI starts (vibe-cafe/vibe-usage#189):
+        // billing, settings and models, token refresh, and the xAI API.
+        "cli-chat-proxy.grok.com", "auth.x.ai", "api.x.ai",
         "daily-cloudcode-pa.googleapis.com", "generativelanguage.googleapis.com",
         // The CLI's egress check asks one of these for Google, and only when
         // its own route is direct too, so a PAC answer for them must reach it.

@@ -25,9 +25,11 @@ VIBE_USAGE_LIVE_PROBE=1 swift test --disable-sandbox \
   --filter ClaudeUsageProbeLiveTests
 ```
 
-Codex and Kimi use the existing official login. Grok reads the official local
-usage log: success does not establish that its last event is fresh or that a
-Grok network endpoint was queried. The Keychain check uses dummy strings in a
+Codex and Kimi use the existing official login. Grok starts the official
+`grok` CLI, which asks xAI once with its own existing login for the current
+billing period (no session, no prompt); `source: live` means that request was
+answered, while `source: local` is the fallback to the official local usage
+log, whose last event may be older. The Keychain check uses dummy strings in a
 random Debug-only service namespace, checks create/update/regional separation/
 delete, and attempts cleanup on early failure. It never uses production keys.
 An agent sandbox can prevent Security.framework access even with SwiftPM's
