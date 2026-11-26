@@ -38,7 +38,6 @@ struct SummaryCardsView: View {
 
     var body: some View {
         let time = appState.activity?.summary
-        let details = [time?.workText, time?.parallelText].compactMap { $0 }
         HStack(alignment: .top, spacing: 8) {
             StatCard(
                 label: "预估费用",
@@ -61,8 +60,8 @@ struct SummaryCardsView: View {
             )
             StatCard(
                 label: "活跃时长", value: time?.activeText ?? "—", color: Color(red: 0.38, green: 0.6, blue: 1.0),
-                help: (details + [appState.activity?.coverageHint].compactMap { $0 }).joined(separator: " · "),
-                details: details
+                help: appState.activity?.summaryHelp,
+                detail: time?.workText
             )
         }
         .frame(maxWidth: .infinity)
@@ -86,7 +85,7 @@ private struct StatCard: View {
     var color: Color = .white
     var action: (() -> Void)?
     var help: String?
-    var details: [String] = []
+    var detail: String?
 
     // Reserve fixed line-box heights so all cards render at exactly the same height,
     // even when minimumScaleFactor shrinks the value glyphs in narrower columns.
@@ -104,13 +103,13 @@ private struct StatCard: View {
                 .accessibilityLabel(label)
                 .accessibilityValue(value)
             } else {
-                cardContent.help(help ?? label)
+                cardContent.help(help ?? "")
             }
         }
     }
 
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: details.isEmpty ? 6 : 0) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(label)
                 .font(.system(size: 12))
                 .foregroundStyle(Color(white: 0.63))
@@ -118,6 +117,7 @@ private struct StatCard: View {
                 .truncationMode(.tail)
                 .minimumScaleFactor(0.85)
                 .frame(height: labelHeight, alignment: .leading)
+                .padding(.bottom, 6)
             Text(value)
                 .font(.system(size: 20, weight: .bold))
                 .monospacedDigit()
@@ -127,8 +127,8 @@ private struct StatCard: View {
                 .contentTransition(.numericText())
                 .frame(maxWidth: .infinity, minHeight: valueHeight, maxHeight: valueHeight, alignment: .leading)
                 .clipped()
-            ForEach(details, id: \.self) { line in
-                Text(line)
+            if let detail {
+                Text(detail)
                     .font(.system(size: 10))
                     .foregroundStyle(Color(white: 0.63))
                     .lineLimit(1)
@@ -137,7 +137,8 @@ private struct StatCard: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 11)
-        .frame(height: 70)
+        .padding(.top, 13)
+        .frame(height: 70, alignment: .topLeading)
         .background(Color(white: 0.09))
         .cornerRadius(4)
         .overlay(

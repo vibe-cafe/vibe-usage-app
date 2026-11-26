@@ -55,24 +55,27 @@ struct UsageActivityTests {
         #expect(full.summary?.activeText == "40s")
         #expect(full.summary?.workText == "AI 工时 1m")
         #expect(full.summary?.parallelText == "平均同时 1.8 个")
-        #expect(full.coverageHint == nil)
+        #expect(full.summaryHelp == "平均同时 1.8 个")
 
         let partial = report(first: first, periods: [period])
         #expect(partial.summary == full.summary)
-        #expect(partial.coverageHint == "2026-11-25 之前的记录无法重算")
+        #expect(partial.summaryHelp == "平均同时 1.8 个 · 2026-11-25 之前的记录无法重算")
         #expect(partial.time(in: "2026-11-25T02") == nil)
         #expect(partial.time(in: "2026-11-25T03") == full.summary)
+        #expect(partial.time(in: "2026-11-25T03")?.chartWorkText == "AI 工时: 1m")
         #expect(partial.time(in: "2026-11-25T04")?.activeText == "0s")
+        #expect(partial.time(in: "2026-11-25T04")?.chartWorkText == nil)
         #expect(partial.time(in: "2026-11-25T04")?.parallelText == nil)
 
         for missing in [report(first: nil, periods: []), report(first: first, periods: [])] {
             #expect(missing.summary == nil)
-            #expect(missing.coverageHint == "更新后显示")
+            #expect(missing.summaryHelp == "更新后显示")
         }
         let idle = report(first: "2026-11-24T20:00:00Z", periods: [])
         #expect(idle.summary?.activeText == "0s")
         #expect(idle.summary?.workText == "AI 工时 0s")
         #expect(idle.summary?.parallelText == nil)
+        #expect(idle.summaryHelp.isEmpty)
     }
 
     @Test func dailyActivityBelongsToLocalMidnight() throws {
@@ -85,7 +88,7 @@ struct UsageActivityTests {
         #expect(report.time(in: "2026-11-24") == nil)
         #expect(report.time(in: "2026-11-25")?.activeText == "1h")
         #expect(report.time(in: "2026-11-25")?.workText == "AI 工时 1h 30m")
-        #expect(report.coverageHint == "2026-11-25 之前的记录无法重算")
+        #expect(report.summaryHelp == "平均同时 1.5 个 · 2026-11-25 之前的记录无法重算")
     }
 
     @Test func filteredRequestReadsModelTimeFromConfiguredServer() async throws {
