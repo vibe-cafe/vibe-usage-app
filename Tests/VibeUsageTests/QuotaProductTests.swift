@@ -30,7 +30,8 @@ struct QuotaProductTests {
 
     /// A fresh install selects every locally detected product that has a
     /// working adapter — there is no display cap any more, so a machine with
-    /// four of them gets four cards, including Cursor and Antigravity.
+    /// several of them gets several cards, including Cursor. Antigravity is
+    /// the exception: it is never turned on for the user (2026-11-26).
     @Test
     func firstLaunchSelectsEveryDetectedReadyProduct() {
         let (defaults, suite) = defaults()
@@ -41,8 +42,25 @@ struct QuotaProductTests {
             products: products(detected: [.codex, .claudeCode, .kimiCode, .grok, .cursor, .antigravity])
         )
 
-        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok, .cursor, .antigravity])
+        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok, .cursor])
         #expect(defaults.bool(forKey: QuotaSelectionPreferences.initializedKey))
+    }
+
+    /// An existing user's choice is kept as it is: Antigravity stays on for
+    /// whoever already has it on.
+    @Test
+    func storedAntigravitySelectionIsKept() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["codex", "antigravity"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+
+        let selection = QuotaSelectionPreferences.resolve(
+            defaults: defaults,
+            products: products(detected: [.codex, .antigravity])
+        )
+
+        #expect(selection == [.codex, .antigravity])
     }
 
     @Test

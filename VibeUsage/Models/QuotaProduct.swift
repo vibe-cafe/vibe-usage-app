@@ -251,8 +251,14 @@ enum QuotaSelectionPreferences {
                 legacyClaude ? .claudeCode : nil,
             ].compactMap { $0 }
         } else {
+            // Antigravity is never turned on for the user (maintainer
+            // 2026-11-26): Google does not support third-party quota reads on
+            // personal plans, so reading it is left to the user's own switch.
+            // Only a fresh install reaches here; a stored selection, with or
+            // without Antigravity, is returned above unchanged.
             selection = products
                 .filter(\.isSelectable)
+                .filter { $0.provider != .antigravity }
                 .map(\.provider)
         }
 
