@@ -136,6 +136,81 @@ struct ModernPanelTests {
 
         let state = AppState(loadConfig: { nil }, quotaDefaults: defaults)
         #expect(state.lastSuccessfulSyncAt == started.addingTimeInterval(4))
+        // Saved at once, so ten later failures pushing the record out of the
+        // history do not turn it into 「还没同步过」.
+        for index in 1...SyncHistoryStore.limit {
+            history.append(SyncRecord(startedAt: started.addingTimeInterval(Double(index) * 3_600), duration: 1,
+                                      trigger: .scheduled, result: .failure, reason: .network))
+        }
+        #expect(history.records().allSatisfy { $0.result == .failure })
+        #expect(AppState(loadConfig: { nil }, quotaDefaults: defaults).lastSuccessfulSyncAt
+            == started.addingTimeInterval(4))
+    }
+
+    @Test @MainActor
+    func aSyncThatOutlivesItsAccountIsDropped() async {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var config: VibeUsageConfig? = VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test")
+        let state = AppState(
+            initialConfig: config,
+            loadConfig: { config },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            quotaDefaults: defaults
+        )
+        var pending: CheckedContinuation<Void, Never>?
+        var runs = 0
+        state.runSync = {
+            runs += 1
+            if runs == 1 { await withCheckedContinuation { pending = $0 } }
+            return (.success("ok"), SyncEngine.Outcome(result: .success))
+        }
+
+        // Settings 「重置配置」 while the CLI runs.
+        let sync = Task { await state.triggerSync() }
+        await waitUntil { pending != nil }
+        config = nil
+        state.applyConfig(nil)
+        pending?.resume()
+        await sync.value
+
+        #expect(runs == 1)
+        #expect(state.lastSuccessfulSyncAt == nil)
+        #expect(defaults.object(forKey: AppState.lastSuccessfulSyncKey) == nil)
+        #expect(state.syncHistory.records().isEmpty)
+        #expect(state.syncStatus == .idle)
+        #expect(state.lastSyncTime == nil)
+    }
+
+    @Test @MainActor
+    func aRelinkDuringASyncSyncsTheNewAccount() async {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var config: VibeUsageConfig? = VibeUsageConfig(apiKey: "old", apiUrl: "https://example.test")
+        let state = AppState(
+            initialConfig: config,
+            loadConfig: { config },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            quotaDefaults: defaults
+        )
+        var pending: CheckedContinuation<Void, Never>?
+        var runs = 0
+        state.runSync = {
+            runs += 1
+            if runs == 1 { await withCheckedContinuation { pending = $0 } }
+            return (.failure(.timeout), SyncEngine.Outcome(result: .timedOut))
+        }
+
+        let sync = Task { await state.triggerSync() }
+        await waitUntil { pending != nil }
+        config = VibeUsageConfig(apiKey: "new", apiUrl: "https://example.test")
+        state.applyConfig(config)
+        pending?.resume()
+        await sync.value
+
+        // The old account's run is not recorded; the new account's is.
+        #expect(runs == 2)
+        #expect(state.syncHistory.records().count == 1)
     }
 
     // MARK: 「同步用量」 and 「刷新额度」 are separate
@@ -209,6 +284,42 @@ struct ModernPanelTests {
         #expect(fixture.state.isRefreshingQuotas(.one(.codex)) == false)
     }
 
+    @Test @MainActor
+    func aClickWhileTheScopeIsReadingSendsNothingMore() async {
+        let fixture = QuotaFixture([.codex, .kimiCode])
+        defer { fixture.tearDown() }
+        fixture.holdCLI = true
+
+        // 概览: Codex answers at once, Kimi is still reading.
+        let first = Task { await fixture.state.refreshQuotas(.all) }
+        await waitUntil { fixture.hasHeldCLIRead && fixture.codexReads == 1 && !fixture.state.isCodexRateLimitRefreshing }
+        #expect(fixture.state.isRefreshingQuotas(.all))
+
+        // Not awaited before checking: a click that did read would wait for
+        // the held Kimi read.
+        let again = Task { await fixture.state.refreshQuotas(.all) }
+        let kimiAgain = Task { await fixture.state.refreshQuotas(.one(.kimiCode)) }
+        for _ in 0..<1_000 { await Task.yield() }
+        #expect(fixture.codexReads == 1)
+        #expect(fixture.cliReads.count == 1)
+
+        // Another subscription's own scope is not busy.
+        await fixture.state.refreshQuotas(.one(.codex))
+        #expect(fixture.codexReads == 2)
+
+        fixture.releaseCLI()
+        await first.value
+        await again.value
+        await kimiAgain.value
+        #expect(fixture.codexReads == 2)
+        #expect(fixture.cliReads.count == 1)
+
+        // Once everything answered, a click reads again.
+        await fixture.state.refreshQuotas(.all)
+        #expect(fixture.codexReads == 3)
+        #expect(fixture.cliReads.count == 2)
+    }
+
     // MARK: Fonts
 
     @Test @MainActor
@@ -223,6 +334,14 @@ struct ModernPanelTests {
     }
 
     // MARK: Helpers
+
+    /// Yields until `condition` holds (bounded, so a broken test fails
+    /// instead of hanging).
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<100_000 where !condition() { await Task.yield() }
+        #expect(condition())
+    }
 
     private func isolatedDefaults() -> (UserDefaults, String) {
         let suite = "ModernPanelTests.\(UUID().uuidString)"
@@ -239,6 +358,16 @@ private final class QuotaFixture {
     let suite: String
     var codexReads = 0
     var cliReads: [[ProviderRateLimit.Provider]] = []
+    /// While set, CLI reads wait until `releaseCLI()`: a slow provider.
+    var holdCLI = false
+    private var heldCLI: [CheckedContinuation<Void, Never>] = []
+    var hasHeldCLIRead: Bool { !heldCLI.isEmpty }
+
+    func releaseCLI() {
+        holdCLI = false
+        heldCLI.forEach { $0.resume() }
+        heldCLI.removeAll()
+    }
 
     init(_ providers: [ProviderRateLimit.Provider]) {
         suite = "ModernPanelTests.\(UUID().uuidString)"
@@ -264,6 +393,7 @@ private final class QuotaFixture {
                 readCodexFallback: { ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: nil) },
                 fetchCLIQuotas: { providers, _, _ in
                     self.cliReads.append(providers)
+                    if self.holdCLI { await withCheckedContinuation { self.heldCLI.append($0) } }
                     return providers.map { ProviderRateLimit(provider: $0, status: .noData, fetchedAt: Date()) }
                 }
             )

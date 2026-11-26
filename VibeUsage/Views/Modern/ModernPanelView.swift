@@ -84,6 +84,10 @@ struct ModernPanelView: View {
                 cards
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
+            // A scroller would take width from the 520 pt stack (with the
+            // system's 「始终显示滚动条」 it does) and shift the cards left;
+            // the cards stay put whether or not the middle scrolls.
+            .scrollIndicators(.never)
             .scrollBounceBehavior(.basedOnSize)
             .frame(height: middleHeight)
 
@@ -167,18 +171,20 @@ struct ModernCard<Accessory: View, Content: View>: View {
 }
 
 /// 「刷新额度」 (132s–132u): quotas only — 概览 reads every enabled
-/// subscription, a subscription's detail reads that one. It spins while the
-/// read is in flight, including the reads an open starts on their own.
+/// subscription, a subscription's detail reads that one. It spins, and does
+/// not take clicks, while a read in its scope is in flight, including the
+/// reads an open starts on their own.
 struct ModernRefreshQuotasButton: View {
     @Environment(AppState.self) private var appState
     let scope: QuotaRefreshScope
 
     var body: some View {
+        let isRefreshing = appState.isRefreshingQuotas(scope)
         Button {
             Task { await appState.refreshQuotas(scope) }
         } label: {
             Group {
-                if appState.isRefreshingQuotas(scope) {
+                if isRefreshing {
                     ModernSpinner(size: 13)
                 } else {
                     Image(systemName: "arrow.2.circlepath")
@@ -189,6 +195,7 @@ struct ModernRefreshQuotasButton: View {
             .modernHitArea()
         }
         .buttonStyle(ModernIconButtonStyle(color: ModernTheme.secondaryText))
+        .disabled(isRefreshing)
         .help("刷新额度")
         .accessibilityLabel("刷新额度")
     }
