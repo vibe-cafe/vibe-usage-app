@@ -24,6 +24,10 @@ enum QuotaCLIBridge {
         /// A paused live read can still report meters from a local record.
         var pauseReason: String?
         var egressRegion: String?
+        /// Cursor only (vibe-cafe/vibe-usage#210): `required` when Cursor's
+        /// own login cannot be read (encrypted, issue #144), `expired` when
+        /// the separate Vibe Usage sign-in was ended or lapsed.
+        var signIn: String?
     }
 
     struct Meter: Decodable, Equatable {
@@ -62,23 +66,69 @@ enum QuotaCLIBridge {
     ) async throws -> [ProviderRateLimit] {
         let supported = providers.filter(\.usesQuotaCLI)
         guard !supported.isEmpty else { return [] }
+        guard supported.contains(.cursor) else {
+            return try await run(supported, zCodeAPIKey: zCodeAPIKey, zCodeRegion: zCodeRegion)
+        }
+        // The Cursor sign-in Vibe Usage keeps (`CursorLogin`) goes on stdin,
+        // renewed first when it is due; never in the environment or argv.
+        let login = await CursorLogin.shared
+        let passed = await login.credentialForCLI()
+        let ended = await login.hasEnded
+        var results = try await run(
+            supported, zCodeAPIKey: zCodeAPIKey, zCodeRegion: zCodeRegion,
+            cursorLogin: passed, cursorSignInEnded: ended
+        )
+        guard let index = results.firstIndex(where: { $0.provider == .cursor }) else { return results }
+        if results[index].liveFailure?.isCursorSignIn == true { await login.noteCLISupportsSignIn() }
+        // Cursor rejected the sign-in we passed (or it lapsed): renew once and
+        // read again, as the CLI does for a sign-in it stores itself.
+        guard let passed, results[index].liveFailure == .signInExpired else { return results }
+        switch await login.renewAfterRejection(of: passed) {
+        case .renewed(let next):
+            if let retry = try? await run([.cursor], zCodeAPIKey: nil, cursorLogin: next).first {
+                results[index] = retry
+            }
+        case .ended:
+            break
+        case .notRenewed:
+            // Still within its lifetime: the renewal is what failed.
+            if let expiry = passed.expiresAt, expiry > Date() {
+                results[index] = ProviderRateLimit(
+                    provider: .cursor, status: .retryableError,
+                    fetchedAt: results[index].fetchedAt ?? Date(),
+                    source: .live, liveFailure: .loginRefreshFailed
+                )
+            }
+        }
+        return results
+    }
+
+    private static func run(
+        _ providers: [ProviderRateLimit.Provider],
+        zCodeAPIKey: String?,
+        zCodeRegion: ZCodeQuotaRegion = .zAI,
+        cursorLogin: CursorLoginRecord? = nil,
+        cursorSignInEnded: Bool = false
+    ) async throws -> [ProviderRateLimit] {
         let environment = quotaEnvironment(
-            providers: supported,
+            providers: providers,
             zCodeAPIKey: zCodeAPIKey,
             zCodeRegion: zCodeRegion
         )
         var arguments = ["quota", "fetch"]
-        for provider in supported {
+        for provider in providers {
             arguments += ["--product", provider.rawValue]
         }
         arguments.append("--json")
+        if cursorLogin != nil { arguments.append("--cursor-login-stdin") }
         let output = try await CLIBridge.runCLI(
             args: arguments,
             timeout: 30,
             environmentOverrides: environment.overrides,
-            environmentKeysToRemove: environment.keysToRemove
+            environmentKeysToRemove: environment.keysToRemove,
+            standardInput: cursorLogin?.data
         )
-        return try snapshots(from: decode(output))
+        return try snapshots(from: decode(output), cursorSignInEnded: cursorSignInEnded)
     }
 
     /// A saved regional key is exposed only to a subprocess that was explicitly
@@ -118,7 +168,10 @@ enum QuotaCLIBridge {
         return try decoder.decode(Envelope.self, from: Data(output.utf8))
     }
 
-    static func snapshots(from envelope: Envelope) throws -> [ProviderRateLimit] {
+    /// `cursorSignInEnded`: the app's own Cursor sign-in was ended by Cursor,
+    /// so the CLI read Cursor's local login instead; when that one cannot be
+    /// read (`signIn: required`) the card still says the sign-in lapsed.
+    static func snapshots(from envelope: Envelope, cursorSignInEnded: Bool = false) throws -> [ProviderRateLimit] {
         guard envelope.schemaVersion == schemaVersion else {
             throw ProtocolError.unsupportedSchema(envelope.schemaVersion)
         }
@@ -146,6 +199,13 @@ enum QuotaCLIBridge {
             }
             if liveFailure == nil, product.source == "cache" {
                 liveFailure = .cliReportedFailure
+            }
+            if provider == .cursor, product.status == "unsupported" {
+                switch product.signIn {
+                case "required": liveFailure = cursorSignInEnded ? .signInExpired : .signInRequired
+                case "expired": liveFailure = .signInExpired
+                default: break
+                }
             }
             return ProviderRateLimit(
                 provider: provider,

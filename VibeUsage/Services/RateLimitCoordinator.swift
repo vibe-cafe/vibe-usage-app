@@ -767,6 +767,16 @@ final class RateLimitCoordinator {
         }
     }
 
+    /// The Cursor sign-in changed (signed in or out in Settings): a read in
+    /// flight used the previous one, so it is dropped and the next is not
+    /// debounced.
+    func cursorCredentialContextDidChange() {
+        lastCLIFetchAt[.cursor] = nil
+        if activeCLIProviders.contains(.cursor) {
+            cancelCLIRefresh()
+        }
+    }
+
     func cancelCLIRefresh() {
         cliCancellationGeneration &+= 1
         cliRefreshTask?.cancel()

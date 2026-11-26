@@ -50,6 +50,9 @@ struct SettingsQuotaPage: View {
                 EgressSettingsCard()
             }
             .onAppear { reveal(navigation.focusedProvider, proxy: proxy) }
+            // Whether the CLI the app runs has `login cursor` (the Cursor
+            // row's sign-in appears once it does).
+            .task { await appState.cursorLogin.checkCLISupport() }
             .onChange(of: navigation.focusRequest) { _, _ in
                 reveal(navigation.focusedProvider, proxy: proxy)
             }
@@ -205,7 +208,10 @@ struct QuotaProductRow: View {
     @State private var flash = false
 
     private var isOn: Bool { appState.isQuotaProviderSelected(provider) }
-    private var isConfigurable: Bool { provider == .zCode }
+    /// ZCode's key; Cursor's sign-in once the CLI has it (`CursorLogin`).
+    private var isConfigurable: Bool {
+        provider == .zCode || provider == .cursor && appState.cursorLogin.isAvailable
+    }
     private var isExpanded: Bool { navigation.expandedProviders.contains(provider) }
 
     private var product: QuotaProduct {
@@ -224,10 +230,16 @@ struct QuotaProductRow: View {
                     move: { appState.moveQuotaProduct($0, before: $1) }
                 ))
             if isConfigurable, isExpanded {
-                ZCodeConfigBlock()
-                    .padding(.leading, 14)
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 12)
+                Group {
+                    if provider == .cursor {
+                        CursorLoginBlock()
+                    } else {
+                        ZCodeConfigBlock()
+                    }
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 12)
+                .padding(.bottom, 12)
             }
         }
         .onAppear { if navigation.focusedProvider == provider { pulse() } }
@@ -330,7 +342,8 @@ struct QuotaProductRow: View {
         SettingsQuotaStatus.status(
             for: product,
             zCodeKeyConfigured: appState.zCodeAPIKeyConfigured,
-            warningSnapshot: appState.quotaWarningSnapshot(for: provider)
+            warningSnapshot: appState.quotaWarningSnapshot(for: provider),
+            cursorSignInEnded: provider == .cursor && appState.cursorLogin.phase.isExpired
         )
     }
 
@@ -601,3 +614,112 @@ struct ZCodeConfigBlock: View {
         Task { await model.saveZCodeAPIKey() }
     }
 }
+
+// MARK: - Cursor block
+
+/// Cursor's own sign-in for Vibe Usage, on one line inside the same rounded
+/// block as ZCode's key: where it stands on the left, one button on the
+/// right, and one grey line under it. Four states (plan 《Cursor-加密凭据-方案》
+/// §3): 未登录 → 登录; waiting for the browser → 取消; signed in (the
+/// account's email) → 退出; ended or lapsed → 重新登录. How to revoke it on
+/// cursor.com lives in the sign-out confirmation, not on the page.
+struct CursorLoginBlock: View {
+    @Environment(AppState.self) private var appState
+    @State private var confirmingSignOut = false
+
+    static let note = "以 Cursor 命令行的身份登录，只用来读用量"
+    static let waitingText = "请在浏览器里确认。如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来"
+    static let signOutMessage = """
+    Vibe Usage 会删掉保存的这份登录。
+
+    要在 Cursor 那边也撤销，打开 cursor.com 设置里的 Sessions：这条登录显示为「Desktop App」，每续期一次多一条，撤销最多 10 分钟生效。正在用的 Cursor 编辑器也叫「Desktop App」，请按时间分辨，别撤掉它。
+    """
+
+    private var login: CursorLogin { appState.cursorLogin }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                state
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                action
+            }
+            if let error = login.errorText, login.phase != .waiting {
+                Text(error)
+                    .font(SettingsTheme.caption)
+                    .foregroundStyle(SettingsTheme.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(Self.note)
+                .font(SettingsTheme.caption)
+                .foregroundStyle(SettingsTheme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SettingsTheme.configBlock, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .alert("退出 Cursor 登录？", isPresented: $confirmingSignOut) {
+            Button("取消", role: .cancel) {}
+            Button("退出", role: .destructive) { login.signOut() }
+        } message: {
+            Text(Self.signOutMessage)
+        }
+    }
+
+    @ViewBuilder
+    private var state: some View {
+        switch login.phase {
+        case .signedOut:
+            Text("未登录")
+                .font(SettingsTheme.body)
+                .foregroundStyle(SettingsTheme.secondaryText)
+        case .waiting:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+                    .frame(width: 12, height: 12)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(Self.waitingText)
+                    .font(SettingsTheme.body)
+                    .foregroundStyle(SettingsTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .signedIn(let email):
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(SettingsTheme.green)
+                Text(email ?? "Cursor 账号")
+                    .font(SettingsTheme.body)
+                    .foregroundStyle(SettingsTheme.text)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(email ?? "Cursor 账号")
+            }
+        case .expired:
+            Text("登录已失效")
+                .font(SettingsTheme.body)
+                .foregroundStyle(SettingsTheme.amber)
+        }
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch login.phase {
+        case .signedOut:
+            Button("登录") { login.signIn() }
+                .buttonStyle(.settings)
+        case .waiting:
+            Button("取消") { login.cancelSignIn() }
+                .buttonStyle(.settings)
+        case .signedIn:
+            Button("退出") { confirmingSignOut = true }
+                .buttonStyle(.settings)
+        case .expired:
+            Button("重新登录") { login.signIn() }
+                .buttonStyle(.settings)
+        }
+    }
+}
+

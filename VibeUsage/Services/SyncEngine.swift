@@ -60,10 +60,19 @@ actor SyncEngine {
             let environment = await SystemProxy.cliEnvironment(
                 base: runtime.environment(base: ProcessInfo.processInfo.environment)
             )
+            // The Cursor sign-in Vibe Usage keeps goes on stdin (`CursorLogin`),
+            // renewed first when it is due.
+            let cursorLogin = await CursorLogin.credentialForCLIRun()
             let output = try await CLIProcessRunner.run(
-                executable: runtime.executablePath, arguments: runtime.arguments(["sync"]),
-                environment: environment, timeout: 120
+                executable: runtime.executablePath,
+                arguments: runtime.arguments(cursorLogin == nil ? ["sync"] : ["sync", "--cursor-login-stdin"]),
+                environment: environment, timeout: 120,
+                standardInput: cursorLogin?.data
             )
+            if let cursorLogin, Self.reportsCursorSignInEnded(output) {
+                // Renewed for the next sync, or recorded as ended.
+                _ = await CursorLogin.shared.renewAfterRejection(of: cursorLogin)
+            }
             return (interpret(output), Self.outcome(for: output))
         } catch {
             return (
@@ -71,6 +80,14 @@ actor SyncEngine {
                 Outcome(result: .launchFailed, reason: .processNotStarted)
             )
         }
+    }
+
+    /// The CLI skipped Cursor because the sign-in it was given cannot be used
+    /// (`LOGIN_EXPIRED_NOTICE` in the CLI's `parsers/cursor.js`). Matched
+    /// only; the text is not kept.
+    nonisolated static func reportsCursorSignInEnded(_ output: CLIProcessRunner.Output) -> Bool {
+        let marker = "Cursor 登录已失效（在 Vibe Usage 里登录的那一份）"
+        return output.stdout.contains(marker) || output.stderr.contains(marker)
     }
 
     /// Classifies a finished run into fixed codes. The process text is only

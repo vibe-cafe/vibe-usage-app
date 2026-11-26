@@ -236,6 +236,8 @@ struct RateLimitCardView: View {
         case .credentialsUnreadable: return "读不到登录信息"
         case .credentialsEncrypted: return "登录信息已加密，暂时读不了"
         case .loginRefreshFailed: return "登录续期失败"
+        case .signInRequired: return "需要登录 \(provider.displayName)"
+        case .signInExpired: return "\(provider.displayName) 登录已失效"
         case .programNotFound where provider == .antigravity: return "请安装 agy 或 Antigravity"
         case .programNotFound where provider == .grok: return "未找到 Grok 命令行"
         case .programNotFound: return "未找到程序"
@@ -272,6 +274,7 @@ struct RateLimitCardView: View {
 
 private struct ProviderCard: View {
     @Environment(AppState.self) private var appState
+    @EnvironmentObject private var updaterViewModel: UpdaterViewModel
     let snapshot: ProviderRateLimit
 
     /// Which window-label is currently hovered (`"5h"` / `"7d"`). The card owns
@@ -303,6 +306,7 @@ private struct ProviderCard: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.vertical, 11)
+        .modifier(OpensSettingsRow(enabled: leadsToCursorSignIn, open: openCursorSignIn))
         // Compose the rounded fill and the border stroke into a single
         // BACKGROUND layer. If the stroke were a separate `.overlay` it
         // would paint after (i.e. on top of) the card's content — the
@@ -376,10 +380,32 @@ private struct ProviderCard: View {
         case .noData:
             if isRefreshing {
                 messageText("正在读取订阅配额…")
+            } else if leadsToCursorSignIn {
+                HStack(spacing: 4) {
+                    messageText(RateLimitCardView.emptyStateText(for: snapshot, isDetected: isProductDetected))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.45))
+                }
             } else {
                 messageText(RateLimitCardView.emptyStateText(for: snapshot, isDetected: isProductDetected))
             }
         }
+    }
+
+    /// 「需要登录 Cursor」 / 「Cursor 登录已失效」: the whole card opens the
+    /// Cursor row in Settings, where the sign-in is (`CursorLoginBlock`).
+    private var leadsToCursorSignIn: Bool {
+        snapshot.provider == .cursor && snapshot.status == .noData && !isRefreshing
+            && snapshot.liveFailure?.isCursorSignIn == true
+    }
+
+    private func openCursorSignIn() {
+        SettingsWindowController.shared.show(
+            appState: appState,
+            updaterViewModel: updaterViewModel,
+            destination: .quotas(focus: .cursor)
+        )
     }
 
     /// Local discovery result only — never a credential or network read. It
@@ -625,6 +651,25 @@ private struct ProviderCard: View {
         await appState.refreshRateLimit(for: snapshot.provider)
     }
 
+}
+
+/// Makes a whole card a link to Settings, with the pointing hand over it.
+/// Off, it adds nothing, so the card's own buttons and hovers are untouched.
+private struct OpensSettingsRow: ViewModifier {
+    let enabled: Bool
+    let open: () -> Void
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .contentShape(Rectangle())
+                .onTapGesture(perform: open)
+                .onHover { inside in (inside ? NSCursor.pointingHand : NSCursor.arrow).set() }
+                .accessibilityAddTraits(.isButton)
+        } else {
+            content
+        }
+    }
 }
 
 // MARK: - Quota row

@@ -55,17 +55,15 @@ enum ZCodeAPIKeyStoreError: LocalizedError {
     }
 }
 
-/// Stores only the key the user explicitly enters in Vibe Usage. It never
-/// reads ZCode's own auth database or another application's Keychain items.
-struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
-    private let service: String
-
-    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+/// The Keychain service of every item Vibe Usage keeps for itself (ZCode keys,
+/// the Cursor sign-in). Only our own items, under our own service name.
+enum VibeUsageKeychain {
+    static func service(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
         #if VIBE_USAGE_EXTERNAL_TEST
         // External packages are ad-hoc signed during early testing. Keep their
         // explicitly entered key separate from both the production app and
         // local Debug builds so signature changes never query an existing item.
-        self.service = "ai.vibecafe.vibe-usage.external-test"
+        return "ai.vibecafe.vibe-usage.external-test"
         #elseif DEBUG
         // A locally re-signed test app must not query the release app's saved
         // item: macOS would correctly ask the user to approve the unfamiliar
@@ -74,13 +72,22 @@ struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
         let testService = environment["VIBE_USAGE_TEST_KEYCHAIN_SERVICE"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let testService, !testService.isEmpty {
-            self.service = testService
-        } else {
-            self.service = "ai.vibecafe.vibe-usage"
+            return testService
         }
+        return "ai.vibecafe.vibe-usage"
         #else
-        self.service = "ai.vibecafe.vibe-usage"
+        return "ai.vibecafe.vibe-usage"
         #endif
+    }
+}
+
+/// Stores only the key the user explicitly enters in Vibe Usage. It never
+/// reads ZCode's own auth database or another application's Keychain items.
+struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
+    private let service: String
+
+    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        self.service = VibeUsageKeychain.service(environment: environment)
     }
 
     func load(for region: ZCodeQuotaRegion) throws -> String? {

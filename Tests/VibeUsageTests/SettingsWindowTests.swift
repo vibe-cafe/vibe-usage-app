@@ -146,6 +146,23 @@ struct SettingsWindowTests {
         }
     }
 
+    @Test
+    func cursorOpensOnArrivalWhileItNeedsASignIn() {
+        #expect(SettingsNavigation.opensConfiguration(on: .cursor, zCodeKeyConfigured: false, cursorNeedsSignIn: true))
+        #expect(!SettingsNavigation.opensConfiguration(on: .cursor, zCodeKeyConfigured: false, cursorNeedsSignIn: false))
+        #expect(!SettingsNavigation.opensConfiguration(on: .kimiCode, zCodeKeyConfigured: true, cursorNeedsSignIn: true))
+    }
+
+    @Test
+    func endedCursorSignInShowsInTheStatusColumnEvenWithItsCardOff() {
+        let product = QuotaProduct(provider: .cursor, availability: .ready, isDetected: true)
+        let ended = SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false, cursorSignInEnded: true)
+        #expect(ended.kind == .warning)
+        #expect(ended.text == "已失效")
+        let fine = SettingsQuotaStatus.status(for: product, zCodeKeyConfigured: false)
+        #expect(fine.kind == .ok)
+    }
+
     // MARK: - 订阅配额 status column
 
     @Test

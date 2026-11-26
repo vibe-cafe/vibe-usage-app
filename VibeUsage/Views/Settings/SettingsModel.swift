@@ -77,13 +77,15 @@ final class SettingsNavigation {
         defaults.string(forKey: lastPageKey).flatMap(SettingsPage.init(rawValue:)) ?? .general
     }
 
-    func open(_ destination: SettingsDestination, zCodeKeyConfigured: Bool) {
+    func open(_ destination: SettingsDestination, zCodeKeyConfigured: Bool, cursorNeedsSignIn: Bool = false) {
         guard case .quotas(let provider) = destination else { return }
         page = .quotas
         guard let provider else { return }
         focusedProvider = provider
         focusRequest &+= 1
-        if Self.opensConfiguration(on: provider, zCodeKeyConfigured: zCodeKeyConfigured) {
+        if Self.opensConfiguration(
+            on: provider, zCodeKeyConfigured: zCodeKeyConfigured, cursorNeedsSignIn: cursorNeedsSignIn
+        ) {
             expandedProviders.insert(provider)
         }
     }
@@ -96,12 +98,19 @@ final class SettingsNavigation {
 
     /// Arriving from the panel's grey ZCode tab while ZCode still has no key
     /// opens its row, because the key is the only thing standing between the
-    /// user and a card. (Turning the switch on does *not* open it.)
+    /// user and a card. (Turning the switch on does *not* open it.) Cursor's
+    /// row opens the same way while it needs a sign-in (its card's
+    /// 「需要登录 Cursor」 / 「Cursor 登录已失效」 lead here).
     nonisolated static func opensConfiguration(
         on provider: ProviderRateLimit.Provider,
-        zCodeKeyConfigured: Bool
+        zCodeKeyConfigured: Bool,
+        cursorNeedsSignIn: Bool = false
     ) -> Bool {
-        provider == .zCode && !zCodeKeyConfigured
+        switch provider {
+        case .zCode: !zCodeKeyConfigured
+        case .cursor: cursorNeedsSignIn
+        default: false
+        }
     }
 }
 
@@ -126,6 +135,8 @@ enum SettingsQuotaStatus {
         case .credentialsUnreadable, .localRecordUnreadable: return "读不了"
         case .credentialsEncrypted: return "不支持"
         case .loginRefreshFailed: return "续期失败"
+        case .signInRequired: return "需登录"
+        case .signInExpired: return "已失效"
         case .programNoAnswer, .claudeNoWindows, .claudeNoResponse: return "无响应"
         case .claudeLaunchFailed: return "启动失败"
         case .cliRuntimeMissing: return "缺 Node"
@@ -134,10 +145,13 @@ enum SettingsQuotaStatus {
         }
     }
 
+    /// `cursorSignInEnded`: Cursor ended the sign-in Vibe Usage keeps; the
+    /// row says so even while its card is off.
     static func status(
         for product: QuotaProduct,
         zCodeKeyConfigured: Bool,
-        warningSnapshot: ProviderRateLimit? = nil
+        warningSnapshot: ProviderRateLimit? = nil,
+        cursorSignInEnded: Bool = false
     ) -> (kind: SettingsStatusKind, text: String) {
         if let snapshot = warningSnapshot {
             let reason = snapshot.liveFailure.map { failureText($0, provider: product.provider) }
@@ -166,6 +180,9 @@ enum SettingsQuotaStatus {
         }
         if product.provider == .zCode, product.availability == .ready, !zCodeKeyConfigured {
             return (.warning, "需 Key")
+        }
+        if product.provider == .cursor, cursorSignInEnded {
+            return (.warning, "已失效")
         }
         return (product.isDetected ? .ok : .none, product.statusText)
     }
