@@ -17,15 +17,20 @@ private final class ActivityProtocol: URLProtocol, @unchecked Sendable {
 
     override func startLoading() {
         let url = request.url!
-        #expect(url.absoluteString.hasPrefix("https://example.test/team/api/usage/activity?"))
+        let isActivity = url.path == "/team/api/usage/activity"
+        #expect(url.host == "example.test" && (isActivity || url.path == "/team/api/usage"))
         #expect(request.httpMethod == "GET")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
         let items = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!
         let parameters = Dictionary(grouping: items, by: \.name).mapValues { $0.compactMap(\.value).sorted() }
-        if parameters["from"] != nil {
-            #expect(parameters == ["from": ["2026-11-21"], "to": ["2026-11-25"],
-                                   "tz": [TimeZone.current.identifier], "granularity": ["day"]])
+        if let from = request.value(forHTTPHeaderField: "Fixture-From"),
+           let to = request.value(forHTTPHeaderField: "Fixture-To"),
+           let zone = request.value(forHTTPHeaderField: "Fixture-Zone") {
+            var expected = ["from": [from], "to": [to], "tz": [zone]]
+            if isActivity { expected["granularity"] = ["day"] }
+            #expect(parameters == expected)
         } else {
+            #expect(isActivity)
             #expect(parameters == [
                 "days": ["1"], "tz": [TimeZone.current.identifier], "granularity": ["hour"],
                 "source": ["codex", "cursor"], "project": ["测试 & C++"], "hostname": ["Mac"],
@@ -35,7 +40,10 @@ private final class ActivityProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(
             url: url, statusCode: 200, httpVersion: nil, headerFields: nil
         )!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(#"{"activeSeconds":60,"workSeconds":90,"parallel":1.5,"series":[{"periodStart":"2026-11-25T00:00:00.000Z","activeSeconds":60,"workSeconds":90}],"firstBucketStart":"2026-11-24T00:30:00.000Z"}"#.utf8))
+        let body = isActivity
+            ? #"{"activeSeconds":60,"workSeconds":90,"parallel":1.5,"series":[{"periodStart":"2026-11-25T00:00:00.000Z","activeSeconds":60,"workSeconds":90}],"firstBucketStart":"2026-11-24T00:30:00.000Z"}"#
+            : #"{"buckets":[],"hasAnyData":false}"#
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
@@ -101,8 +109,32 @@ struct UsageActivityTests {
         #expect(result.workSeconds == 90)
         #expect(result.parallel == 1.5)
         #expect(result.series.first?.periodStart == "2026-11-25T00:00:00.000Z")
-        let custom = UsageQueryRange.custom(from: try #require(Formatters.dateFromDayKey("2026-11-21")),
-                                            to: try #require(Formatters.dateFromDayKey("2026-11-25")))
-        _ = try await client.fetchActivity(range: custom, filters: FilterState())
+    }
+
+    @Test(arguments: [
+        ("Asia/Shanghai", "2026-11-03", "2026-11-03", "2026-11-02T16:00:00.000Z", "2026-11-03T15:59:59.999Z"),
+        ("America/New_York", "2026-11-03", "2026-11-03", "2026-11-03T05:00:00.000Z", "2026-11-04T04:59:59.999Z"),
+        ("America/New_York", "2026-11-01", "2026-11-01", "2026-11-01T04:00:00.000Z", "2026-11-02T04:59:59.999Z"),
+        ("Asia/Shanghai", "2026-11-03", "2026-11-18", "2026-11-02T16:00:00.000Z", "2026-11-18T15:59:59.999Z"),
+    ])
+    func customDatesCoverWholeLocalDaysForUsageAndActivity(
+        zone: String, firstDay: String, lastDay: String, expectedFrom: String, expectedTo: String
+    ) async throws {
+        let picker = DateFormatter()
+        picker.locale = Locale(identifier: "en_US_POSIX")
+        let timeZone = try #require(TimeZone(identifier: zone))
+        picker.timeZone = timeZone
+        picker.dateFormat = "yyyy-MM-dd"
+        let range = UsageQueryRange.custom(from: try #require(picker.date(from: firstDay)),
+                                           to: try #require(picker.date(from: lastDay)), timeZone: timeZone)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ActivityProtocol.self]
+        config.httpAdditionalHeaders = ["Fixture-From": expectedFrom, "Fixture-To": expectedTo, "Fixture-Zone": zone]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let client = APIClient(server: UsageServer("https://example.test/team/"), apiKey: "fixture", session: session)
+        _ = try await client.fetchUsage(range: range)
+        _ = try await client.fetchActivity(range: range, filters: FilterState())
+        #expect(range.start(at: .now) == Formatters.dateFromISO8601(expectedFrom))
     }
 }

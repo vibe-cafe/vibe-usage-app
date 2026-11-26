@@ -25,7 +25,7 @@ struct APIClient: Sendable {
             throw APIError.invalidURL
         }
         var queryItems = (components.queryItems ?? []) + range.queryItems
-        queryItems.append(URLQueryItem(name: "tz", value: TimeZone.current.identifier))
+        queryItems.append(URLQueryItem(name: "tz", value: range.timeZone.identifier))
         components.queryItems = queryItems + parameters
         // URLSearchParams decodes a literal plus as a space in a project or host name.
         components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
@@ -84,7 +84,22 @@ struct APIClient: Sendable {
 enum UsageQueryRange: Sendable, Equatable {
     case days(Int)
     case from(Date)
-    case custom(from: Date, to: Date)
+    case custom(DateInterval, timeZone: TimeZone)
+
+    static func custom(from: Date, to: Date, timeZone: TimeZone = .current) -> Self {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let days = DateInterval(
+            start: calendar.startOfDay(for: from),
+            end: calendar.dateInterval(of: .day, for: to)!.end
+        )
+        return .custom(days, timeZone: timeZone)
+    }
+
+    var timeZone: TimeZone {
+        if case .custom(_, let zone) = self { return zone }
+        return .current
+    }
 
     var isHourly: Bool {
         switch self {
@@ -97,9 +112,7 @@ enum UsageQueryRange: Sendable, Equatable {
     func start(at now: Date) -> Date {
         switch self {
         case .from(let date): return date
-        case .custom(let from, _):
-            // The classic dashboard sends date-only ISO bounds, parsed as UTC by the server.
-            return Formatters.dateFromISO8601("\(Self.dateString(from))T00:00:00Z") ?? from
+        case .custom(let days, _): return days.start
         case .days(1): return now.addingTimeInterval(-86_400)
         case .days(let count):
             let calendar = Calendar.current
@@ -113,10 +126,11 @@ enum UsageQueryRange: Sendable, Equatable {
             [URLQueryItem(name: "days", value: String(days))]
         case .from(let from):
             [URLQueryItem(name: "from", value: Self.isoString(from))]
-        case .custom(let from, let to):
+        case .custom(let days, _):
+            // Both endpoints include `to` and parse it with millisecond precision.
             [
-                URLQueryItem(name: "from", value: Self.dateString(from)),
-                URLQueryItem(name: "to", value: Self.dateString(to)),
+                URLQueryItem(name: "from", value: Self.isoString(days.start)),
+                URLQueryItem(name: "to", value: Self.isoString(days.end.addingTimeInterval(-0.001))),
             ]
         }
     }
@@ -124,15 +138,6 @@ enum UsageQueryRange: Sendable, Equatable {
     private static func isoString(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
-    }
-
-    private static func dateString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
 }
