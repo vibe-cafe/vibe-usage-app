@@ -193,6 +193,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
     /// Claude's named allowances, separate from the generic meters that
     /// select the classic card's row layout.
     var modelScopedMeters: [RateLimitMeter] = []
+    /// An explicit limits list is authoritative even when it has no model rows.
+    var hasClaudeLimits = false
     var claudeAccountScope: ClaudeQuotaAccountScope?
     var fiveHour: RateLimitWindow?
     var sevenDay: RateLimitWindow?

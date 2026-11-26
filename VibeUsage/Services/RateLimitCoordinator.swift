@@ -24,7 +24,7 @@ final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
-    private var lastClaudeLiveModels: (account: ClaudeQuotaAccountScope, meters: [RateLimitMeter])?
+    private var lastClaudeLiveModels: (account: ClaudeQuotaAccountScope, meters: [RateLimitMeter], observedAt: Date)?
     private var lastOpenCodeGoFetchAt: Date?
     private var isPanelVisible = false
     private var codexRefreshTask: Task<Void, Never>?
@@ -302,9 +302,12 @@ final class RateLimitCoordinator {
         do {
             let live = try await fetchClaudeLive()
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-            let shown = includingLastClaudeLiveModels(in: live)
-            lastClaudeLiveModels = shown.claudeAccountScope.map { ($0, shown.modelScopedMeters) }
-            upsert(shown)
+            if live.hasClaudeLimits, let account = live.claudeAccountScope {
+                lastClaudeLiveModels = (account, live.modelScopedMeters, live.dataAsOf ?? Date())
+            } else if live.claudeAccountScope != lastClaudeLiveModels?.account {
+                lastClaudeLiveModels = nil
+            }
+            upsert(includingLastClaudeLiveModels(in: live))
         } catch is CancellationError {
             #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaCancelled([.claudeCode])
@@ -358,37 +361,42 @@ final class RateLimitCoordinator {
     }
 
     private func includingLastClaudeLiveModels(in snapshot: ProviderRateLimit) -> ProviderRateLimit {
-        guard let last = lastClaudeLiveModels, last.account == snapshot.claudeAccountScope else { return snapshot }
-        let reported = Set(snapshot.modelScopedMeters.map(\.id))
+        guard !snapshot.hasClaudeLimits, let last = lastClaudeLiveModels,
+              last.account == snapshot.claudeAccountScope else { return snapshot }
         let now = Date()
         var result = snapshot
-        result.modelScopedMeters += last.meters.filter { meter in
-            guard let reset = meter.window.resetsAt else { return false }
-            return reset > now && !reported.contains(meter.id)
+        result.modelScopedMeters = last.meters.filter { meter in
+            meter.window.resetsAt.map { $0 > now } == true
         }
         return result
     }
 
     private func paintClaudeCache(_ cached: ProviderRateLimit?) {
-        if let account = cached?.claudeAccountScope, account != lastClaudeLiveModels?.account {
-            lastClaudeLiveModels = nil
+        if let cached, let account = cached.claudeAccountScope, let last = lastClaudeLiveModels {
+            if account != last.account {
+                lastClaudeLiveModels = nil
+            } else if cached.hasClaudeLimits, let asOf = cached.dataAsOf, asOf >= last.observedAt {
+                // A subsequent cache can withdraw a model. Only a live read
+                // can supply a percentage for a future reply missing limits.
+                let reported = Set(cached.modelScopedMeters.map(\.id))
+                lastClaudeLiveModels?.meters.removeAll { !reported.contains($0.id) }
+            }
         }
-        if let cached, upsertIfNewer(carryingLiveFailure(includingLastClaudeLiveModels(in: cached))) { return }
+        let painted = cached.map(includingLastClaudeLiveModels)
+        if let painted, upsertIfNewer(carryingLiveFailure(painted)) { return }
 
-        // An older cache cannot replace the classic windows, but a missing
-        // row still needs fresh evidence of the account and an unexpired reset.
+        // Keep the newer classic windows. The cache can still answer for the
+        // models on this account, or confirm its own sample on a repeated read.
         guard var current = currentSnapshot(.claudeCode), current.status == .ok else { return }
         let original = current
-        if let cached, cached.source == .cache, current.source == .cache, cached.dataAsOf == current.dataAsOf {
-            // Re-reading the same disk sample is direct evidence for its own rows.
-            current.modelScopedMeters = includingLastClaudeLiveModels(in: cached).modelScopedMeters
-            current.claudeAccountScope = cached.claudeAccountScope
-        } else if let cached, let account = cached.claudeAccountScope, account == current.claudeAccountScope {
-            let reported = Set(cached.modelScopedMeters.map(\.id))
-            current.modelScopedMeters.removeAll { !reported.contains($0.id) }
-            current = includingLastClaudeLiveModels(in: current)
+        if let painted, painted.claudeAccountScope == current.claudeAccountScope,
+           painted.claudeAccountScope != nil ||
+            (painted.source == .cache && current.source == .cache && painted.dataAsOf == current.dataAsOf) {
+            current.modelScopedMeters = painted.modelScopedMeters
+            current.hasClaudeLimits = painted.hasClaudeLimits
         } else {
             current.modelScopedMeters = []
+            current.hasClaudeLimits = false
         }
         if current != original { upsert(current) }
     }

@@ -594,12 +594,27 @@ struct RateLimitCoordinatorTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let binary = dir.appendingPathComponent("claude")
+        let rows: [[String: Any]] = [
+            ["kind": "weekly_scoped", "group": "weekly", "percent": 91,
+             "scope": ["model": ["display_name": "Fable"]], "resets_at": "2099-01-01T00:00:00Z"],
+            ["kind": "weekly_scoped", "group": "weekly", "percent": 80,
+             "scope": ["model": ["display_name": "Expired"]], "resets_at": "2000-01-01T00:00:00Z"],
+            ["kind": "weekly_scoped", "group": "weekly", "percent": 12,
+             "scope": ["model": ["display_name": "Undated"]], "resets_at": NSNull()],
+        ]
+        let reply: [String: Any] = ["type": "control_response", "response": [
+            "request_id": "vibe-usage", "subtype": "success", "response": [
+                "rate_limits": ["seven_day": ["utilization": 42], "limits": rows],
+            ],
+        ]]
+        try JSONSerialization.data(withJSONObject: reply).write(to: dir.appendingPathComponent("usage.json"))
         let script = #"""
         #!/bin/sh
         read -r request
-        echo '{"type":"control_response","response":{"request_id":"vibe-init","subtype":"success","response":{"account":{"email":"a@example.invalid","organization":"Fixture"}}}}'
+        echo '{"type":"control_response","response":{"request_id":"vibe-init","subtype":"success","response":{"account":{"email":"a@example.invalid"}}}}'
         read -r request
-        echo '{"type":"control_response","response":{"request_id":"vibe-usage","subtype":"success","response":{"rate_limits":{"seven_day":{"utilization":42},"model_scoped":[{"display_name":"Fable","utilization":91,"resets_at":"2099-01-01T00:00:00Z"},{"display_name":"Expired","utilization":80,"resets_at":"2000-01-01T00:00:00Z"},{"display_name":"Undated","utilization":12}]}}}}'
+        cat "$(dirname "$0")/usage.json"
+        echo
         """#
         try Data(script.utf8).write(to: binary)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
@@ -621,13 +636,15 @@ struct RateLimitCoordinatorTests {
                 guard let nextLive else { throw ClaudeUsageProbe.ProbeError.timedOut }
                 return nextLive
             }, loadClaudeCache: { cache })
-        func cached(_ account: String?, at time: Date) throws -> ProviderRateLimit {
-            var profile = ["accountUuid": "id", "organizationName": "Fixture"]
+        func cached(_ account: String?, at time: Date, limits: [[String: Any]]? = nil) throws -> ProviderRateLimit {
+            var profile = ["accountUuid": "id", "organizationName": ""]
             profile["emailAddress"] = account
+            var usage: [String: Any] = ["seven_day": ["utilization": 55]]
+            usage["limits"] = limits
             let file: [String: Any] = [
                 "oauthAccount": profile,
                 "cachedUsageUtilization": ["accountUuid": "id", "fetchedAtMs": time.timeIntervalSince1970 * 1000,
-                                           "utilization": ["seven_day": ["utilization": 55]]],
+                                           "utilization": usage],
             ]
             let url = dir.appendingPathComponent("cache.json")
             try JSONSerialization.data(withJSONObject: file).write(to: url)
@@ -655,30 +672,79 @@ struct RateLimitCoordinatorTests {
         cache = nil
         nextLive = live
         await coordinator.refreshClaude()
-        cache = try cached("a@example.invalid", at: now)
-        cache?.modelScopedMeters = [RateLimitMeter(id: "Fable", label: "Fable",
-            window: RateLimitWindow(utilization: 94, resetsAt: now.addingTimeInterval(3600)))]
-        nextLive?.modelScopedMeters = []
+        var cacheRow = rows[0]
+        cacheRow["percent"] = 94
+        cache = try cached("a@example.invalid", at: now, limits: [cacheRow])
+        let missing = try #require(ClaudeUsageProbe.parse(["rate_limits": ["seven_day": ["utilization": 42]]], now: now))
+        nextLive = missing
+        nextLive?.claudeAccountScope = live.claudeAccountScope
         await coordinator.refreshClaude()
         #expect(duringProbe?.modelScopedMeters.map { $0.window.utilization } == [94])
         #expect(state.rateLimits.first?.modelScopedMeters.map { $0.window.utilization } == [91])
+
+        // The disk list withdraws Fable. A missing field in the following
+        // live reply cannot revive the superseded observation.
+        cache = try cached("a@example.invalid", at: now, limits: [])
+        await coordinator.refreshClaude()
+        #expect(duringProbe?.modelScopedMeters.isEmpty == true)
+        #expect(state.rateLimits.first?.modelScopedMeters.isEmpty == true)
     }
 
     @Test @MainActor
-    func repeatedCacheReadShowsReportedModelButCannotCarryItIntoAnotherRead() async {
+    func liveLimitsReplacePreviousModelsEvenWhenTheyContainNoModelRows() async throws {
+        let (state, defaults, suite) = selectedAppState([.claudeCode])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let now = Date()
+        func model(_ name: String) -> [String: Any] {
+            ["kind": "weekly_scoped", "group": "weekly", "percent": 50,
+             "resets_at": now.timeIntervalSince1970 + 3600, "scope": ["model": ["display_name": name]]]
+        }
+        func live(_ rows: [[String: Any]]?, organization: String = "Fixture") throws -> ProviderRateLimit {
+            var usage: [String: Any] = ["seven_day": ["utilization": 15]]
+            usage["limits"] = rows
+            var result = try #require(ClaudeUsageProbe.parse(["rate_limits": usage], now: now))
+            result.claudeAccountScope = ClaudeQuotaAccountScope(email: "a@example.invalid", organization: organization)
+            return result
+        }
+        var next = try live(nil)
+        let coordinator = RateLimitCoordinator(appState: state, claudeNonessentialTrafficDisabled: { false },
+            fetchClaudeLive: { next }, loadClaudeCache: { nil })
+        let surface: [String: Any] = ["kind": "weekly_scoped", "group": "weekly", "percent": 20,
+                                      "scope": ["surface": ["display_name": "Code"]]]
+        for (rows, expectedNames) in [([model("Other")], ["Other"]), ([surface], []), ([], [])] {
+            next = try live([model("Fable"), model("Other")])
+            await coordinator.refreshClaude()
+            next = try live(rows)
+            await coordinator.refreshClaude()
+            #expect(state.rateLimits.first?.modelScopedMeters.map(\.label) == expectedNames)
+            next = try live(nil)
+            await coordinator.refreshClaude()
+            #expect(state.rateLimits.first?.modelScopedMeters.map(\.label) == expectedNames)
+        }
+        next = try live([model("Fable")])
+        await coordinator.refreshClaude()
+        next = try live(nil, organization: "Second")
+        await coordinator.refreshClaude()
+        #expect(state.rateLimits.first?.modelScopedMeters.isEmpty == true)
+    }
+
+    @Test @MainActor
+    func repeatedCacheReadShowsReportedModelWhileLiveReadingIsPaused() async {
         let (state, defaults, suite) = selectedAppState([.claudeCode])
         defer { defaults.removePersistentDomain(forName: suite) }
         let meter = RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(
-            utilization: 70, resetsAt: Date().addingTimeInterval(3600)))
-        var cached = ProviderRateLimit(provider: .claudeCode, modelScopedMeters: [meter],
+            utilization: 70, resetsAt: Date().addingTimeInterval(3600), windowDuration: 7 * 86_400))
+        var cached = ProviderRateLimit(provider: .claudeCode, modelScopedMeters: [meter], hasClaudeLimits: true,
             sevenDay: RateLimitWindow(utilization: 15), status: .ok, dataAsOf: Date(), source: .cache)
         let coordinator = RateLimitCoordinator(appState: state,
             claudeNonessentialTrafficDisabled: { false },
-            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.timedOut },
+            fetchClaudeLive: { throw EgressCheck.Paused(reason: .regionUnsupported("CN")) },
             loadClaudeCache: { cached })
         for _ in 0..<2 {
             await coordinator.refreshClaude()
             #expect(state.rateLimits.first?.modelScopedMeters == [meter])
+            #expect(state.rateLimits.first?.source == .cache)
+            #expect(state.rateLimits.first?.liveFailure == .egressRegionUnsupported("CN"))
         }
         cached.modelScopedMeters = []
         await coordinator.refreshClaude()

@@ -10,7 +10,7 @@ struct ClaudeQuotaAccountScope: Equatable, Sendable {
         guard let email, !email.isEmpty else { return nil }
         var hash = Hasher()
         hash.combine(email)
-        hash.combine(organization)
+        hash.combine(organization == "" ? nil : organization)
         fingerprint = hash.finalize()
     }
 }
@@ -821,7 +821,8 @@ enum ClaudeUsageProbe {
 
         return ProviderRateLimit(
             provider: .claudeCode,
-            modelScopedMeters: modelScopedMeters(limits?["model_scoped"]),
+            modelScopedMeters: modelScopedMeters(limits?["limits"]),
+            hasClaudeLimits: limits?["limits"] != nil,
             fiveHour: fiveHour,
             sevenDay: sevenDay,
             sevenDayOpus: opus,
@@ -846,21 +847,21 @@ enum ClaudeUsageProbe {
 
     static func modelScopedMeters(_ raw: Any?) -> [RateLimitMeter] {
         (raw as? [Any] ?? []).compactMap { entry in
-            guard let row = entry as? [String: Any] else { return nil }
-            return modelMeter(name: row["display_name"], used: row["utilization"], row: row)
+            guard let row = entry as? [String: Any], row["group"] as? String == "weekly",
+                  let scope = row["scope"] as? [String: Any],
+                  let model = scope["model"] as? [String: Any],
+                  let name = (model["display_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty, let used = number(row["percent"]) else { return nil }
+            let reset = row["resets_at"]
+            let resetsAt: Date?
+            if let seconds = number(reset) {
+                resetsAt = Date(timeIntervalSince1970: seconds)
+            } else {
+                resetsAt = (reset as? String).flatMap(parseISO8601)
+            }
+            return RateLimitMeter(id: name, label: name, window: RateLimitWindow(
+                utilization: used, resetsAt: resetsAt, windowDuration: sevenDayDuration))
         }
-    }
-
-    static func modelMeter(name: Any?, used: Any?, row: [String: Any]) -> RateLimitMeter? {
-        guard let name = (name as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !name.isEmpty, let used = number(used) else { return nil }
-        let duration = number(row["window_duration_seconds"])
-        let window = RateLimitWindow(
-            utilization: used,
-            resetsAt: (row["resets_at"] as? String).flatMap(parseISO8601),
-            windowDuration: duration.flatMap { $0 > 0 ? $0 : nil }
-        )
-        return RateLimitMeter(id: name, label: name, window: window)
     }
 
     /// `{ utilization: 0-100, resets_at: ISO-8601 }`. A window whose reset has

@@ -227,7 +227,8 @@ struct ClaudeUsageProbeTests {
     func extraLivePayloadFieldsDoNotDropKnownWindows() throws {
         var live = payload()
         var limits = live["rate_limits"] as? [String: Any] ?? [:]
-        limits["limits"] = [["kind": "weekly_scoped"]]
+        limits["limits"] = [["kind": "weekly_scoped", "group": "weekly", "percent": 1,
+                             "scope": ["model": ["display_name": "Fable"]]]]
         limits["model_scoped"] = [["display_name": "Fable", "utilization": 1]]
         limits["cinder_cove"] = ["utilization": 0, "resets_at": "2026-08-01T20:00:00Z"]
         limits["five_hour"] = [
@@ -243,7 +244,8 @@ struct ClaudeUsageProbeTests {
 
         let snapshot = try #require(ClaudeUsageProbe.parse(live, now: now))
         #expect(snapshot.modelScopedMeters == [
-            RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(utilization: 1))
+            RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(
+                utilization: 1, windowDuration: 7 * 86_400))
         ])
         #expect(snapshot.meters.isEmpty)
         let classicRows = ProviderCard(snapshot: snapshot).allRows
