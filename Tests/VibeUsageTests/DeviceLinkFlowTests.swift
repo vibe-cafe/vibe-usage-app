@@ -49,6 +49,28 @@ struct DeviceLinkFlowTests {
             set { lock.withLock { _holdPolls = newValue } }
         }
 
+        private var _holdPollAnswer = false
+        private var pollAnswer: CheckedContinuation<Void, Never>?
+
+        /// Holds the next poll's answer, cancellation or not, until
+        /// `releasePollAnswer()`: a reply already on its way back.
+        var holdPollAnswer: Bool {
+            get { lock.withLock { _holdPollAnswer } }
+            set { lock.withLock { _holdPollAnswer = newValue } }
+        }
+
+        var isPollAnswerHeld: Bool { lock.withLock { pollAnswer != nil } }
+
+        func releasePollAnswer() {
+            let held = lock.withLock {
+                let held = pollAnswer
+                pollAnswer = nil
+                _holdPollAnswer = false
+                return held
+            }
+            held?.resume()
+        }
+
         init(codes: [Result<DeviceCodeResponse, Error>], replies: [Result<DevicePollResponse, Error>] = []) {
             self.codes = codes
             self.replies = replies
@@ -72,9 +94,14 @@ struct DeviceLinkFlowTests {
         }
 
         func poll(_ server: UsageServer, _ deviceCode: String) async throws -> DevicePollResponse {
-            let next: Result<DevicePollResponse, Error>? = lock.withLock {
+            let (hold, next): (Bool, Result<DevicePollResponse, Error>?) = lock.withLock {
                 _polls.append(deviceCode)
-                return replies.isEmpty ? nil : replies.removeFirst()
+                return (_holdPollAnswer, replies.isEmpty ? nil : replies.removeFirst())
+            }
+            if hold {
+                await withCheckedContinuation { continuation in
+                    lock.withLock { pollAnswer = continuation }
+                }
             }
             return try (next ?? .success(DeviceLinkFlowTests.reply(error: "authorization_pending"))).get()
         }
@@ -274,6 +301,27 @@ struct DeviceLinkFlowTests {
         #expect(recorder.saved.isEmpty)
     }
 
+    /// The user cancels while a poll is out, and that poll then comes back
+    /// with an approval: the key is dropped, not saved.
+    @Test func anApprovalThatArrivesAfterCancelIsDropped() async {
+        let fake = FakeServer(
+            codes: [.success(Self.device(interval: 0))],
+            replies: [.success(Self.reply(apiKey: "vbu_late"))]
+        )
+        fake.holdPollAnswer = true
+        let recorder = Recorder()
+        let flow = makeFlow(fake, recorder)
+        flow.start()
+        await until { fake.isPollAnswerHeld }
+
+        flow.cancel()
+        fake.releasePollAnswer()
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(recorder.saved.isEmpty)
+        #expect(flow.phase == .idle)
+        #expect(fake.polls.count == 1)
+    }
+
     /// Cancelling while the code request is in flight makes it fail (as
     /// `URLSession` does); that failure must not show, and must not touch the
     /// attempt started right after.
@@ -382,6 +430,60 @@ struct DeviceLinkFlowTests {
         #expect(settings.isRelinking == false)
         // The panel's flow did not move.
         #expect(state.deviceLink.phase == .idle)
+    }
+
+    /// Through `AppState`: a late approval after 取消 writes no config and
+    /// starts no sync; the same approval without the cancel does both.
+    @Test(arguments: [true, false])
+    func aLateApprovalAfterCancelNeitherSavesNorSyncs(cancelFirst: Bool) async {
+        let suite = "DeviceLinkFlowTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fake = FakeServer(
+            codes: [.success(Self.device(interval: 0))],
+            replies: [.success(Self.reply(apiKey: "vbu_late", apiUrl: "https://linked.example"))]
+        )
+        fake.holdPollAnswer = true
+        let service = DeviceLinkService(
+            requestCode: { try await fake.requestCode($0, $1, $2) },
+            poll: { try await fake.poll($0, $1) },
+            sleep: { try await fake.sleep($0) },
+            now: { fake.now() },
+            openURL: { _ in },
+            hostname: { nil }
+        )
+        var stored: VibeUsageConfig?
+        let state = AppState(
+            initialConfig: nil, loadConfig: { stored },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            quotaDefaults: defaults, zCodeAPIKeyStore: NoZCodeKeys(), quotaProductDiscoverer: { [] },
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
+            deviceLinkService: service
+        )
+        state.saveConfig = { stored = $0 }
+        var syncs = 0
+        state.runSync = {
+            syncs += 1
+            return (.success("ok"), SyncEngine.Outcome(result: .success))
+        }
+
+        state.deviceLink.start()
+        await until { fake.isPollAnswerHeld }
+        if cancelFirst { state.deviceLink.cancel() }
+        fake.releasePollAnswer()
+
+        if cancelFirst {
+            try? await Task.sleep(for: .milliseconds(50))
+            #expect(stored == nil)
+            #expect(syncs == 0)
+            #expect(state.isConfigured == false)
+            #expect(state.deviceLink.phase == .idle)
+        } else {
+            await until { syncs > 0 && state.deviceLink.phase == .idle }
+            #expect(stored?.apiKey == "vbu_late")
+            #expect(stored?.apiUrl == "https://linked.example")
+            #expect(state.isConfigured)
+        }
     }
 }
 

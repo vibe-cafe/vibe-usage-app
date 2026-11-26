@@ -138,6 +138,9 @@ final class DeviceLinkFlow {
                 // A dropped poll is retried at the next interval.
                 continue
             }
+            // Cancelled (or started over) while this poll was out: whatever
+            // it brings back, an approval included, is dropped, never saved.
+            guard current == attempt else { return }
             if let apiKey = reply.apiKey {
                 await save(apiKey, reply.linkedServer(fallingBackTo: server))
                 finish(current, .idle)
