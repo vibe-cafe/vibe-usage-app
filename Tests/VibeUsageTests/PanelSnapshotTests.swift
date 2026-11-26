@@ -170,7 +170,9 @@ final class PanelFixture {
             quotaProductDiscoverer: {
                 QuotaProductRegistry.catalog.map { QuotaProduct(provider: $0.0, availability: $0.1, isDetected: true) }
             },
-            interfaceStyle: InterfaceStylePreference(rollout: .forced(.modern)),
+            // Its own preference domain with the external-test rollout: a
+            // fresh domain starts on the new panel, in Debug and Release.
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
             deviceLinkService: .fixture(scene.signIn)
         )
         state.initializeQuotaProducts()

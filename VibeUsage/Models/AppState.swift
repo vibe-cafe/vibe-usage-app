@@ -386,11 +386,16 @@ final class AppState {
         self.zCodeAPIKeyStore = zCodeAPIKeyStore
         self.quotaProductDiscoverer = quotaProductDiscoverer
         self.cursorLogin = cursorLogin ?? .shared
-        // Releases before the key existed still kept their recent syncs.
-        self.lastSuccessfulSyncAt = quotaDefaults.object(forKey: Self.lastSuccessfulSyncKey) as? Date
-            ?? SyncHistoryStore(defaults: quotaDefaults).records()
-                .first { $0.result == .success }
-                .map { $0.startedAt.addingTimeInterval($0.duration) }
+        if let saved = quotaDefaults.object(forKey: Self.lastSuccessfulSyncKey) as? Date {
+            self.lastSuccessfulSyncAt = saved
+        } else if let migrated = SyncHistoryStore(defaults: quotaDefaults).records()
+            .first(where: { $0.result == .success })
+            .map({ $0.startedAt.addingTimeInterval($0.duration) }) {
+            // Releases before the key existed still kept their recent syncs.
+            // Saved at once, before later failures push that record out.
+            self.lastSuccessfulSyncAt = migrated
+            quotaDefaults.set(migrated, forKey: Self.lastSuccessfulSyncKey)
+        }
     }
 
     // MARK: - Lifecycle
@@ -558,17 +563,18 @@ final class AppState {
         let account = config?.apiKey
         await waitForLaunchNetwork()
         guard config?.apiKey == account else {
-            syncStatus = .idle
-            // A relink meanwhile: sync the new account instead (its own launch
-            // sync may have returned while this one held the status).
-            if config?.apiKey != nil {
-                await triggerSync(trigger)
-            }
+            await dropStaleSync(trigger)
             return
         }
 
         let startedAt = Date()
         let (result, outcome) = await runSync()
+        // Reset or relinked while the CLI ran: the result belongs to the
+        // previous account, so it is neither recorded nor shown.
+        guard config?.apiKey == account else {
+            await dropStaleSync(trigger)
+            return
+        }
         if let outcome {
             syncHistory.append(SyncRecord(
                 startedAt: startedAt,
@@ -602,6 +608,16 @@ final class AppState {
         case .failure(let error):
             syncStatus = .error(error.localizedDescription)
             lastSyncMessage = error.localizedDescription
+        }
+    }
+
+    /// The account changed under a sync (reset, relink). After a relink the
+    /// new account is synced instead: its own launch sync returned at once
+    /// while this one held the status.
+    private func dropStaleSync(_ trigger: SyncRecord.Trigger) async {
+        syncStatus = .idle
+        if config?.apiKey != nil {
+            await triggerSync(trigger)
         }
     }
 
@@ -946,9 +962,12 @@ final class AppState {
         await rateLimitCoordinator?.refreshSelectedIfNeeded()
     }
 
-    /// The new panel's 「刷新额度」: quotas only, never a usage sync. A click
-    /// while a read is in flight joins it (the coordinator's single-flight).
+    /// The new panel's 「刷新额度」: quotas only, never a usage sync. While any
+    /// read in the scope is still running (the button spins) a click does
+    /// nothing: on 概览 a second `refreshAll()` would read again the
+    /// providers that already answered.
     func refreshQuotas(_ scope: QuotaRefreshScope) async {
+        guard !isRefreshingQuotas(scope) else { return }
         switch scope {
         case .all: await refreshAllRateLimits()
         case .one(let provider): await refreshRateLimit(for: provider)

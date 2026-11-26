@@ -341,7 +341,7 @@ struct DeviceLinkFlowTests {
             initialConfig: nil, loadConfig: { nil },
             usageFetcher: { _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults, zCodeAPIKeyStore: NoZCodeKeys(), quotaProductDiscoverer: { [] },
-            interfaceStyle: InterfaceStylePreference(rollout: .forced(.modern)),
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
             deviceLinkService: service
         )
         let flow = state.deviceLink
@@ -371,7 +371,7 @@ struct DeviceLinkFlowTests {
             initialConfig: nil, loadConfig: { nil },
             usageFetcher: { _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults, zCodeAPIKeyStore: NoZCodeKeys(), quotaProductDiscoverer: { [] },
-            interfaceStyle: InterfaceStylePreference(rollout: .forced(.modern)),
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
             deviceLinkService: service
         )
         let settings = SettingsModel(appState: state)
