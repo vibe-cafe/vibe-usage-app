@@ -261,7 +261,7 @@ struct ModernSyncButton: View {
                 Text("同步中")
             case .failed(let reason, _):
                 Image(systemName: "exclamationmark.circle")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 9.5, weight: .medium))
                     .foregroundStyle(ModernTheme.red)
                     .frame(width: 12, height: 12)
                 Text("同步出错").foregroundStyle(ModernTheme.strongText).fixedSize()

@@ -182,6 +182,42 @@ struct ModernPanelTests {
         #expect(state.lastSyncTime == nil)
     }
 
+    /// The real relink path: `configure` restarts the scheduler, which
+    /// cancels the old account's launch task while its sync is still running.
+    @Test @MainActor
+    func relinkingDuringTheLaunchSyncSyncsTheNewAccountOnceUncancelled() async {
+        let (defaults, suite) = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var stored: VibeUsageConfig?
+        let state = AppState(
+            loadConfig: { stored },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            quotaDefaults: defaults
+        )
+        state.saveConfig = { stored = $0 }
+        var pending: CheckedContinuation<Void, Never>?
+        var runs: [(account: String?, cancelled: Bool)] = []
+        state.runSync = {
+            runs.append((stored?.apiKey, Task.isCancelled))
+            if runs.count == 1 { await withCheckedContinuation { pending = $0 } }
+            return (.success("ok"), SyncEngine.Outcome(result: .success))
+        }
+
+        state.configure(apiKey: "old", server: UsageServer("https://example.test"))
+        await waitUntil { pending != nil }
+        state.configure(apiKey: "new", server: UsageServer("https://example.test"))
+        await waitUntil { runs.count == 1 && state.syncStatus == .syncing }
+        pending?.resume()
+        await waitUntil { runs.count == 2 && state.lastSuccessfulSyncAt != nil }
+        for _ in 0..<1_000 { await Task.yield() }
+
+        #expect(runs.count == 2)
+        #expect(runs.last?.account == "new")
+        #expect(runs.last?.cancelled == false)
+        // Only the new account's run is recorded.
+        #expect(state.syncHistory.records().count == 1)
+    }
+
     @Test @MainActor
     func aRelinkDuringASyncSyncsTheNewAccount() async {
         let (defaults, suite) = isolatedDefaults()
