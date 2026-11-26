@@ -44,7 +44,7 @@ private final class ScrollWatcher {
     }
 }
 
-private struct BarData: Identifiable, Equatable {
+struct BarData: Identifiable, Equatable {
     let id: String // dayKey or hourKey
     var input: Int = 0
     var output: Int = 0
@@ -52,6 +52,13 @@ private struct BarData: Identifiable, Equatable {
     var total: Int { input + output + cached }
     var cost: Double = 0
     var activeMinutes: Double = 0
+
+    mutating func add(_ bucket: UsageBucket) {
+        input += bucket.inputIncludingCacheWrites
+        output += bucket.outputTokens + bucket.reasoningOutputTokens
+        cached += bucket.cachedInputTokens
+        cost += bucket.estimatedCost ?? 0
+    }
 }
 
 struct BarChartView: View {
@@ -74,15 +81,7 @@ struct BarChartView: View {
         var buckets: [String: BarData] = [:]
         for bucket in filtered {
             let key = isHourly ? bucket.hourKey : bucket.dayKey
-            if buckets[key] == nil {
-                buckets[key] = BarData(id: key)
-            }
-            buckets[key]!.input += bucket.inputTokens
-            // Reasoning tokens are priced as output, matching the web chart's
-            // three token tiers: input, output, cache read.
-            buckets[key]!.output += bucket.outputTokens + bucket.reasoningOutputTokens
-            buckets[key]!.cached += bucket.cachedInputTokens
-            buckets[key]!.cost += bucket.estimatedCost ?? 0
+            buckets[key, default: BarData(id: key)].add(bucket)
         }
 
         for session in appState.filteredSessions {

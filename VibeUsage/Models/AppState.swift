@@ -922,12 +922,14 @@ final class AppState {
         return [
             UsageBucket(
                 source: "claude-code", model: "claude-opus-5-5", project: "vibe-usage-app", hostname: "preview",
-                bucketStart: start, inputTokens: 2_100_000, outputTokens: 900_000, cacheCreationInputTokens: nil,
+                bucketStart: start, inputTokens: 2_100_000, outputTokens: 900_000,
+                cacheCreation5mTokens: 0, cacheCreation1hTokens: 0,
                 cachedInputTokens: 260_000_000, reasoningOutputTokens: 0, totalTokens: 263_000_000, estimatedCost: 180.15
             ),
             UsageBucket(
                 source: "codex", model: "gpt-6.2-sol", project: "vibe-usage", hostname: "preview",
-                bucketStart: start, inputTokens: 1_500_000, outputTokens: 600_000, cacheCreationInputTokens: nil,
+                bucketStart: start, inputTokens: 1_500_000, outputTokens: 600_000,
+                cacheCreation5mTokens: 0, cacheCreation1hTokens: 0,
                 cachedInputTokens: 99_000_000, reasoningOutputTokens: 0, totalTokens: 101_100_000, estimatedCost: 50.05
             ),
         ]

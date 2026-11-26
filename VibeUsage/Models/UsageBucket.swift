@@ -12,18 +12,21 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     let bucketStart: String
     let inputTokens: Int
     let outputTokens: Int
-    /// Not yet emitted by the sync pipeline (collector and server track only
-    /// cache reads); optional so decoding keeps working once it appears.
-    let cacheCreationInputTokens: Int?
+    let cacheCreation5mTokens: Int?
+    let cacheCreation1hTokens: Int?
     let cachedInputTokens: Int
     let reasoningOutputTokens: Int
     let totalTokens: Int
     let estimatedCost: Double?
 
-    /// Total token volume, matching the web dashboard and ccusage-style totals:
-    /// input + output + reasoning + cached input.
+    /// Older responses already include cache writes in inputTokens.
+    var inputIncludingCacheWrites: Int {
+        inputTokens + (cacheCreation5mTokens ?? 0) + (cacheCreation1hTokens ?? 0)
+    }
+
+    /// Total token volume shown on the web dashboard.
     var computedTotal: Int {
-        inputTokens + outputTokens + reasoningOutputTokens + cachedInputTokens
+        inputIncludingCacheWrites + outputTokens + reasoningOutputTokens + cachedInputTokens
     }
 
     /// Absolute instant parsed from the API's ISO-8601 bucket timestamp.

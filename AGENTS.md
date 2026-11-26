@@ -387,21 +387,24 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     let bucketStart: String         // ISO8601 UTC timestamp
     let inputTokens: Int
     let outputTokens: Int
+    let cacheCreation5mTokens: Int?
+    let cacheCreation1hTokens: Int?
     let cachedInputTokens: Int
     let reasoningOutputTokens: Int
     let totalTokens: Int
     let estimatedCost: Double?      // Server-calculated cost (nil if model unmatched)
 
-    var computedTotal: Int           // inputTokens + outputTokens + reasoningOutputTokens + cachedInputTokens (matches web "总 Token")
+    var inputIncludingCacheWrites: Int  // inputTokens + both cache-write counts (missing counts contribute zero)
+    var computedTotal: Int           // inputIncludingCacheWrites + outputTokens + reasoningOutputTokens + cachedInputTokens
     var dayKey: String               // "yyyy-MM-dd" from bucketStart
     var hourKey: String              // "yyyy-MM-ddTHH" from bucketStart
 }
 ```
 
 Token aggregation conventions (aligned with the web Vibe Usage page):
-- Popup summary "总 Token" card → `computedTotal` (includes cache reads, matching web "总 Token")
+- Popup summary "总 Token" card → `computedTotal` (includes cache reads and both cache-write durations)
 - Popup summary "缓存 Token" card → `cachedInputTokens` (cache reads only)
-- Trend chart token mode → stacked output, input, and cached segments; reasoning tokens are folded into output.
+- Trend chart token mode → input includes 5-minute and 1-hour cache writes, output includes reasoning, and cached counts reads only.
 - Distribution charts token mode → `computedTotal`
 - Menu-bar token line → `computedTotal`
 - `estimatedCost` already accounts for cache reads (server-side, at `cacheReadMtok` rate)
