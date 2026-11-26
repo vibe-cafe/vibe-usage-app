@@ -77,6 +77,9 @@ struct FilterState: Equatable {
 @Observable
 @MainActor
 final class AppState {
+    // Resolve before initialize() writes menu-bar and quota preferences.
+    let interfaceStyle: InterfaceStylePreference
+
     // MARK: - Sync State
     var syncStatus: SyncStatus = .idle
     var lastSyncTime: Date?
@@ -346,8 +349,10 @@ final class AppState {
         quotaProductDiscoverer: @escaping () -> [QuotaProduct] = {
             QuotaProductRegistry.discover()
         },
-        cursorLogin: CursorLogin? = nil
+        cursorLogin: CursorLogin? = nil,
+        interfaceStyle: InterfaceStylePreference = InterfaceStylePreference()
     ) {
+        self.interfaceStyle = interfaceStyle
         self.config = initialConfig
         self.loadConfig = loadConfig
         self.isConfigured = initialConfig?.apiKey != nil

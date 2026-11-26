@@ -196,6 +196,7 @@ extension AppState {
                 ?? AppConfig.version,
             buildNumber: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "未知",
             buildKind: DiagnosticCollector.buildKind,
+            interfaceStyle: interfaceStyle.canSelect ? interfaceStyle.current : nil,
             osVersion: DiagnosticCollector.osVersion(),
             architecture: DiagnosticCollector.architecture,
             runtime: await runtime,
