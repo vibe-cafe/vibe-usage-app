@@ -80,11 +80,28 @@ final class AppState {
     // Resolve before initialize() writes menu-bar and quota preferences.
     let interfaceStyle: InterfaceStylePreference
 
+    /// Navigation of the new panel (概览 or one subscription, hero, expanded).
+    let modernPanel = ModernPanelState()
+
     // MARK: - Sync State
     var syncStatus: SyncStatus = .idle
     var lastSyncTime: Date?
     var lastSyncMessage: String?
     private var lastFetchTime: Date?
+    /// The last sync that succeeded, kept in the app's preferences so the new
+    /// panel's footer can still say 「N 分钟前同步」 after a restart. The
+    /// classic footer keeps reading the in-memory `lastSyncTime`.
+    private(set) var lastSuccessfulSyncAt: Date?
+    static let lastSuccessfulSyncKey = "lastSuccessfulSyncAt"
+
+    /// Runs one CLI sync. A seam for tests, which must never start the CLI.
+    @ObservationIgnored var runSync: @MainActor () async -> (
+        result: Result<String, SyncEngine.SyncError>, outcome: SyncEngine.Outcome?
+    ) = { await SyncEngine.shared.runSync() }
+    /// Builds the quota coordinator. A seam for tests, which inject fake readers.
+    @ObservationIgnored var makeRateLimitCoordinator: @MainActor (AppState) -> RateLimitCoordinator = {
+        RateLimitCoordinator(appState: $0)
+    }
 
     // MARK: - Dashboard Data
     var buckets: [UsageBucket] = []
@@ -361,6 +378,11 @@ final class AppState {
         self.zCodeAPIKeyStore = zCodeAPIKeyStore
         self.quotaProductDiscoverer = quotaProductDiscoverer
         self.cursorLogin = cursorLogin ?? .shared
+        // Releases before the key existed still kept their recent syncs.
+        self.lastSuccessfulSyncAt = quotaDefaults.object(forKey: Self.lastSuccessfulSyncKey) as? Date
+            ?? SyncHistoryStore(defaults: quotaDefaults).records()
+                .first { $0.result == .success }
+                .map { $0.startedAt.addingTimeInterval($0.duration) }
     }
 
     // MARK: - Lifecycle
@@ -496,8 +518,13 @@ final class AppState {
         }
         config = latest
         isConfigured = latest?.apiKey != nil
-        // A reset drops the launch sync that has not started yet.
-        if latest == nil { launchSyncTask?.cancel() }
+        // A reset drops the launch sync that has not started yet, and the
+        // last sync time goes with the account.
+        if latest == nil {
+            launchSyncTask?.cancel()
+            lastSuccessfulSyncAt = nil
+            quotaDefaults.removeObject(forKey: Self.lastSuccessfulSyncKey)
+        }
     }
 
     /// Save the server selected by device authorization and start the scheduler.
@@ -533,7 +560,7 @@ final class AppState {
         }
 
         let startedAt = Date()
-        let (result, outcome) = await SyncEngine.shared.runSync()
+        let (result, outcome) = await runSync()
         if let outcome {
             syncHistory.append(SyncRecord(
                 startedAt: startedAt,
@@ -552,7 +579,10 @@ final class AppState {
         switch result {
         case .success(let message):
             syncStatus = .success
-            lastSyncTime = Date()
+            let finishedAt = Date()
+            lastSyncTime = finishedAt
+            lastSuccessfulSyncAt = finishedAt
+            quotaDefaults.set(finishedAt, forKey: Self.lastSuccessfulSyncKey)
             lastSyncMessage = message
             // Refresh dashboard data after sync
             await fetchUsageData()
@@ -908,6 +938,42 @@ final class AppState {
         await rateLimitCoordinator?.refreshSelectedIfNeeded()
     }
 
+    /// The new panel's 「刷新额度」: quotas only, never a usage sync. A click
+    /// while a read is in flight joins it (the coordinator's single-flight).
+    func refreshQuotas(_ scope: QuotaRefreshScope) async {
+        switch scope {
+        case .all: await refreshAllRateLimits()
+        case .one(let provider): await refreshRateLimit(for: provider)
+        }
+    }
+
+    /// Spinner state of 「刷新额度」 for that scope.
+    func isRefreshingQuotas(_ scope: QuotaRefreshScope) -> Bool {
+        switch scope {
+        case .all: quotaCardProviders.contains(where: isRateLimitRefreshing)
+        case .one(let provider): isRateLimitRefreshing(provider)
+        }
+    }
+
+    /// A real open of the menu-bar panel (both styles). Puts the new panel
+    /// back on 概览, then does what an open always did: fetch usage unless it
+    /// is under a minute old, and read the selected quotas on their usual
+    /// interval — never a forced quota read or a sync. The returned task ends
+    /// when both reads have; callers may ignore it.
+    @discardableResult
+    func panelWillOpen() -> Task<Void, Never> {
+        modernPanel.panelDidOpen()
+        let usage = Task { await fetchUsageDataIfNeeded() }
+        // The coordinator applies a per-provider interval, so rapid
+        // open/close stays cheap.
+        let quotas = Task { await refreshSelectedRateLimitsIfNeeded() }
+        rateLimitPanelVisibilityChanged(visible: true)
+        return Task {
+            await usage.value
+            await quotas.value
+        }
+    }
+
     /// The menu-bar panel opened or closed. Closing cancels in-flight refreshes
     /// for both providers — nothing off-screen is worth a round trip.
     func rateLimitPanelVisibilityChanged(visible: Bool) {
@@ -963,8 +1029,8 @@ final class AppState {
         #endif
     }
 
-    private func startRateLimitCoordinator() {
-        let coord = RateLimitCoordinator(appState: self)
+    func startRateLimitCoordinator() {
+        let coord = makeRateLimitCoordinator(self)
         coord.seedPlaceholders()
         self.rateLimitCoordinator = coord
         // Preserve panel state even when the coordinator is created lazily
