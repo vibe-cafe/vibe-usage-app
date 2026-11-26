@@ -13,7 +13,7 @@ extension FilterState {
     }
 }
 
-struct UsagePanelFilters {
+struct UsagePanelFilters: Equatable {
     var sources: Set<String> = []
     var models: Set<String> = []
     var hostnames: Set<String> = []
@@ -27,7 +27,6 @@ struct UsagePanelFilters {
 
 /// Control state owned by the new panel, independent of the classic tab and chart.
 struct UsagePanelState {
-    var timeRange: TimeRange = .today
     var selectedSubscription: ProviderRateLimit.Provider?
     var hero: ChartMode = .cost
     var detailsExpanded = false
@@ -61,7 +60,7 @@ struct UsagePanelState {
     }
 
     func formatTokens(_ tokens: Int) -> String {
-        usesChineseTokens ? Formatters.formatChineseTokens(tokens) : Formatters.formatNumber(tokens)
+        usesChineseTokens ? Formatters.formatPanelChineseTokens(tokens) : Formatters.formatNumber(tokens)
     }
 
     /// Called on presentation, including when the panel reuses its hosting view.

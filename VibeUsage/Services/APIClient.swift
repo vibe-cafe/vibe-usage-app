@@ -66,7 +66,7 @@ struct APIClient: Sendable {
     }
 }
 
-enum UsageQueryRange: Sendable {
+enum UsageQueryRange: Sendable, Equatable {
     case days(Int)
     case from(Date)
     case custom(from: Date, to: Date)

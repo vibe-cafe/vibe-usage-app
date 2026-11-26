@@ -32,6 +32,7 @@ struct UsageSeriesPoint {
 
 /// Built from one response and a fixed clock. Hover reads an existing point by index.
 struct UsageDisplaySnapshot {
+    let grid: UsagePlotGrid
     private(set) var total = UsageAmount()
     private(set) var series: [UsageSeriesPoint] = []
     private(set) var peakTokens = 0
@@ -39,24 +40,18 @@ struct UsageDisplaySnapshot {
     private(set) var tokenComposition = UsageRanking.empty
     private var rankings: [UsageRanking.Dimension: (tokens: UsageRanking, cost: UsageRanking)] = [:]
 
-    init(buckets: [UsageBucket], range: TimeRange, customDays: ClosedRange<Date>? = nil,
+    init(buckets: [UsageBucket], dataRange: UsageQueryRange,
          filters: UsagePanelFilters = .init(), modelName: (String) -> String = { $0 },
          toolName: (String) -> String = { $0 },
          now: Date, calendar: Calendar = .current) {
-        guard let window = UsagePlotWindow(range, customDays: customDays, now: now, calendar: calendar) else { return }
-        let firstSlot = window.slot(containing: window.start)
-        // Even a single custom day can arrive as UTC hours. Its first row may
-        // be labelled before local midnight in a fractional-offset time zone.
-        let firstServerHour = UsagePlotWindow.utcHour(containing: window.start)
+        var grid = UsagePlotGrid(dataRange: dataRange, now: now, calendar: calendar)
         var amounts: [Date: UsageAmount] = [:]
         var groups: [UsageRanking.Dimension: [String: UsageAmount]] = [:]
         for bucket in buckets {
             let model = modelName(bucket.model)
             guard filters.includes(bucket, modelName: model), let date = bucket.date,
-                  date <= now, date < window.endExclusive,
-                  date >= window.start || date == firstServerHour else { continue }
-            let slot = window.slot(containing: max(date, window.start))
-            amounts[slot, default: UsageAmount()].add(bucket)
+                  let slot = grid.index(for: date) else { continue }
+            amounts[grid.slots[slot].start, default: UsageAmount()].add(bucket)
             total.add(bucket)
             let tool = toolName(bucket.source)
             let terminal = bucket.hostname
@@ -65,22 +60,20 @@ struct UsageDisplaySnapshot {
             groups[.terminal, default: [:]][terminal.isEmpty ? "未知" : terminal, default: .init()].add(bucket)
         }
 
-        guard let firstUsage = amounts.keys.min() else { return }
+        grid.trim(toFirstUsage: amounts.keys.min(), dataRange: dataRange)
+        self.grid = grid
+        guard !grid.slots.isEmpty else { return }
         tokenComposition = UsageRanking(values: ["缓存": Double(total.cached), "输入": Double(total.input),
                                                  "输出": Double(total.output)])
         rankings = groups.mapValues { names in
             (tokens: UsageRanking(values: names.mapValues { Double($0.totalTokens) }),
              cost: UsageRanking(values: names.mapValues(\.cost)))
         }
-        var slot = range == .today ? firstUsage : firstSlot
-        while slot <= now && slot < window.endExclusive {
-            let amount = amounts[slot] ?? UsageAmount()
-            let next = window.nextSlot(after: slot)
-            series.append(UsageSeriesPoint(start: max(window.start, slot), end: min(next, window.endExclusive, now),
-                                          amount: amount))
+        for slot in grid.slots {
+            let amount = amounts[slot.start] ?? UsageAmount()
+            series.append(UsageSeriesPoint(start: slot.start, end: slot.end, amount: amount))
             peakTokens = max(peakTokens, amount.totalTokens)
             peakCost = max(peakCost, amount.cost)
-            slot = next
         }
     }
 
@@ -90,49 +83,87 @@ struct UsageDisplaySnapshot {
     }
 }
 
-private struct UsagePlotWindow {
-    let start: Date
-    let endExclusive: Date
-    let calendar: Calendar
-    let range: TimeRange
+/// The same interval boundaries drive every hero, including hourly or daily activity samples.
+struct UsagePlotGrid {
+    private(set) var slots: [DateInterval] = []
+    private let now: Date
+    private let endExclusive: Date
+    private let firstServerHour: Date
 
-    init?(_ range: TimeRange, customDays: ClosedRange<Date>?, now: Date, calendar: Calendar) {
-        self.range = range
-        self.calendar = calendar
+    init(dataRange: UsageQueryRange, now: Date, calendar: Calendar) {
+        self.now = now
         let today = calendar.startOfDay(for: now)
+        let start: Date
         let lastDay: Date
-        switch range {
-        case .oneDay:
+        let hourly: Bool
+        switch dataRange {
+        case .from(let from):
+            start = from
+            lastDay = calendar.startOfDay(for: from)
+            hourly = true
+        case .days(1):
             start = now.addingTimeInterval(-24 * 3600)
             lastDay = today
-        case .custom:
-            guard let customDays else { return nil }
-            start = calendar.startOfDay(for: customDays.lowerBound)
-            lastDay = calendar.startOfDay(for: customDays.upperBound)
-        default:
-            start = calendar.startOfDay(offsetBy: 1 - range.fixedDayCount, from: today)
+            hourly = true
+        case .custom(let from, let to):
+            start = calendar.startOfDay(for: from)
+            lastDay = calendar.startOfDay(for: to)
+            hourly = false
+        case .days(let count):
+            start = calendar.startOfDay(offsetBy: 1 - count, from: today)
             lastDay = today
+            hourly = false
         }
         endExclusive = calendar.startOfDay(offsetBy: 1, from: lastDay)
+        firstServerHour = Date(timeIntervalSince1970: floor(start.timeIntervalSince1970 / 3600) * 3600)
+
+        let weekly = !hourly && calendar.startOfDay(offsetBy: 60, from: start) <= lastDay
+        // A short *first* week ends on the same weekday as every subsequent week.
+        let weekBoundary = calendar.component(.weekday, from: endExclusive)
+        let firstWeekDays = (weekBoundary - calendar.component(.weekday, from: start) + 6) % 7 + 1
+        var days = weekly ? firstWeekDays : 1
+        var cursor = hourly ? firstServerHour : start
+        while max(cursor, start) <= now && cursor < endExclusive {
+            let next: Date
+            if hourly {
+                next = cursor.addingTimeInterval(3600)
+            } else {
+                next = calendar.startOfDay(offsetBy: days, from: cursor)
+                days = weekly ? 7 : 1
+            }
+            slots.append(DateInterval(start: max(start, cursor), end: min(next, endExclusive, now)))
+            cursor = next
+        }
     }
 
-    func slot(containing date: Date) -> Date {
-        if range.isHourly { return Self.utcHour(containing: date) }
-        let day = calendar.startOfDay(for: date)
-        guard range == .ninetyDays else { return day }
-        let weekday = calendar.component(.weekday, from: day)
-        let anchor = calendar.component(.weekday, from: start)
-        let daysIntoWeek = (weekday - anchor + 7) % 7
-        return calendar.startOfDay(offsetBy: -daysIntoWeek, from: day)
+    fileprivate mutating func trim(toFirstUsage first: Date?, dataRange: UsageQueryRange) {
+        guard let first else { slots = []; return }
+        if case .from = dataRange { slots.removeAll { $0.start < first } }
     }
 
-    func nextSlot(after date: Date) -> Date {
-        if range.isHourly { return date.addingTimeInterval(3600) }
-        return calendar.startOfDay(offsetBy: range == .ninetyDays ? 7 : 1, from: date)
+    fileprivate func index(for date: Date) -> Int? {
+        guard let first = slots.first, date <= now, date < endExclusive else { return nil }
+        // A clipped UTC hour is labelled at its original start by the server.
+        if date < first.start {
+            return date == firstServerHour && first.start.timeIntervalSince(date) < 3600 ? slots.startIndex : nil
+        }
+        var low = slots.startIndex
+        var high = slots.endIndex
+        while low + 1 < high {
+            let mid = low + (high - low) / 2
+            if slots[mid].start <= date { low = mid } else { high = mid }
+        }
+        return low
     }
 
-    static func utcHour(containing date: Date) -> Date {
-        Date(timeIntervalSince1970: floor(date.timeIntervalSince1970 / 3600) * 3600)
+    /// One sum per visible slot, in chart order. Missing coverage stays nil, explicit zero stays zero.
+    func sums(_ secondsByPeriodStart: [Date: Int]) -> [Int?] {
+        var values = [Int?](repeating: nil, count: slots.count)
+        for (date, seconds) in secondsByPeriodStart {
+            guard let slot = index(for: date) else { continue }
+            values[slot] = (values[slot] ?? 0) + seconds
+        }
+        return values
     }
 }
 

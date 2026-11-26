@@ -6,6 +6,7 @@ struct UsageRanking {
     struct Row {
         let name: String
         let value: Double
+        let share: Double
         let color: RankColor
     }
 
@@ -20,10 +21,12 @@ struct UsageRanking {
             lhs.value == rhs.value ? lhs.key < rhs.key : lhs.value > rhs.value
         }
         let colors: [RankColor] = [.blue, .teal, .magenta]
+        let sum = sorted.reduce(0) { $0 + $1.value }
+        total = sum
         rows = sorted.enumerated().map { index, item in
-            Row(name: item.key, value: item.value, color: index < colors.count ? colors[index] : .gray)
+            Row(name: item.key, value: item.value, share: sum == 0 ? 0 : item.value / sum,
+                color: index < colors.count ? colors[index] : .gray)
         }
         remainderValue = rows.dropFirst(3).reduce(0) { $0 + $1.value }
-        total = rows.prefix(3).reduce(remainderValue) { $0 + $1.value }
     }
 }
