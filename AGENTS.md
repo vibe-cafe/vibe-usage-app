@@ -21,7 +21,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   └── SyncHistory.swift      # Last 10 sync summaries (typed fields only) in the app's preferences
 │   ├── Views/
 │   │   ├── PopoverView.swift      # Main dashboard container (520px wide popover)
-│   │   ├── SummaryCardsView.swift # 5 stat cards (cost, total tokens, cached tokens, active duration, total duration)
+│   │   ├── SummaryCardsView.swift # 4 stat cards (cost, total tokens, cached tokens, active time)
 │   │   ├── BarChartView.swift     # Custom-drawn bar chart (hourly/daily trend)
 │   │   ├── DistributionChartsView.swift  # 4 donut pie charts (terminal, tool, model, project)
 │   │   ├── FilterTagsView.swift   # Filter pills for source/model/project/hostname
@@ -213,7 +213,7 @@ VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
         ├── ScrollView
         │   ├── RateLimitCardView # Codex / Claude subscription quota cards
         │   ├── FilterTagsView    # Source/model/project/hostname filter pills
-        │   ├── SummaryCardsView  # 5 stat cards
+        │   ├── SummaryCardsView  # 4 stat cards
         │   ├── BarChartView      # Trend chart (hourly or daily)
         │   └── DistributionChartsView  # 4 donut charts (2x2 grid)
         └── footerBar             # Sync status, refresh, quit
@@ -224,6 +224,8 @@ VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
 2. Response decoded into `[UsageBucket]`, stored in `AppState.buckets`
 3. Views compute filtered data locally: `appState.buckets.filter { ... appState.filters ... }`
 4. Charts aggregate filtered buckets by time key or dimension
+
+Active time uses the approved 2026-11-25 model-time contract. Alongside each usage read, the same authenticated `APIClient` and system-routed URL session read `/api/usage/activity` with the dashboard range, timezone, granularity and repeated source/project/hostname filters. `AppState.activity` supplies the server's deduplicated total and actual hourly/daily periods to both cards and charts. AI work time adds up concurrent sessions. Their ratio gives average concurrency. Before the first recorded period, or after a failed read, active time is unknown; a recorded idle period is zero. Partial totals carry the first recorded local date in the card tooltip. Usage buckets load independently.
 
 ### Time Range (today / 24H / 7D / 30D / 90D / custom)
 `TimeRange` (`AppState.swift`) has two hourly-granularity cases that look similar but mean different things — the split mirrors `vibe-cafe@f5f022b`, where the single rolling "1D" pill confused users who read it as "today" but watched the number shrink as the earliest hour rolled off.
@@ -241,7 +243,7 @@ Multi-day API buckets carry UTC instants for the viewer's local midnight. Daily 
 - `isInitialDataLoad` / `!hasLoadedUsageData` → show layout-matched skeleton blocks under a loading pill.
 - `isRefreshingData` → keep the current dashboard visible, dim it, and overlay a small loading pill.
 
-Time-range changes and custom-date Apply trigger a server fetch. Filter changes are local only and animate the existing summary cards, trend bars, and distribution charts without refetching.
+Time-range changes and custom-date Apply refresh both reads. Tool, project and hostname changes refetch only activity, whose union depends on the selected rows. Model changes and all filtering of cost and tokens remain local.
 
 ### Chart Hover & Scroll
 `BarChartView` is split into a parent that computes the O(n) `chartData`

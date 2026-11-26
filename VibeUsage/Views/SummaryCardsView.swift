@@ -36,15 +36,9 @@ struct SummaryCardsView: View {
         filtered.reduce(0) { $0 + $1.cachedInputTokens }
     }
 
-    private var filteredSessions: [UsageSession] {
-        appState.filteredSessions
-    }
-
-    private var totalActiveSeconds: Int {
-        filteredSessions.reduce(0) { $0 + $1.activeSeconds }
-    }
-
     var body: some View {
+        let time = appState.activity?.summary
+        let details = [time?.workText, time?.parallelText].compactMap { $0 }
         HStack(alignment: .top, spacing: 8) {
             StatCard(
                 label: "预估费用",
@@ -65,13 +59,17 @@ struct SummaryCardsView: View {
                 action: { cachedTokenMode = cachedTokenMode == .international ? .chinese : .international },
                 help: "点击切换国际/中文单位；精确值：\(formatExactInteger(totalCachedInputTokens))"
             )
-            StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: Color(red: 0.38, green: 0.6, blue: 1.0))
+            StatCard(
+                label: "活跃时长", value: time?.activeText ?? "—", color: Color(red: 0.38, green: 0.6, blue: 1.0),
+                help: (details + [appState.activity?.coverageHint].compactMap { $0 }).joined(separator: " · "),
+                details: details
+            )
         }
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.28), value: totalCost)
         .animation(.easeInOut(duration: 0.28), value: totalTokens)
         .animation(.easeInOut(duration: 0.28), value: totalCachedInputTokens)
-        .animation(.easeInOut(duration: 0.28), value: totalActiveSeconds)
+        .animation(.easeInOut(duration: 0.28), value: time)
     }
 
     private func formatExactInteger(_ value: Int) -> String {
@@ -88,6 +86,7 @@ private struct StatCard: View {
     var color: Color = .white
     var action: (() -> Void)?
     var help: String?
+    var details: [String] = []
 
     // Reserve fixed line-box heights so all cards render at exactly the same height,
     // even when minimumScaleFactor shrinks the value glyphs in narrower columns.
@@ -105,13 +104,13 @@ private struct StatCard: View {
                 .accessibilityLabel(label)
                 .accessibilityValue(value)
             } else {
-                cardContent
+                cardContent.help(help ?? label)
             }
         }
     }
 
     private var cardContent: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: details.isEmpty ? 6 : 0) {
             Text(label)
                 .font(.system(size: 12))
                 .foregroundStyle(Color(white: 0.63))
@@ -128,10 +127,17 @@ private struct StatCard: View {
                 .contentTransition(.numericText())
                 .frame(maxWidth: .infinity, minHeight: valueHeight, maxHeight: valueHeight, alignment: .leading)
                 .clipped()
+            ForEach(details, id: \.self) { line in
+                Text(line)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color(white: 0.63))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 11)
-        .padding(.vertical, 13)
+        .frame(height: 70)
         .background(Color(white: 0.09))
         .cornerRadius(4)
         .overlay(

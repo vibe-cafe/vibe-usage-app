@@ -39,10 +39,6 @@ enum TimeRange: String, CaseIterable {
         }
     }
 
-    /// Trend chart bucket granularity. Hour-granularity for both today and the
-    /// rolling 24h; day-granularity for the longer ranges.
-    var isHourly: Bool { self == .today || self == .oneDay }
-
     /// Inclusive lower bound on bucket / session timestamps when this range is
     /// active. nil means "show all fetched data" (which already matches the
     /// requested window for the day-granularity ranges). Currently only
@@ -85,7 +81,9 @@ final class AppState {
 
     // MARK: - Dashboard Data
     var buckets: [UsageBucket] = []
-    var sessions: [UsageSession] = []
+    private(set) var activity: ActivityReport?
+    private var activityTask: Task<Void, Never>?
+    private var activityRange: UsageQueryRange?
     var hasAnyData: Bool = false
     var isLoadingData: Bool = false
     var hasLoadedUsageData: Bool = false
@@ -104,7 +102,21 @@ final class AppState {
     var customRangeFrom: Date = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date())) ?? Date()
     var customRangeTo: Date = Calendar.current.startOfDay(for: Date())
     var chartMode: ChartMode = .token
-    var filters: FilterState = .init()
+    var filters: FilterState = .init() {
+        didSet {
+            guard oldValue.activityQueryItems != filters.activityQueryItems,
+                  let range = activityRange else { return }
+            reloadConfig()
+            guard let key = config?.apiKey else { return }
+            if activityRange == nil {
+                // Disk configuration switched accounts; refresh both halves of the dashboard.
+                Task { await fetchUsageData() }
+            } else {
+                activity = nil
+                startActivityFetch(range: range, key: key)
+            }
+        }
+    }
 
     /// Display names and family rows the server sent with the current usage.
     /// `nil` until the first successful fetch, or when an older server answers —
@@ -222,18 +234,6 @@ final class AppState {
         return (customRangeTo, customRangeFrom)
     }
 
-    var filteredSessions: [UsageSession] {
-        let cutoff = timeRange.startCutoff
-        return sessions.filter { session in
-            if let cutoff, let date = session.date, date < cutoff { return false }
-            let f = filters
-            if !f.sources.isEmpty && !f.sources.contains(session.source) { return false }
-            if !f.projects.isEmpty && !f.projects.contains(session.project) { return false }
-            if !f.hostnames.isEmpty && !f.hostnames.contains(session.hostname) { return false }
-            return true
-        }
-    }
-
     // MARK: - Config
     var isConfigured: Bool = false
     /// False only after a sync found no usable runtime (bundled Node failed its
@@ -329,6 +329,7 @@ final class AppState {
     private let loadConfig: () -> VibeUsageConfig?
     var usageServer: UsageServer { UsageServer(config?.apiUrl) }
     private let usageFetcher: (UsageServer, String, UsageQueryRange) async throws -> UsageResponse
+    private let activityFetcher: (UsageServer, String, UsageQueryRange, FilterState) async throws -> UsageActivity
     private let quotaDefaults: UserDefaults
     private let zCodeAPIKeyStore: any ZCodeAPIKeyStoring
     private let quotaProductDiscoverer: () -> [QuotaProduct]
@@ -341,6 +342,9 @@ final class AppState {
         usageFetcher: @escaping (UsageServer, String, UsageQueryRange) async throws -> UsageResponse = { server, apiKey, range in
             try await APIClient(server: server, apiKey: apiKey).fetchUsage(range: range)
         },
+        activityFetcher: @escaping (UsageServer, String, UsageQueryRange, FilterState) async throws -> UsageActivity = { server, key, range, filters in
+            try await APIClient(server: server, apiKey: key).fetchActivity(range: range, filters: filters)
+        },
         quotaDefaults: UserDefaults = .standard,
         zCodeAPIKeyStore: any ZCodeAPIKeyStoring = KeychainZCodeAPIKeyStore(),
         quotaProductDiscoverer: @escaping () -> [QuotaProduct] = {
@@ -352,6 +356,7 @@ final class AppState {
         self.loadConfig = loadConfig
         self.isConfigured = initialConfig?.apiKey != nil
         self.usageFetcher = usageFetcher
+        self.activityFetcher = activityFetcher
         self.quotaDefaults = quotaDefaults
         self.zCodeAPIKeyStore = zCodeAPIKeyStore
         self.quotaProductDiscoverer = quotaProductDiscoverer
@@ -481,12 +486,15 @@ final class AppState {
         if latest == nil || config?.apiKey != latest?.apiKey || usageServer != UsageServer(latest?.apiUrl) {
             // A pending response or cached dashboard belongs to the previous account/server.
             usageFetchGeneration &+= 1
+            activityTask?.cancel()
+            activityTask = nil
+            activityRange = nil
+            activity = nil
             lastFetchTime = nil
             hasLoadedUsageData = false
             isLoadingData = false
             hasAnyData = false
             buckets = []
-            sessions = []
             usageNames = nil
         }
         config = latest
@@ -573,6 +581,7 @@ final class AppState {
         usageFetchGeneration &+= 1
         let generation = usageFetchGeneration
         let queryRange = currentQueryRange
+        startActivityFetch(range: queryRange, key: apiKey)
         isLoadingData = true
         defer {
             // An older request may finish after the user selects a new range.
@@ -589,7 +598,6 @@ final class AppState {
             guard generation == usageFetchGeneration else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 buckets = response.buckets
-                sessions = response.sessions ?? []
                 hasAnyData = response.hasAnyData
                 usageNames = response.names
             }
@@ -597,6 +605,19 @@ final class AppState {
             guard generation == usageFetchGeneration else { return }
             // Silently fail — dashboard shows stale data or empty state
             print("Failed to fetch usage data: \(error)")
+        }
+    }
+
+    private func startActivityFetch(range: UsageQueryRange, key: String) {
+        activityTask?.cancel()
+        if activityRange != range { activity = nil }
+        activityRange = range
+        let start = range.start(at: Date())
+        activityTask = Task { [weak self, activityFetcher, server = usageServer, filters] in
+            guard !Task.isCancelled else { return }
+            let result = try? await activityFetcher(server, key, range, filters)
+            guard !Task.isCancelled else { return }
+            self?.activity = result.map { ActivityReport($0, rangeStart: start, hourly: range.isHourly) }
         }
     }
 
