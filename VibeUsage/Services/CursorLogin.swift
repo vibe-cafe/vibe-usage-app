@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Security
+import SystemConfiguration
 
 // Cursor separate sign-in (「单独登录 Cursor」), approved by the maintainer on
 // 2026-11-25 (workspace notes 《Cursor-加密凭据-方案》). Cursor 3.27+ encrypts
@@ -147,6 +148,9 @@ enum CursorSignInFailure: Equatable, Sendable {
     case proxy
     /// The CLI asked to open something other than Cursor's sign-in page.
     case unexpectedURL
+    /// The system proxy changed while waiting: the CLI was started with the
+    /// old one, so it is stopped rather than left polling on a stale route.
+    case proxyChanged
     case noRuntime
     case failed
 
@@ -156,6 +160,7 @@ enum CursorSignInFailure: Equatable, Sendable {
         case .network: "连不上 Cursor，请检查网络和代理"
         case .proxy: "无法按你的代理设置连接 Cursor，未发送"
         case .unexpectedURL: "登录地址不对，已取消"
+        case .proxyChanged: "代理设置变了，请重新登录"
         case .noRuntime: "没有可用的 Node.js 或 Bun"
         case .failed: "登录没有完成，请重试"
         }
@@ -350,34 +355,50 @@ final class CursorLogin {
     @ObservationIgnored private let cli: CursorLoginCLI
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let openURL: @MainActor (URL) -> Void
+    @ObservationIgnored private let watchProxy: ProxyChangeWatch
+    /// Stops the proxy watch of the sign-in in progress.
+    @ObservationIgnored private var stopProxyWatch: (@MainActor () -> Void)?
     /// Changes on every sign-in and sign-out, so a renewal that finishes
     /// afterwards never writes back over the user's choice.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var renewal: (task: Task<Renewal, Never>, generation: Int)?
     @ObservationIgnored private var renewalHeldUntil: Date?
-    /// The last renewal made because a run was rejected (`renewAfterRejection`).
-    @ObservationIgnored private var rejectionRenewal: (record: CursorLoginRecord, at: Date)?
+    /// The last renewal (due, or after a rejection): a rejection of the very
+    /// record it produced ends the sign-in (`renewAfterRejection`).
+    @ObservationIgnored private var lastRenewal: (record: CursorLoginRecord, at: Date)?
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var lastSupportCheck: Date?
     @ObservationIgnored private var loaded = false
+    /// The Keychain could not be read (locked, a prompt cancelled): read
+    /// again at the next CLI run instead of treating it as no sign-in for
+    /// the rest of the session.
+    @ObservationIgnored private var loadFailed = false
 
     init(
         store: CursorLoginStoring = KeychainCursorLoginStore(),
         cli: CursorLoginCLI = ProcessCursorLoginCLI(),
         now: @escaping @Sendable () -> Date = Date.init,
-        openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+        openURL: @escaping @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) },
+        watchProxy: @escaping ProxyChangeWatch = SystemProxyWatch.start
     ) {
         self.store = store
         self.cli = cli
         self.now = now
         self.openURL = openURL
+        self.watchProxy = watchProxy
     }
 
-    /// Reads our Keychain item once (at launch); later reads use memory.
+    /// Reads our Keychain item once (at launch); later reads use memory. A
+    /// read that failed is tried again at the next CLI run.
     func load() {
-        guard !loaded else { return }
+        guard !loaded || loadFailed else { return }
         loaded = true
-        record = (try? store.load()).flatMap(CursorLoginRecord.parse)
+        do {
+            record = try store.load().flatMap(CursorLoginRecord.parse)
+            loadFailed = false
+        } catch {
+            loadFailed = true
+        }
     }
 
     var phase: CursorLoginPhase {
@@ -452,6 +473,8 @@ final class CursorLogin {
         isWaiting = true
         let cli = self.cli
         let openURL = self.openURL
+        // The CLI follows the proxy it was started with for up to 5 minutes.
+        stopProxyWatch = watchProxy { [weak self] in self?.proxyChangedWhileWaiting() }
         signInTask = Task { [weak self] in
             let result = await cli.signIn { url in
                 Task { @MainActor in openURL(url) }
@@ -464,11 +487,21 @@ final class CursorLogin {
     func cancelSignIn() {
         signInTask?.cancel()
         signInTask = nil
+        stopProxyWatch?()
+        stopProxyWatch = nil
         isWaiting = false
+    }
+
+    private func proxyChangedWhileWaiting() {
+        guard isWaiting else { return }
+        cancelSignIn()
+        errorText = CursorSignInFailure.proxyChanged.text
     }
 
     private func finishSignIn(_ result: CursorSignInResult) async {
         signInTask = nil
+        stopProxyWatch?()
+        stopProxyWatch = nil
         defer { isWaiting = false }
         switch result {
         case .failed(let failure):
@@ -544,6 +577,7 @@ final class CursorLogin {
     /// this Mac (Cursor's own, or the CLI's file), which may be another
     /// account. Signing in again, or 「退出」, ends that.
     func credentialForCLI() async -> CursorLoginRecord? {
+        if loadFailed { load() }
         guard let current = record else { return nil }
         guard current.hasCredential, isDue(current) else { return current }
         switch await renew(current) {
@@ -561,14 +595,13 @@ final class CursorLogin {
         guard passed.hasCredential, let current = record, current.hasCredential else { return .ended }
         // Renewed by another run, or signed in again, meanwhile.
         guard current == passed else { return .renewed(current) }
-        if let last = rejectionRenewal, last.record == current,
+        if let last = lastRenewal, last.record == current,
            now().timeIntervalSince(last.at) < Self.renewalHold {
             markEnded(current)
             return .ended
         }
         switch await renew(current) {
         case .renewed(let next):
-            rejectionRenewal = (next, now())
             return .renewed(next)
         case .ended: return .ended
         case .kept: return .notRenewed
@@ -610,6 +643,7 @@ final class CursorLogin {
             try? store.store(next.data)
             record = next
             renewalHeldUntil = nil
+            lastRenewal = (next, now())
             return .renewed(next)
         case .expired:
             markEnded(current)
@@ -634,3 +668,68 @@ extension CursorLogin {
         await shared.credentialForCLI()
     }
 }
+
+// MARK: - Proxy watch
+
+/// Starts watching the system proxy settings; the closure it returns stops
+/// the watch. `onChange` runs on the main actor at most once.
+typealias ProxyChangeWatch = @MainActor (@escaping @MainActor () -> Void) -> (@MainActor () -> Void)
+
+/// Watches `State:/Network/Global/Proxies` (System Settings, or a proxy client
+/// turning its system proxy on or off) and reports a change of the settings
+/// `CFNetworkCopySystemProxySettings` returns. Nothing is resolved or sent.
+@MainActor
+final class SystemProxyWatch {
+    private var store: SCDynamicStore?
+    private var source: CFRunLoopSource?
+    private var onChange: (@MainActor () -> Void)?
+    private let initial: NSDictionary?
+
+    static let start: ProxyChangeWatch = { onChange in
+        let watch = SystemProxyWatch(onChange: onChange)
+        return { watch.stop() }
+    }
+
+    private init(onChange: @escaping @MainActor () -> Void) {
+        self.onChange = onChange
+        initial = Self.settings()
+        var context = SCDynamicStoreContext(
+            version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil, release: nil, copyDescription: nil
+        )
+        let callback: SCDynamicStoreCallBack = { _, _, info in
+            guard let info else { return }
+            let watch = Unmanaged<SystemProxyWatch>.fromOpaque(info).takeUnretainedValue()
+            // The source is on the main run loop.
+            MainActor.assumeIsolated { watch.changed() }
+        }
+        guard let store = SCDynamicStoreCreate(nil, "ai.vibecafe.vibe-usage.cursor-login" as CFString, callback, &context)
+        else { return }
+        SCDynamicStoreSetNotificationKeys(store, [SCDynamicStoreKeyCreateProxies(nil)] as CFArray, nil)
+        if let source = SCDynamicStoreCreateRunLoopSource(nil, store, 0) {
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            self.source = source
+        }
+        self.store = store
+    }
+
+    private static func settings() -> NSDictionary? {
+        CFNetworkCopySystemProxySettings()?.takeRetainedValue() as NSDictionary?
+    }
+
+    private func changed() {
+        guard onChange != nil, Self.settings() != initial else { return }
+        let notify = onChange
+        stop()
+        notify?()
+    }
+
+    /// Must run before the watch is released: the callback holds it unretained.
+    func stop() {
+        if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
+        source = nil
+        store = nil
+        onChange = nil
+    }
+}
+

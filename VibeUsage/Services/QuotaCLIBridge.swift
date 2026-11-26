@@ -83,10 +83,20 @@ enum QuotaCLIBridge {
         guard let passed, passed.hasCredential, results[index].liveFailure == .signInExpired else { return results }
         switch await login.renewAfterRejection(of: passed) {
         case .renewed(let next):
-            if let retry = try? await run([.cursor], zCodeAPIKey: nil, cursorLogin: next).first {
-                results[index] = retry
-                // The renewed one is rejected too: it ends (no new request).
-                if retry.liveFailure == .signInExpired { _ = await login.renewAfterRejection(of: next) }
+            do {
+                if let retry = try await run([.cursor], zCodeAPIKey: nil, cursorLogin: next).first {
+                    results[index] = retry
+                    // The renewed one is rejected too: it ends (no new request).
+                    if retry.liveFailure == .signInExpired { _ = await login.renewAfterRejection(of: next) }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Renewed, but reading again did not complete: not "expired".
+                results[index] = ProviderRateLimit(
+                    provider: .cursor, status: .retryableError, fetchedAt: Date(),
+                    source: .live, liveFailure: liveFailure(for: error)
+                )
             }
         case .ended:
             break

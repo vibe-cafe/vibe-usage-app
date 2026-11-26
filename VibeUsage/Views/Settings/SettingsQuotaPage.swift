@@ -621,7 +621,7 @@ struct ZCodeConfigBlock: View {
 /// block as ZCode's key: where it stands on the left, one button on the
 /// right, and one grey line under it. Four states (plan 《Cursor-加密凭据-方案》
 /// §3): 未登录 → 登录; waiting for the browser → 取消; signed in (the
-/// account's email) → 退出; ended or lapsed → 重新登录. How to revoke it on
+/// account's email) → 退出; ended or lapsed → 退出 / 重新登录. How to revoke it on
 /// cursor.com lives in the sign-out confirmation, not on the page.
 struct CursorLoginBlock: View {
     @Environment(AppState.self) private var appState
@@ -717,8 +717,15 @@ struct CursorLoginBlock: View {
             Button("退出") { confirmingSignOut = true }
                 .buttonStyle(.settings)
         case .expired:
-            Button("重新登录") { login.signIn() }
-                .buttonStyle(.settings)
+            // 退出 too: Cursor already ended it, so nothing to revoke and no
+            // confirmation; without it the ended sign-in would keep Cursor's
+            // own login on this Mac from being read until the user signs in.
+            HStack(spacing: 8) {
+                Button("退出") { login.signOut() }
+                    .buttonStyle(.settings)
+                Button("重新登录") { login.signIn() }
+                    .buttonStyle(.settings)
+            }
         }
     }
 }

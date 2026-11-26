@@ -32,9 +32,14 @@ struct CursorLoginTests {
         private let lock = NSLock()
         private var value: Data?
         var writes = 0
+        /// Simulates a locked Keychain / a cancelled prompt.
+        var failLoads = false
         init(_ value: Data? = nil) { self.value = value }
         var current: Data? { lock.withLock { value } }
-        func load() throws -> Data? { lock.withLock { value } }
+        func load() throws -> Data? {
+            if lock.withLock({ failLoads }) { throw ZCodeAPIKeyStoreError.keychain(errSecInteractionNotAllowed) }
+            return lock.withLock { value }
+        }
         func store(_ data: Data?) throws { lock.withLock { value = data; writes += 1 } }
     }
 
@@ -44,6 +49,8 @@ struct CursorLoginTests {
         var signInAnswer: CursorSignInResult = .credential(CursorLoginTests.credential())
         var pageToOpen = URL(string: "https://cursor.com/loginDeepControl?challenge=c&uuid=u&mode=login&redirectTarget=cli")!
         var renewAnswer: CursorRenewalResult = .renewed(CursorLoginTests.credential(token: "renewed.token.value"))
+        /// Lets a test hold a sign-in open (waiting for the browser).
+        var signInGate: (() async -> Void)?
         /// Lets a test hold a renewal open (concurrency).
         var renewGate: (() async -> Void)?
         private(set) var renewCalls: [Data] = []
@@ -56,6 +63,7 @@ struct CursorLoginTests {
 
         func signIn(openBrowser: @escaping @Sendable (URL) -> Void) async -> CursorSignInResult {
             openBrowser(pageToOpen)
+            await signInGate?()
             return signInAnswer
         }
 
@@ -74,11 +82,25 @@ struct CursorLoginTests {
         func advance(_ seconds: TimeInterval) { lock.withLock { value = value.addingTimeInterval(seconds) } }
     }
 
+    /// Stands in for the system proxy watch; `fire()` is a proxy change.
+    @MainActor final class ProxyWatchStub {
+        var onChange: (@MainActor () -> Void)?
+        var stops = 0
+        var watch: ProxyChangeWatch {
+            { [self] onChange in
+                self.onChange = onChange
+                return { [self] in self.stops += 1; self.onChange = nil }
+            }
+        }
+        func fire() { onChange?() }
+    }
+
     private func login(
         store: MemoryStore = MemoryStore(), cli: FakeCLI = FakeCLI(), clock: Clock = Clock(start),
-        opened: (@MainActor (URL) -> Void)? = nil
+        opened: (@MainActor (URL) -> Void)? = nil, proxyWatch: ProxyWatchStub = ProxyWatchStub()
     ) -> CursorLogin {
-        let login = CursorLogin(store: store, cli: cli, now: { clock.now }, openURL: opened ?? { _ in })
+        let login = CursorLogin(store: store, cli: cli, now: { clock.now }, openURL: opened ?? { _ in },
+                                watchProxy: proxyWatch.watch)
         login.load()
         return login
     }
@@ -238,6 +260,53 @@ struct CursorLoginTests {
     }
 
     @Test
+    func aProxyChangeWhileWaitingStopsTheSignIn() async {
+        let store = MemoryStore()
+        let cli = FakeCLI()
+        let gate = AsyncGate()
+        cli.signInGate = { await gate.wait() }
+        let proxy = ProxyWatchStub()
+        let login = login(store: store, cli: cli, proxyWatch: proxy)
+        login.noteCLISupportsSignIn()
+        login.signIn()
+        #expect(login.phase == .waiting)
+        #expect(proxy.onChange != nil)
+        proxy.fire()
+        #expect(login.phase == .signedOut)
+        #expect(login.errorText == "代理设置变了，请重新登录")
+        #expect(proxy.stops == 1)
+        // The CLI that was started with the old proxy finishing later changes nothing.
+        await gate.open()
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(store.current == nil)
+        #expect(login.phase == .signedOut)
+    }
+
+    @Test
+    func theProxyWatchEndsWithTheSignIn() async {
+        let proxy = ProxyWatchStub()
+        let login = login(proxyWatch: proxy)
+        login.noteCLISupportsSignIn()
+        login.signIn()
+        await waitUntil { login.phase != .waiting }
+        #expect(login.phase == .signedIn(email: "dev@example.com"))
+        #expect(proxy.stops == 1)
+        #expect(proxy.onChange == nil)
+    }
+
+    @Test
+    func aKeychainThatCouldNotBeReadIsReadAgainAtTheNextRun() async {
+        let store = MemoryStore(Self.credential())
+        store.failLoads = true
+        let login = login(store: store)
+        #expect(login.phase == .signedOut)
+        #expect(await login.credentialForCLI() == nil)
+        store.failLoads = false
+        #expect(await login.credentialForCLI()?.email == "dev@example.com")
+        #expect(login.phase == .signedIn(email: "dev@example.com"))
+    }
+
+    @Test
     func signOutForgetsTheSignIn() async {
         let store = MemoryStore(Self.credential())
         var changes: [Bool] = []
@@ -363,6 +432,28 @@ struct CursorLoginTests {
         #expect(login.phase == .expired(email: "dev@example.com"))
         #expect(await login.renewAfterRejection(of: renewed) == .ended)
         #expect(cli.renewCalls.count == 1)
+    }
+
+    @Test
+    func aSignInRejectedRightAfterItsDueRenewalEndsWithoutAnotherOne() async throws {
+        let cli = FakeCLI()
+        let login = login(store: MemoryStore(Self.credential(expiresIn: 2)), cli: cli)
+        let renewed = try #require(await login.credentialForCLI())
+        #expect(cli.renewCalls.count == 1)
+        #expect(await login.renewAfterRejection(of: renewed) == .ended)
+        #expect(cli.renewCalls.count == 1)
+        #expect(login.phase == .expired(email: "dev@example.com"))
+    }
+
+    @Test
+    func signingOutAnEndedSignInLetsTheCLIReadAsBefore() async {
+        let store = MemoryStore(CursorLoginRecord.ended(email: "dev@example.com", at: Self.start).data)
+        let login = login(store: store)
+        #expect(await login.credentialForCLI() != nil)
+        login.signOut()
+        #expect(await login.credentialForCLI() == nil)
+        #expect(store.current == nil)
+        #expect(login.phase == .signedOut)
     }
 
     @Test
