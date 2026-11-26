@@ -285,7 +285,7 @@ final class SettingsModel {
 
     // 数据同步
     var apiKeyDisplay = ""
-    private(set) var hasAPIKey = false
+    var hasAPIKey = false
     var isRelinking = false
     var relinkUserCode: String?
     var relinkError: String?

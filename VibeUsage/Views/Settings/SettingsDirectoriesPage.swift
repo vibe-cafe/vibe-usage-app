@@ -4,13 +4,14 @@ import SwiftUI
 /// directory. The CLI owns these fields; the page only calls it.
 struct SettingsDirectoriesPage: View {
     @Environment(SettingsModel.self) private var model
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
         @Bindable var model = model
         SettingsPageScroll {
             SettingsPageHeader(title: SettingsPage.directories.title, advanced: true)
             SettingsCard {
-                SettingsRow {
+                SettingsRow(spacing: theme.isModern ? 8 : 10) {
                     SettingsRowLabel(title: "额外 Codex Home")
                         .fixedSize()
                         .padding(.trailing, 6)
@@ -26,7 +27,7 @@ struct SettingsDirectoriesPage: View {
                         model.chooseCodexHome()
                     } label: {
                         Image(systemName: "folder")
-                            .font(.system(size: 12))
+                            .font(.system(size: theme.isModern ? 11 : 12, weight: theme.isModern ? .medium : .regular))
                     }
                     .buttonStyle(.settingsSquare)
                     .disabled(model.isSavingCodexHome)
@@ -42,27 +43,26 @@ struct SettingsDirectoriesPage: View {
                     HStack(spacing: 5) {
                         Image(systemName: "checkmark")
                             .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(theme.ok)
                         Text(message)
                     }
-                    .font(SettingsTheme.caption)
-                    .foregroundStyle(SettingsTheme.green)
-                    .padding(.leading, 14)
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 11)
+                    .font(theme.caption)
+                    .foregroundStyle(theme.success)
+                    .padding(.leading, theme.isModern ? 0 : 14)
+                    .padding(.trailing, theme.isModern ? 0 : 12)
+                    .padding(.bottom, theme.isModern ? 9 : 11)
                 } else if let error = model.codexHomeError {
                     Text(error)
-                        .font(SettingsTheme.caption)
-                        .foregroundStyle(SettingsTheme.red)
+                        .font(theme.caption)
+                        .foregroundStyle(theme.red)
                         .fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 14)
-                        .padding(.trailing, 12)
-                        .padding(.bottom, 11)
+                        .padding(.leading, theme.isModern ? 0 : 14)
+                        .padding(.trailing, theme.isModern ? 0 : 12)
+                        .padding(.bottom, theme.isModern ? 9 : 11)
                 }
             }
 
-            SettingsSectionTitle(title: "隔离运行时目录")
-
-            SettingsCard {
+            SettingsSection(title: "隔离运行时目录") {
                 ForEach(Array(SettingsModel.extraRootSources.enumerated()), id: \.element.id) { index, source in
                     if index > 0 { SettingsSeparator() }
                     rootGroup(source)
@@ -70,10 +70,10 @@ struct SettingsDirectoriesPage: View {
             }
             if let error = model.extraRootsError {
                 Text(error)
-                    .font(SettingsTheme.caption)
-                    .foregroundStyle(SettingsTheme.red)
+                    .font(theme.caption)
+                    .foregroundStyle(theme.red)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 2)
+                    .padding(.horizontal, theme.isModern ? 16 : 2)
                     .padding(.top, 8)
             }
         }
@@ -82,14 +82,16 @@ struct SettingsDirectoriesPage: View {
     private func rootGroup(_ source: (id: String, name: String, provider: ProviderRateLimit.Provider)) -> some View {
         let paths = model.extraRoots[source.id] ?? []
         return VStack(alignment: .leading, spacing: 0) {
-            SettingsRow {
-                ProviderGlyph(provider: source.provider, size: 16)
-                    .foregroundStyle(SettingsTheme.text)
-                    .frame(width: 18, height: 18)
+            SettingsRow(spacing: theme.isModern ? 0 : 10) {
+                ProviderGlyph(provider: source.provider, size: theme.isModern ? 15 : 16)
+                    .foregroundStyle(theme.isModern ? theme.ok : theme.text)
+                    .frame(width: theme.isModern ? 15 : 18, height: theme.isModern ? 15 : 18)
+                    .frame(width: theme.isModern ? 22 : 18, alignment: .leading)
                 SettingsRowLabel(title: source.name)
                 Spacer(minLength: 8)
                 if model.editingExtraRoots {
                     SettingsSpinner()
+                        .padding(.trailing, theme.isModern ? 8 : 0)
                 }
                 Button {
                     model.chooseExtraRoot(source: source.id, name: source.name)
@@ -107,21 +109,30 @@ struct SettingsDirectoriesPage: View {
                         pathLine(source: source.id, path: path)
                     }
                 }
-                .padding(.leading, 42)
-                .padding(.trailing, 12)
-                .padding(.bottom, 12)
+                .padding(.leading, theme.isModern ? 22 : 42)
+                .padding(.trailing, theme.isModern ? 0 : 12)
+                .padding(.bottom, theme.isModern ? 10 : 12)
             }
         }
     }
 
+    /// Classic: the path and its － inside one inset box. Modern: the path in
+    /// a field like the panel's, the round － beside it.
     private func pathLine(source: String, path: String) -> some View {
         HStack(spacing: 8) {
             Text((path as NSString).abbreviatingWithTildeInPath)
-                .font(SettingsTheme.mono)
-                .foregroundStyle(SettingsTheme.text)
+                .font(theme.mono)
+                .foregroundStyle(theme.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
+                .padding(.horizontal, theme.isModern ? 8 : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: theme.isModern ? 24 : nil)
+                .background {
+                    if theme.isModern {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous).fill(theme.inset)
+                    }
+                }
                 .help(path)
             Button {
                 Task { await model.removeExtraRoot(source: source, path: path) }
@@ -133,13 +144,18 @@ struct SettingsDirectoriesPage: View {
             .help("移除此目录")
             .accessibilityLabel("移除此目录")
         }
-        .padding(.leading, 9)
-        .padding(.trailing, 4)
-        .frame(height: 26)
-        .background(SettingsTheme.inset, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(SettingsTheme.line, lineWidth: 1)
-        )
+        .padding(.leading, theme.isModern ? 0 : 9)
+        .padding(.trailing, theme.isModern ? 0 : 4)
+        .frame(height: theme.isModern ? nil : 26)
+        .background {
+            if !theme.isModern {
+                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(theme.inset)
+            }
+        }
+        .overlay {
+            if !theme.isModern {
+                RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(theme.line, lineWidth: 1)
+            }
+        }
     }
 }
