@@ -11,7 +11,7 @@ struct UsageBucketTests {
         {"source": "claude-code", "model": "test", "project": "p", "hostname": "h",
          "bucketStart": "2026-09-16T00:00:00Z", "inputTokens": 100,
          "cacheCreation5mTokens": 7, "cacheCreation1hTokens": 13,
-         "outputTokens": 20, "reasoningOutputTokens": 5, "cachedInputTokens": 40, "totalTokens": 125},
+         "outputTokens": 20, "reasoningOutputTokens": 5, "cachedInputTokens": 40, "totalTokens": 145},
         {"source": "claude-code", "model": "test", "project": "p", "hostname": "h",
          "bucketStart": "2026-09-15T00:00:00Z", "inputTokens": 120,
          "outputTokens": 20, "reasoningOutputTokens": 5, "cachedInputTokens": 40, "totalTokens": 145}
