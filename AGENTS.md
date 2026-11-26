@@ -17,6 +17,9 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── AppState.swift         # @Observable central state (buckets, filters, timeRange, sync)
 │   │   ├── AppConfig.swift        # Version string, API URL, debug/release config
 │   │   ├── UsageBucket.swift      # Codable data model (source, model, project, hostname, tokens, cost) + server-supplied `names`
+│   │   ├── UsagePanelState.swift  # New panel controls, effective filters and subscription-to-tool mapping
+│   │   ├── UsageDisplaySnapshot.swift # New panel totals, series and Token composition at a supplied instant
+│   │   ├── UsageRanking.swift     # Top three, full remainder and rank colors for a single metric
 │   │   ├── Config.swift           # Shared ~/.vibe-usage config; app-owned fields + unknown CLI-field-preserving writes
 │   │   └── SyncHistory.swift      # Last 10 sync summaries (typed fields only) in the app's preferences
 │   ├── Views/
@@ -242,6 +245,11 @@ Multi-day API buckets carry UTC instants for the viewer's local midnight. Daily 
 - `isRefreshingData` → keep the current dashboard visible, dim it, and overlay a small loading pill.
 
 Time-range changes and custom-date Apply trigger a server fetch. Filter changes are local only and animate the existing summary cards, trend bars, and distribution charts without refetching.
+
+### New panel usage rules (#105, model only)
+`UsagePanelState` starts on Today. Call `panelDidOpen()` on each actual presentation to restore overview, cost and collapsed details. Keep the chosen period, units and each distribution card's metric. Derive the snapshot's filters with `effectiveFilters`. It projects the shared terminal, tool and model selections, temporarily replacing the tools only when viewing one of several enabled subscriptions. `Provider.usageSource` owns the mapping (product id, with OpenCode Go mapped to `opencode`). Use `FilterState.clearUsagePanelFilters()` to preserve the classic project selection.
+
+Build `UsageDisplaySnapshot` from the matching period's buckets, the server name lookups (`AppState.modelName` and `toolName`), the selected local dates for a custom range, and one clock reading. Today begins at the first matching hour. The rolling day retains the server's partial first UTC hour. The 90-day range starts at local midnight 89 days ago and splits into twelve seven-day groups plus six days. The snapshot holds the cost and Token peaks, individual hover points, Token composition, and both rankings for each distribution. Pass these values down to hover and disclosure views. Active time uses the activity data from #103.
 
 ### Chart Hover & Scroll
 `BarChartView` is split into a parent that computes the O(n) `chartData`
