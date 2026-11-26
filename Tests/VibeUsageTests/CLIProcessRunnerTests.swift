@@ -81,4 +81,53 @@ struct CLIProcessRunnerTests {
             Issue.record("Missing executable unexpectedly succeeded")
         } catch { }
     }
+
+    // MARK: - Cursor sign-in: stdin and streamed stdout
+
+    @Test
+    func standardInputReachesTheChildAndEndsWithEOF() async throws {
+        let secret = Data(#"{"accessToken":"fake.token.value"}"#.utf8)
+        let output = try await CLIProcessRunner.run(
+            executable: "/bin/sh", arguments: ["-c", "cat; printf '|eof'"],
+            environment: ["PATH": "/usr/bin:/bin"], timeout: 5, standardInput: secret
+        )
+        #expect(output.exitCode == 0)
+        #expect(output.stdout == #"{"accessToken":"fake.token.value"}|eof"#)
+    }
+
+    @Test
+    func streamedStdoutArrivesLineByLineAndIsNotKept() async throws {
+        let lines = LineRecorder()
+        let output = try await CLIProcessRunner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'one\\n'; sleep 0.2; printf 'two\\nthree'"],
+            environment: ["PATH": "/usr/bin:/bin"], timeout: 5,
+            onStdoutLine: { lines.append($0); return true }
+        )
+        #expect(output.exitCode == 0)
+        #expect(lines.all == ["one", "two", "three"])
+        #expect(output.stdout.isEmpty)
+    }
+
+    @Test
+    func aStreamedLineCanStopTheChild() async throws {
+        let start = Date()
+        let lines = LineRecorder()
+        let output = try await CLIProcessRunner.run(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'open\\n'; sleep 30; printf 'never\\n'"],
+            environment: ["PATH": "/usr/bin:/bin"], timeout: 60,
+            onStdoutLine: { lines.append($0); return false }
+        )
+        #expect(!output.timedOut)
+        #expect(lines.all == ["open"])
+        #expect(Date().timeIntervalSince(start) < 5)
+    }
+}
+
+private final class LineRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    var all: [String] { lock.withLock { lines } }
+    func append(_ line: String) { lock.withLock { lines.append(line) } }
 }

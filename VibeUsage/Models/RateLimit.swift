@@ -301,6 +301,13 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case credentialsUnreadable
         case credentialsEncrypted
         case loginRefreshFailed
+        /// Cursor: its own login cannot be read (encrypted since 3.27, or
+        /// none) and Vibe Usage has no sign-in of its own; the card leads to
+        /// the Settings row that signs in (`CursorLogin`).
+        case signInRequired
+        /// Cursor: the sign-in Vibe Usage keeps was ended by Cursor (revoked
+        /// on cursor.com) or lapsed; sign in again.
+        case signInExpired
         case programNotFound
         case programOutdated
         case programNoAnswer
@@ -330,6 +337,11 @@ struct ProviderRateLimit: Equatable, Identifiable {
 }
 
 extension ProviderRateLimit.LiveFailure {
+    /// The card and the Settings row lead to signing in to Cursor.
+    var isCursorSignIn: Bool {
+        self == .signInRequired || self == .signInExpired
+    }
+
     /// A read stopped on purpose before it was sent (a policy or the egress
     /// check), not one that failed: diagnostics say 「已暂停」.
     var isPause: Bool {

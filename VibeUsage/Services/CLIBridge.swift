@@ -58,7 +58,8 @@ enum CLIBridge {
         args: [String],
         timeout: TimeInterval = 30,
         environmentOverrides: [String: String] = [:],
-        environmentKeysToRemove: Set<String> = []
+        environmentKeysToRemove: Set<String> = [],
+        standardInput: Data? = nil
     ) async throws -> String {
         guard let runtime = await RuntimeDetector.detect() else { throw CLIError.noRuntime }
         var env = await SystemProxy.cliEnvironment(
@@ -71,7 +72,8 @@ enum CLIBridge {
         let output = try await CLIProcessRunner.run(
             executable: runtime.executablePath,
             arguments: runtime.arguments(args),
-            environment: env, timeout: timeout
+            environment: env, timeout: timeout,
+            standardInput: standardInput
         )
         if output.timedOut { throw CLIError.timeout }
         guard output.exitCode == 0 else {

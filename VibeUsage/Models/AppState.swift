@@ -332,6 +332,8 @@ final class AppState {
     private let quotaDefaults: UserDefaults
     private let zCodeAPIKeyStore: any ZCodeAPIKeyStoring
     private let quotaProductDiscoverer: () -> [QuotaProduct]
+    /// The Cursor sign-in Vibe Usage keeps (Settings → 订阅配额 → Cursor).
+    let cursorLogin: CursorLogin
 
     init(
         initialConfig: VibeUsageConfig? = nil,
@@ -343,7 +345,8 @@ final class AppState {
         zCodeAPIKeyStore: any ZCodeAPIKeyStoring = KeychainZCodeAPIKeyStore(),
         quotaProductDiscoverer: @escaping () -> [QuotaProduct] = {
             QuotaProductRegistry.discover()
-        }
+        },
+        cursorLogin: CursorLogin? = nil
     ) {
         self.config = initialConfig
         self.loadConfig = loadConfig
@@ -352,6 +355,7 @@ final class AppState {
         self.quotaDefaults = quotaDefaults
         self.zCodeAPIKeyStore = zCodeAPIKeyStore
         self.quotaProductDiscoverer = quotaProductDiscoverer
+        self.cursorLogin = cursorLogin ?? .shared
     }
 
     // MARK: - Lifecycle
@@ -363,6 +367,10 @@ final class AppState {
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
         self.egressMode = EgressCheck.mode()
         initializeQuotaProducts()
+        cursorLogin.load()
+        cursorLogin.onAccountChange = { [weak self] signedIn in
+            await self?.cursorSignInDidChange(signedIn: signedIn)
+        }
 
         #if DEBUG
         // UI acceptance builds can exercise subscription cards without
@@ -779,6 +787,31 @@ final class AppState {
         if trimmed.isEmpty, isQuotaProviderSelected(.zCode) {
             updateQuotaSelection(provider: .zCode, selected: false)
         }
+    }
+
+    /// Arriving in Settings on the Cursor row opens its sign-in block only
+    /// when a sign-in is what is missing: the last Cursor read said so, or the
+    /// sign-in Vibe Usage keeps has ended. Users whose own Cursor login still
+    /// reads are not pushed toward signing in.
+    var cursorSignInNeeded: Bool {
+        guard cursorLogin.isAvailable else { return false }
+        if cursorLogin.phase.isExpired { return true }
+        guard cursorLogin.phase == .signedOut else { return false }
+        return rateLimits.first(where: { $0.provider == .cursor })?.liveFailure?.isCursorSignIn == true
+    }
+
+    /// The user signed in to Cursor in Settings, or out: the Cursor card's
+    /// numbers belonged to the previous state, so it is read again; a new
+    /// sign-in also syncs at once so Cursor's paused history fills in.
+    func cursorSignInDidChange(signedIn: Bool) async {
+        rateLimitCoordinator?.cursorCredentialContextDidChange()
+        removeRateLimit(for: .cursor)
+        if signedIn, isConfigured {
+            Task { await self.triggerSync() }
+        }
+        guard isQuotaProviderSelected(.cursor) else { return }
+        rateLimitCoordinator?.seedPlaceholder(for: .cursor)
+        await refreshRateLimit(for: .cursor)
     }
 
     /// Switches the ZCode account region without moving or sharing secrets

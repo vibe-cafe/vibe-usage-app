@@ -149,6 +149,8 @@ enum SystemProxy {
         "vibefriends.com", "registry.npmjs.org",
         "api.kimi.com", "auth.kimi.com", "open.bigmodel.cn", "api.z.ai",
         "opencode.ai", "cursor.com",
+        // The Cursor sign-in's poll and renewal (`login cursor`, #210).
+        "api2.cursor.sh",
         // The official `grok` the CLI starts (vibe-cafe/vibe-usage#189):
         // billing, settings and models, token refresh, and the xAI API.
         "cli-chat-proxy.grok.com", "auth.x.ai", "api.x.ai",

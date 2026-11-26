@@ -346,4 +346,40 @@ struct QuotaCLIBridgeTests {
         #expect(bigModel.overrides == ["BIGMODEL_API_KEY": "bigmodel-secret"])
         #expect(bigModel.keysToRemove == ["Z_AI_API_KEY"])
     }
+
+    // MARK: - Cursor sign-in (`signIn`, vibe-cafe/vibe-usage#210)
+
+    @Test @MainActor
+    func cursorSignInStatesLeadToSigningIn() throws {
+        let required = try snapshot(.cursor, status: "unsupported",
+                                    fields: ["failureReason": "credentialsEncrypted", "signIn": "required"])
+        #expect(required.status == .noData)
+        #expect(required.liveFailure == .signInRequired)
+        #expect(RateLimitCardView.emptyStateText(for: required, isDetected: true) == "需要登录 Cursor")
+        #expect(settings(required) == "需登录")
+
+        let expired = try snapshot(.cursor, status: "unsupported",
+                                   fields: ["failureReason": "credentialsRejected", "signIn": "expired"])
+        #expect(expired.liveFailure == .signInExpired)
+        #expect(RateLimitCardView.emptyStateText(for: expired, isDetected: true) == "Cursor 登录已失效")
+        #expect(settings(expired) == "已失效")
+
+        // An older CLI without the field keeps the earlier copy.
+        let encrypted = try snapshot(.cursor, status: "unsupported", fields: ["failureReason": "credentialsEncrypted"])
+        #expect(encrypted.liveFailure == .credentialsEncrypted)
+    }
+
+    @Test
+    func syncNoticeOfAnEndedSignInIsRecognized() {
+        let notice = "cursor: Cursor 登录已失效（在 Vibe Usage 里登录的那一份），Cursor 用量暂停同步，其他工具照常同步。"
+        #expect(SyncEngine.reportsCursorSignInEnded(.init(stdout: notice, stderr: "", exitCode: 0, timedOut: false)))
+        #expect(SyncEngine.reportsCursorSignInEnded(.init(stdout: "", stderr: notice, exitCode: 0, timedOut: false)))
+        #expect(!SyncEngine.reportsCursorSignInEnded(.init(stdout: "同步完成", stderr: "", exitCode: 0, timedOut: false)))
+    }
+
+    @Test
+    func cursorSignInHostsFollowTheSystemProxy() {
+        #expect(SystemProxy.cliHosts.contains("cursor.com"))
+        #expect(SystemProxy.cliHosts.contains("api2.cursor.sh"))
+    }
 }

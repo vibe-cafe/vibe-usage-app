@@ -30,13 +30,19 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
 
         if let window, window.isVisible {
-            navigation.open(destination, zCodeKeyConfigured: appState.zCodeAPIKeyConfigured)
+            navigation.open(
+                destination, zCodeKeyConfigured: appState.zCodeAPIKeyConfigured,
+                cursorNeedsSignIn: appState.cursorSignInNeeded
+            )
             window.makeKeyAndOrderFront(nil)
             return
         }
 
         navigation.resetTransientState()
-        navigation.open(destination, zCodeKeyConfigured: appState.zCodeAPIKeyConfigured)
+        navigation.open(
+            destination, zCodeKeyConfigured: appState.zCodeAPIKeyConfigured,
+            cursorNeedsSignIn: appState.cursorSignInNeeded
+        )
 
         let settingsView = SettingsView()
             .environment(appState)

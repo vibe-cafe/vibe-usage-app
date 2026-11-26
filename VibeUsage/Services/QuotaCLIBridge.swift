@@ -24,6 +24,10 @@ enum QuotaCLIBridge {
         /// A paused live read can still report meters from a local record.
         var pauseReason: String?
         var egressRegion: String?
+        /// Cursor only (vibe-cafe/vibe-usage#210): `required` when Cursor's
+        /// own login cannot be read (encrypted, issue #144), `expired` when
+        /// the separate Vibe Usage sign-in was ended or lapsed.
+        var signIn: String?
     }
 
     struct Meter: Decodable, Equatable {
@@ -62,21 +66,85 @@ enum QuotaCLIBridge {
     ) async throws -> [ProviderRateLimit] {
         let supported = providers.filter(\.usesQuotaCLI)
         guard !supported.isEmpty else { return [] }
+        guard supported.contains(.cursor) else {
+            return try await run(supported, zCodeAPIKey: zCodeAPIKey, zCodeRegion: zCodeRegion)
+        }
+        // The Cursor sign-in Vibe Usage keeps (`CursorLogin`) goes on stdin,
+        // renewed first when it is due; never in the environment or argv.
+        let login = await CursorLogin.shared
+        let passed = await login.credentialForCLI()
+        var results = try await run(
+            supported, zCodeAPIKey: zCodeAPIKey, zCodeRegion: zCodeRegion, cursorLogin: passed
+        )
+        guard let index = results.firstIndex(where: { $0.provider == .cursor }) else { return results }
+        if results[index].liveFailure?.isCursorSignIn == true { await login.noteCLISupportsSignIn() }
+        if let passed, passed.hasCredential, isAcceptedLiveRead(results[index]) { await login.noteAccepted(passed) }
+        // Cursor rejected the sign-in we passed (or it lapsed): renew once and
+        // read again, as the CLI does for a sign-in it stores itself.
+        guard let passed, passed.hasCredential, results[index].liveFailure == .signInExpired else { return results }
+        switch await login.renewAfterRejection(of: passed) {
+        case .renewed(let next):
+            do {
+                if let retry = try await run([.cursor], zCodeAPIKey: nil, cursorLogin: next).first {
+                    results[index] = retry
+                    if isAcceptedLiveRead(retry) { await login.noteAccepted(next) }
+                    // The renewed one is rejected too: it ends (no new request).
+                    if retry.liveFailure == .signInExpired { _ = await login.renewAfterRejection(of: next) }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Renewed, but reading again did not complete: not "expired".
+                results[index] = ProviderRateLimit(
+                    provider: .cursor, status: .retryableError, fetchedAt: Date(),
+                    source: .live, liveFailure: liveFailure(for: error)
+                )
+            }
+        case .ended:
+            break
+        case .notRenewed:
+            // Still within its lifetime: the renewal is what failed.
+            if let expiry = passed.expiresAt, expiry > Date() {
+                results[index] = ProviderRateLimit(
+                    provider: .cursor, status: .retryableError,
+                    fetchedAt: results[index].fetchedAt ?? Date(),
+                    source: .live, liveFailure: .loginRefreshFailed
+                )
+            }
+        }
+        return results
+    }
+
+    /// Cursor took the sign-in: a live answer with numbers, or a live answer
+    /// without a window. A cache fallback, a failure or a pause says nothing.
+    static func isAcceptedLiveRead(_ snapshot: ProviderRateLimit) -> Bool {
+        guard snapshot.source == .live, snapshot.liveFailure == nil else { return false }
+        return snapshot.status == .ok || snapshot.status == .noData && snapshot.emptyReason == .noWindow
+    }
+
+    private static func run(
+        _ providers: [ProviderRateLimit.Provider],
+        zCodeAPIKey: String?,
+        zCodeRegion: ZCodeQuotaRegion = .zAI,
+        cursorLogin: CursorLoginRecord? = nil
+    ) async throws -> [ProviderRateLimit] {
         let environment = quotaEnvironment(
-            providers: supported,
+            providers: providers,
             zCodeAPIKey: zCodeAPIKey,
             zCodeRegion: zCodeRegion
         )
         var arguments = ["quota", "fetch"]
-        for provider in supported {
+        for provider in providers {
             arguments += ["--product", provider.rawValue]
         }
         arguments.append("--json")
+        if cursorLogin != nil { arguments.append("--cursor-login-stdin") }
         let output = try await CLIBridge.runCLI(
             args: arguments,
             timeout: 30,
             environmentOverrides: environment.overrides,
-            environmentKeysToRemove: environment.keysToRemove
+            environmentKeysToRemove: environment.keysToRemove,
+            standardInput: cursorLogin?.data
         )
         return try snapshots(from: decode(output))
     }
@@ -146,6 +214,13 @@ enum QuotaCLIBridge {
             }
             if liveFailure == nil, product.source == "cache" {
                 liveFailure = .cliReportedFailure
+            }
+            if provider == .cursor, product.status == "unsupported" {
+                switch product.signIn {
+                case "required": liveFailure = .signInRequired
+                case "expired": liveFailure = .signInExpired
+                default: break
+                }
             }
             return ProviderRateLimit(
                 provider: provider,

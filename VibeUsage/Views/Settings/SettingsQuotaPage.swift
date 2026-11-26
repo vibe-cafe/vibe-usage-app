@@ -41,15 +41,13 @@ struct SettingsQuotaPage: View {
                     .help("重新检测本机产品")
                 }
                 table
-                Text("未开启的产品不联网读取配额，配额只在本机显示。")
-                    .font(SettingsTheme.caption)
-                    .foregroundStyle(SettingsTheme.secondaryText)
-                    .padding(.horizontal, 2)
-                    .padding(.top, 8)
                 SettingsSectionTitle(title: "隐私保护")
                 EgressSettingsCard()
             }
             .onAppear { reveal(navigation.focusedProvider, proxy: proxy) }
+            // Whether the CLI the app runs has `login cursor` (the Cursor
+            // row's sign-in appears once it does).
+            .task { await appState.cursorLogin.checkCLISupport() }
             .onChange(of: navigation.focusRequest) { _, _ in
                 reveal(navigation.focusedProvider, proxy: proxy)
             }
@@ -101,7 +99,8 @@ struct SettingsQuotaPage: View {
 /// 工具 · 状态 · 面板卡片, aligned with the row columns.
 /// The egress check's one setting (`EgressCheck.Mode`), a pop-up menu like
 /// System Settings' 「显示滚动条」: what Codex, Claude, Grok and Antigravity do when
-/// no proxy is detected. The grey line under it follows the option chosen.
+/// no proxy is detected. What each option does is in the README, not here
+/// (maintainer, 2026-11-26: no explanatory sentences in Settings).
 private struct EgressSettingsCard: View {
     @Environment(AppState.self) private var appState
 
@@ -123,12 +122,6 @@ private struct EgressSettingsCard: View {
                 .fixedSize()
             }
         }
-        Text(appState.egressMode.caption)
-            .font(SettingsTheme.caption)
-            .foregroundStyle(SettingsTheme.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 2)
-            .padding(.top, 8)
     }
 }
 
@@ -205,7 +198,10 @@ struct QuotaProductRow: View {
     @State private var flash = false
 
     private var isOn: Bool { appState.isQuotaProviderSelected(provider) }
-    private var isConfigurable: Bool { provider == .zCode }
+    /// ZCode's key; Cursor's sign-in once the CLI has it (`CursorLogin`).
+    private var isConfigurable: Bool {
+        provider == .zCode || provider == .cursor && appState.cursorLogin.isAvailable
+    }
     private var isExpanded: Bool { navigation.expandedProviders.contains(provider) }
 
     private var product: QuotaProduct {
@@ -224,24 +220,22 @@ struct QuotaProductRow: View {
                     move: { appState.moveQuotaProduct($0, before: $1) }
                 ))
             if isConfigurable, isExpanded {
-                ZCodeConfigBlock()
-                    .padding(.leading, 14)
-                    .padding(.trailing, 12)
-                    .padding(.bottom, 12)
+                Group {
+                    if provider == .cursor {
+                        CursorLoginBlock()
+                    } else {
+                        ZCodeConfigBlock()
+                    }
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 12)
+                .padding(.bottom, 12)
             }
         }
         .onAppear { if navigation.focusedProvider == provider { pulse() } }
         .onChange(of: navigation.focusRequest) { _, _ in
             if navigation.focusedProvider == provider { pulse() }
         }
-    }
-
-    /// One grey line under a product's name, only where the vendor itself
-    /// has said something the user should know before turning it on.
-    /// Antigravity: Google says reading quota from third-party apps is not
-    /// supported (maintainer, 2026-11-24).
-    nonisolated static func note(for provider: ProviderRateLimit.Provider) -> String? {
-        provider == .antigravity ? "Google 表示不支持第三方读取额度" : nil
     }
 
     private var row: some View {
@@ -251,19 +245,11 @@ struct QuotaProductRow: View {
                     .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
                     .opacity(isOn ? 1 : 0.72)
                     .frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(provider.displayName)
-                        .font(SettingsTheme.label)
-                        .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
-                        .lineLimit(1)
-                    if let note = Self.note(for: provider) {
-                        Text(note)
-                            .font(SettingsTheme.caption)
-                            .foregroundStyle(SettingsTheme.tertiaryText)
-                            .lineLimit(1)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(provider.displayName)
+                    .font(SettingsTheme.label)
+                    .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 QuotaStatusCell(value: statusValue, isOn: isOn)
             }
             .contentShape(Rectangle())
@@ -330,7 +316,8 @@ struct QuotaProductRow: View {
         SettingsQuotaStatus.status(
             for: product,
             zCodeKeyConfigured: appState.zCodeAPIKeyConfigured,
-            warningSnapshot: appState.quotaWarningSnapshot(for: provider)
+            warningSnapshot: appState.quotaWarningSnapshot(for: provider),
+            cursorSignInEnded: provider == .cursor && appState.cursorLogin.phase.isExpired
         )
     }
 
@@ -599,5 +586,123 @@ struct ZCodeConfigBlock: View {
     private func save() {
         guard model.canSaveZCodeAPIKey else { return }
         Task { await model.saveZCodeAPIKey() }
+    }
+}
+
+// MARK: - Cursor block
+
+/// Cursor's own sign-in for Vibe Usage, on one line inside the same rounded
+/// block as ZCode's key: where it stands on the left, one button on the
+/// right. Four states (plan 《Cursor-加密凭据-方案》
+/// §3): 未登录 → 登录; waiting for the browser → 取消; signed in (the
+/// account's email) → 退出; ended or lapsed → 退出 / 重新登录. How to revoke it on
+/// cursor.com is in the README, not in the app. The copy is
+/// word for word the Windows app's (workspace notes
+/// 《cursor-单独登录-App文案-两端对齐》). When the CLI is not known to have
+/// `login cursor`, a kept sign-in still shows its state and 退出, without the
+/// sign-in buttons. No explanatory line (maintainer, 2026-11-26): what the
+/// sign-in is and does is in the README.
+struct CursorLoginBlock: View {
+    @Environment(AppState.self) private var appState
+    @State private var confirmingSignOut = false
+
+    static let waitingText = "请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来"
+    /// One sentence (maintainer, 2026-11-26: 「字写得也太多了吧」); how to
+    /// revoke it on cursor.com is in the README's privacy notes.
+    static let signOutMessage = "只删除 Vibe Usage 里的这份登录，Cursor 编辑器不受影响。"
+
+    private var login: CursorLogin { appState.cursorLogin }
+    private var canSignIn: Bool { login.cliSupportsSignIn == true }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                state
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                action
+            }
+            if let error = login.errorText, login.phase != .waiting {
+                Text(error)
+                    .font(SettingsTheme.caption)
+                    .foregroundStyle(SettingsTheme.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SettingsTheme.configBlock, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .alert("退出 Cursor 登录？", isPresented: $confirmingSignOut) {
+            Button("取消", role: .cancel) {}
+            Button("退出", role: .destructive) { login.signOut() }
+        } message: {
+            Text(Self.signOutMessage)
+        }
+    }
+
+    @ViewBuilder
+    private var state: some View {
+        switch login.phase {
+        case .signedOut:
+            Text("未登录")
+                .font(SettingsTheme.body)
+                .foregroundStyle(SettingsTheme.secondaryText)
+        case .waiting:
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+                    .frame(width: 12, height: 12)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(Self.waitingText)
+                    .font(SettingsTheme.body)
+                    .foregroundStyle(SettingsTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        case .signedIn(let email):
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(SettingsTheme.green)
+                Text(email ?? "Cursor 账号")
+                    .font(SettingsTheme.body)
+                    .foregroundStyle(SettingsTheme.text)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(email ?? "Cursor 账号")
+            }
+        case .expired:
+            Text("登录已失效")
+                .font(SettingsTheme.body)
+                .foregroundStyle(SettingsTheme.amber)
+        }
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch login.phase {
+        case .signedOut:
+            if canSignIn {
+                Button("登录") { login.signIn() }
+                    .buttonStyle(.settings)
+            }
+        case .waiting:
+            Button("取消") { login.cancelSignIn() }
+                .buttonStyle(.settings)
+        case .signedIn:
+            Button("退出") { confirmingSignOut = true }
+                .buttonStyle(.settings)
+        case .expired:
+            // 退出 too: Cursor already ended it, so nothing to revoke and no
+            // confirmation; without it the ended sign-in would keep Cursor's
+            // own login on this Mac from being read until the user signs in.
+            HStack(spacing: 8) {
+                Button("退出") { login.signOut() }
+                    .buttonStyle(.settings)
+                if canSignIn {
+                    Button("重新登录") { login.signIn() }
+                        .buttonStyle(.settings)
+                }
+            }
+        }
     }
 }
