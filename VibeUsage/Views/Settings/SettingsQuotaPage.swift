@@ -594,7 +594,7 @@ struct ZCodeConfigBlock: View {
 /// Cursor's own sign-in for Vibe Usage, on one line inside the same rounded
 /// block as ZCode's key: where it stands on the left, one button on the
 /// right. Four states (plan 《Cursor-加密凭据-方案》
-/// §3): 未登录 → 登录 (no text); waiting for the browser → 取消; signed in (the
+/// §3): 未登录 → 登录; waiting for the browser → 取消; signed in (the
 /// account's email) → 退出; ended or lapsed → 退出 / 重新登录. How to revoke it on
 /// cursor.com is in the README, not in the app. The copy is
 /// word for word the Windows app's (workspace notes
@@ -643,8 +643,9 @@ struct CursorLoginBlock: View {
     private var state: some View {
         switch login.phase {
         case .signedOut:
-            // No words: the button sits where every state's button sits.
-            Color.clear.frame(height: 1)
+            Text("未登录")
+                .font(SettingsTheme.body)
+                .foregroundStyle(SettingsTheme.secondaryText)
         case .waiting:
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 ProgressView()
