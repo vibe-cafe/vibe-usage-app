@@ -432,8 +432,8 @@ private struct ChartContent: View {
                 Text("活跃时长: \(bar.activity?.activeText ?? "—")")
                     .foregroundStyle(Color(red: 0.38, green: 0.6, blue: 1.0))
                 if let time = bar.activity {
-                    if let work = time.chartWorkText { Text(work) }
-                    if let parallel = time.parallelText { Text(parallel) }
+                    if let work = time.chartWorkText { Text(work).foregroundStyle(Color(white: 0.8)) }
+                    if let parallel = time.parallelText { Text(parallel).foregroundStyle(Color(white: 0.8)) }
                 }
             }
         }

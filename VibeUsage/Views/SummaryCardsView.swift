@@ -61,7 +61,7 @@ struct SummaryCardsView: View {
             StatCard(
                 label: "活跃时长", value: time?.activeText ?? "—", color: Color(red: 0.38, green: 0.6, blue: 1.0),
                 help: appState.activity?.summaryHelp,
-                detail: time?.workText
+                detail: time.flatMap { $0.workSeconds > 0 ? $0.workText : nil }
             )
         }
         .frame(maxWidth: .infinity)
@@ -133,6 +133,8 @@ private struct StatCard: View {
                     .foregroundStyle(Color(white: 0.63))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
+                    // Sit in the value line's slack so the line clears the bottom edge.
+                    .padding(.top, -3)
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
