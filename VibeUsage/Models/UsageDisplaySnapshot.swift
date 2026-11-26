@@ -108,7 +108,7 @@ struct UsagePlotGrid {
         case .custom(let from, let to):
             start = calendar.startOfDay(for: from)
             lastDay = calendar.startOfDay(for: to)
-            hourly = false
+            hourly = start == lastDay
         case .days(let count):
             start = calendar.startOfDay(offsetBy: 1 - count, from: today)
             lastDay = today

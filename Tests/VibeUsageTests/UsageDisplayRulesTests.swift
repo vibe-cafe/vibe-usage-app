@@ -116,15 +116,18 @@ struct UsageDisplayRulesTests {
     }
 
     @Test
-    func customRangeIncludesTheEntireLocalEndDay() {
-        let selected = date("2026-11-18T03:00:00Z")
+    func singleCustomDaySplitsTheEntireLocalDayIntoHours() {
+        let from = date("2026-11-17T22:00:00Z")
+        let to = date("2026-11-18T03:00:00Z")
         let result = UsageDisplaySnapshot(buckets: [bucket("2026-11-17T15:30:00Z", 1),
                                                     bucket("2026-11-17T16:00:00Z", 2),
                                                     bucket("2026-11-18T15:30:00Z", 4),
                                                     bucket("2026-11-18T16:00:00Z", 8)],
-                                          dataRange: .custom(from: selected, to: selected),
+                                          dataRange: .custom(from: from, to: to),
                                           now: date("2026-11-27T00:00:00Z"), calendar: calendar)
-        #expect(result.series.map(\.amount.totalTokens) == [6])
+        #expect(result.series.map(\.amount.totalTokens) == [2] + Array(repeating: 0, count: 22) + [4])
+        #expect(result.series.first?.start == date("2026-11-17T16:00:00Z"))
+        #expect(result.series.last?.start == date("2026-11-18T15:00:00Z"))
         #expect(result.series.last?.end == date("2026-11-18T16:00:00Z"))
         #expect(result.total.totalTokens == 6)
     }
@@ -133,7 +136,7 @@ struct UsageDisplayRulesTests {
     func customRangesSwitchToWeeksAfterSixtyLocalDaysCountingBackFromTheirEnd() {
         let end = date("2026-11-16T16:00:00Z")
         let now = date("2026-11-27T04:00:00Z")
-        for (days, slots, firstLength) in [(60, 60, 1), (61, 9, 5), (63, 9, 7), (64, 10, 1)] {
+        for (days, slots, firstLength) in [(2, 2, 1), (60, 60, 1), (61, 9, 5), (63, 9, 7), (64, 10, 1)] {
             let start = calendar.date(byAdding: .day, value: 1 - days, to: end)!
             let dataRange = UsageQueryRange.custom(from: start, to: end)
             let result = UsageDisplaySnapshot(buckets: [bucket("2026-11-16T16:00:00Z", 2)],
@@ -141,7 +144,7 @@ struct UsageDisplayRulesTests {
             #expect(result.series.count == slots)
             #expect(result.series.first?.start == start)
             #expect(result.series.first?.end == calendar.date(byAdding: .day, value: firstLength, to: start))
-            #expect(result.series.last?.start == calendar.date(byAdding: .day, value: days == 60 ? 0 : -6, to: end))
+            #expect(result.series.last?.start == calendar.date(byAdding: .day, value: days <= 60 ? 0 : -6, to: end))
             #expect(result.series.last?.end == calendar.date(byAdding: .day, value: 1, to: end))
             #expect(result.series.last?.amount.totalTokens == 2)
         }
@@ -157,8 +160,9 @@ struct UsageDisplayRulesTests {
                                                     bucket("2026-11-18T18:00:00Z", 4)],
                                           dataRange: .custom(from: selected, to: selected),
                                           now: date("2026-11-27T00:00:00Z"), calendar: local)
-        #expect(result.series.map(\.amount.totalTokens) == [7])
+        #expect(result.series.map(\.amount.totalTokens) == [3] + Array(repeating: 0, count: 23) + [4])
         #expect(result.series.first?.start == date("2026-11-17T18:15:00Z"))
+        #expect(result.series.last?.end == date("2026-11-18T18:15:00Z"))
     }
 
     @Test
@@ -292,6 +296,21 @@ struct UsageDisplayRulesTests {
         let relaunched = UsagePanelState()
         #expect(relaunched.formatCost(1) == "$1.00" && relaunched.formatTokens(15_100_000) == "15.1M")
         #expect(relaunched[metricFor: .terminal] == .tokens)
+    }
+
+    @Test @MainActor
+    func loadedTodaySnapshotExpiresAtTheNextLocalMidnight() async throws {
+        let state = AppState(initialConfig: VibeUsageConfig(apiKey: "fixture", apiUrl: "http://127.0.0.1:1"),
+                             loadConfig: { nil }, usageFetcher: { _, _, range in
+            guard case .from(let midnight) = range else { throw URLError(.badURL) }
+            return UsageResponse(buckets: [bucket(midnight.ISO8601Format(), 5)], sessions: nil, hasAnyData: true, names: nil)
+        })
+        state.timeRange = .today
+        await state.fetchUsageData()
+        let midnight = try #require(state.buckets.first?.date)
+        let day = try #require(Calendar.current.dateInterval(of: .day, for: midnight))
+        #expect(state.usageDisplaySnapshot(filters: .init(), now: day.end.addingTimeInterval(-1))?.total.totalTokens == 5)
+        #expect(state.usageDisplaySnapshot(filters: .init(), now: day.end) == nil)
     }
 
     @Test @MainActor
