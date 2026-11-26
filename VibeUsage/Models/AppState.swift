@@ -108,6 +108,9 @@ final class AppState {
     @ObservationIgnored var makeRateLimitCoordinator: @MainActor (AppState) -> RateLimitCoordinator = {
         RateLimitCoordinator(appState: $0)
     }
+    /// Writes the shared config when linking. A seam for tests, which must
+    /// never write `~/.vibe-usage`.
+    @ObservationIgnored var saveConfig: @MainActor (VibeUsageConfig) -> Void = { ConfigManager.save($0) }
 
     // MARK: - Dashboard Data
     var buckets: [UsageBucket] = []
@@ -545,7 +548,7 @@ final class AppState {
         var cfg = loadConfig() ?? VibeUsageConfig()
         cfg.apiKey = apiKey
         cfg.apiUrl = server.baseURL
-        ConfigManager.save(cfg)
+        saveConfig(cfg)
 
         applyConfig(loadConfig())
         if isConfigured {
@@ -613,12 +616,13 @@ final class AppState {
 
     /// The account changed under a sync (reset, relink). After a relink the
     /// new account is synced instead: its own launch sync returned at once
-    /// while this one held the status.
+    /// while this one held the status. That run gets a task of its own — the
+    /// stale run may be the launch task the relink cancelled, and a cancelled
+    /// task would stop the new account's CLI too.
     private func dropStaleSync(_ trigger: SyncRecord.Trigger) async {
         syncStatus = .idle
-        if config?.apiKey != nil {
-            await triggerSync(trigger)
-        }
+        guard config?.apiKey != nil else { return }
+        await Task { await self.triggerSync(trigger) }.value
     }
 
     // MARK: - Data Fetching
