@@ -350,7 +350,7 @@ final class AppState {
             QuotaProductRegistry.discover()
         },
         cursorLogin: CursorLogin? = nil,
-        interfaceStyle: InterfaceStylePreference = InterfaceStylePreference()
+        interfaceStyle: InterfaceStylePreference = .shared
     ) {
         self.interfaceStyle = interfaceStyle
         self.config = initialConfig

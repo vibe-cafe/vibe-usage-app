@@ -75,6 +75,7 @@ enum RuntimeDetector {
         /// `PATH`, as before. The bundled Node stays off `PATH`: tools the CLI
         /// starts (for example `agy` while reading quotas) must keep finding the
         /// user's own Node, not ours.
+        @MainActor
         func environment(base: [String: String]) -> [String: String] {
             var env = base
             if kind != .bundledNode {

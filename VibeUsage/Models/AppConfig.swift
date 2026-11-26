@@ -12,10 +12,14 @@ enum AppConfig {
     static let isExternalTest = false
     #endif
 
-    static let cliIdentityEnvironment = [
-        "VIBE_USAGE_SURFACE": "mac-app",
-        "VIBE_USAGE_SURFACE_VERSION": version,
-    ]
+    @MainActor
+    static var cliIdentityEnvironment: [String: String] {
+        [
+            "VIBE_USAGE_SURFACE": "mac-app",
+            "VIBE_USAGE_SURFACE_VERSION": version,
+            "VIBE_USAGE_INTERFACE_STYLE": InterfaceStylePreference.shared.current.rawValue,
+        ]
+    }
 
     static let productionApiUrl = "https://vibefriends.com"
 
