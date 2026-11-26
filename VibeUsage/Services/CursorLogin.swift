@@ -156,13 +156,13 @@ enum CursorSignInFailure: Equatable, Sendable {
 
     var text: String {
         switch self {
-        case .timedOut: "5 分钟内没有确认，已取消"
-        case .network: "连不上 Cursor，请检查网络和代理"
-        case .proxy: "无法按你的代理设置连接 Cursor，未发送"
+        case .timedOut: "5 分钟内没有确认，已取消登录"
+        case .network: "连不上 Cursor，请检查网络和代理后重试"
+        case .proxy: "无法按你的代理设置连接 Cursor，未发送任何请求"
         case .unexpectedURL: "登录地址不对，已取消"
         case .proxyChanged: "代理设置变了，请重新登录"
         case .noRuntime: "没有可用的 Node.js 或 Bun"
-        case .failed: "登录没有完成，请重试"
+        case .failed: "Cursor 没有完成登录，请重试"
         }
     }
 }
@@ -363,9 +363,10 @@ final class CursorLogin {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var renewal: (task: Task<Renewal, Never>, generation: Int)?
     @ObservationIgnored private var renewalHeldUntil: Date?
-    /// The last renewal (due, or after a rejection): a rejection of the very
-    /// record it produced ends the sign-in (`renewAfterRejection`).
-    @ObservationIgnored private var lastRenewal: (record: CursorLoginRecord, at: Date)?
+    /// The record the last renewal produced (due, or after a rejection),
+    /// until Cursor is seen accepting it (`noteAccepted`): a rejection of it
+    /// ends the sign-in without another renewal (`renewAfterRejection`).
+    @ObservationIgnored private var lastRenewal: CursorLoginRecord?
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var lastSupportCheck: Date?
     @ObservationIgnored private var loaded = false
@@ -435,6 +436,12 @@ final class CursorLogin {
         guard let version = await cli.version() else { return }
         if Self.supportsSignIn(version: version) { cliSupportsSignIn = true }
         else if cliSupportsSignIn != true { cliSupportsSignIn = false }
+    }
+
+    /// Cursor answered a live read made with `record` (numbers, or a live
+    /// answer without a window): a later rejection of it is renewed again.
+    func noteAccepted(_ record: CursorLoginRecord) {
+        if lastRenewal == record { lastRenewal = nil }
     }
 
     /// A quota answer carrying `signIn` comes from a CLI that has the command.
@@ -514,7 +521,7 @@ final class CursorLogin {
             do {
                 try store.store(next.data)
             } catch {
-                errorText = "无法保存到钥匙串"
+                errorText = "登录成功，但没能保存，请重试"
                 return
             }
             record = next
@@ -595,8 +602,7 @@ final class CursorLogin {
         guard passed.hasCredential, let current = record, current.hasCredential else { return .ended }
         // Renewed by another run, or signed in again, meanwhile.
         guard current == passed else { return .renewed(current) }
-        if let last = lastRenewal, last.record == current,
-           now().timeIntervalSince(last.at) < Self.renewalHold {
+        if lastRenewal == current {
             markEnded(current)
             return .ended
         }
@@ -643,7 +649,7 @@ final class CursorLogin {
             try? store.store(next.data)
             record = next
             renewalHeldUntil = nil
-            lastRenewal = (next, now())
+            lastRenewal = next
             return .renewed(next)
         case .expired:
             markEnded(current)

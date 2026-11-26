@@ -78,6 +78,7 @@ enum QuotaCLIBridge {
         )
         guard let index = results.firstIndex(where: { $0.provider == .cursor }) else { return results }
         if results[index].liveFailure?.isCursorSignIn == true { await login.noteCLISupportsSignIn() }
+        if let passed, passed.hasCredential, isAcceptedLiveRead(results[index]) { await login.noteAccepted(passed) }
         // Cursor rejected the sign-in we passed (or it lapsed): renew once and
         // read again, as the CLI does for a sign-in it stores itself.
         guard let passed, passed.hasCredential, results[index].liveFailure == .signInExpired else { return results }
@@ -86,6 +87,7 @@ enum QuotaCLIBridge {
             do {
                 if let retry = try await run([.cursor], zCodeAPIKey: nil, cursorLogin: next).first {
                     results[index] = retry
+                    if isAcceptedLiveRead(retry) { await login.noteAccepted(next) }
                     // The renewed one is rejected too: it ends (no new request).
                     if retry.liveFailure == .signInExpired { _ = await login.renewAfterRejection(of: next) }
                 }
@@ -111,6 +113,13 @@ enum QuotaCLIBridge {
             }
         }
         return results
+    }
+
+    /// Cursor took the sign-in: a live answer with numbers, or a live answer
+    /// without a window. A cache fallback, a failure or a pause says nothing.
+    static func isAcceptedLiveRead(_ snapshot: ProviderRateLimit) -> Bool {
+        guard snapshot.source == .live, snapshot.liveFailure == nil else { return false }
+        return snapshot.status == .ok || snapshot.status == .noData && snapshot.emptyReason == .noWindow
     }
 
     private static func run(

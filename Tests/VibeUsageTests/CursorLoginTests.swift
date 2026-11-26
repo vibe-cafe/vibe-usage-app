@@ -232,7 +232,7 @@ struct CursorLoginTests {
         login.signIn()
         await waitUntil { login.phase != .waiting }
         #expect(login.phase == .signedOut)
-        #expect(login.errorText == "5 分钟内没有确认，已取消")
+        #expect(login.errorText == "5 分钟内没有确认，已取消登录")
         #expect(store.current == nil)
     }
 
@@ -457,19 +457,38 @@ struct CursorLoginTests {
     }
 
     @Test
-    func aRejectionLongAfterTheLastRenewalIsRenewedAgain() async throws {
-        let clock = Clock(Self.start)
+    func onceCursorAcceptedTheRenewedOneALaterRejectionIsRenewedAgain() async throws {
         let cli = FakeCLI()
-        let login = login(store: MemoryStore(Self.credential()), cli: cli, clock: clock)
+        let login = login(store: MemoryStore(Self.credential()), cli: cli)
         let passed = try #require(await login.credentialForCLI())
         guard case .renewed(let renewed) = await login.renewAfterRejection(of: passed) else {
             Issue.record("expected a renewal")
             return
         }
-        clock.advance(6 * 3600 + 1)
+        login.noteAccepted(renewed)
         cli.renewAnswer = .expired
         #expect(await login.renewAfterRejection(of: renewed) == .ended)
         #expect(cli.renewCalls.count == 2)
+    }
+
+    @Test
+    func onlyALiveAnswerCountsAsCursorAcceptingTheSignIn() {
+        let ok = ProviderRateLimit(provider: .cursor, meters: [RateLimitMeter(id: "plan", label: "Month",
+            window: RateLimitWindow(utilization: 10))], status: .ok, fetchedAt: Date(), source: .live)
+        #expect(QuotaCLIBridge.isAcceptedLiveRead(ok))
+        let noWindow = ProviderRateLimit(provider: .cursor, status: .noData, fetchedAt: Date(),
+                                         emptyReason: .noWindow, source: .live)
+        #expect(QuotaCLIBridge.isAcceptedLiveRead(noWindow))
+        var cached = ok
+        cached.source = .cache
+        cached.liveFailure = .cliReportedFailure
+        #expect(!QuotaCLIBridge.isAcceptedLiveRead(cached))
+        let expired = ProviderRateLimit(provider: .cursor, status: .noData, fetchedAt: Date(),
+                                        source: .live, liveFailure: .signInExpired)
+        #expect(!QuotaCLIBridge.isAcceptedLiveRead(expired))
+        let failed = ProviderRateLimit(provider: .cursor, status: .retryableError, fetchedAt: Date(),
+                                       source: .live, liveFailure: .endpointUnreachable)
+        #expect(!QuotaCLIBridge.isAcceptedLiveRead(failed))
     }
 
     @Test

@@ -620,22 +620,26 @@ struct ZCodeConfigBlock: View {
 /// Cursor's own sign-in for Vibe Usage, on one line inside the same rounded
 /// block as ZCode's key: where it stands on the left, one button on the
 /// right, and one grey line under it. Four states (plan 《Cursor-加密凭据-方案》
-/// §3): 未登录 → 登录; waiting for the browser → 取消; signed in (the
+/// §3): 未登录 → 登录 (no text); waiting for the browser → 取消; signed in (the
 /// account's email) → 退出; ended or lapsed → 退出 / 重新登录. How to revoke it on
-/// cursor.com lives in the sign-out confirmation, not on the page.
+/// cursor.com lives in the sign-out confirmation, not on the page. The copy is
+/// word for word the Windows app's (workspace notes
+/// 《cursor-单独登录-App文案-两端对齐》). When the CLI is not known to have
+/// `login cursor`, a kept sign-in still shows its state and 退出, without the
+/// sign-in buttons and the grey line.
 struct CursorLoginBlock: View {
     @Environment(AppState.self) private var appState
     @State private var confirmingSignOut = false
 
     static let note = "以 Cursor 命令行的身份登录，只用来读用量"
-    static let waitingText = "请在浏览器里确认。如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来"
-    static let signOutMessage = """
-    Vibe Usage 会删掉保存的这份登录。
-
-    要在 Cursor 那边也撤销，打开 cursor.com 设置里的 Sessions：这条登录显示为「Desktop App」，每续期一次多一条，撤销最多 10 分钟生效。正在用的 Cursor 编辑器也叫「Desktop App」，请按时间分辨，别撤掉它。
-    """
+    static let waitingText = "请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来"
+    /// The second sentence is the CLI's own `logout cursor` line, word for word.
+    static let signOutMessage = "退出只删除 Vibe Usage 保存的这份登录；Cursor 本机的登录还能读时，仍会照旧读取用量。"
+        + "Cursor 官网上的这条登录可在 cursor.com 设置的 Sessions 里撤销：它显示为「Desktop App」"
+        + "（每续期一次多一条，按时间认，别撤正在用的 Cursor 编辑器那条），最多 10 分钟生效。"
 
     private var login: CursorLogin { appState.cursorLogin }
+    private var canSignIn: Bool { login.cliSupportsSignIn == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -650,10 +654,12 @@ struct CursorLoginBlock: View {
                     .foregroundStyle(SettingsTheme.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(Self.note)
-                .font(SettingsTheme.caption)
-                .foregroundStyle(SettingsTheme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+            if canSignIn {
+                Text(Self.note)
+                    .font(SettingsTheme.caption)
+                    .foregroundStyle(SettingsTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -670,9 +676,8 @@ struct CursorLoginBlock: View {
     private var state: some View {
         switch login.phase {
         case .signedOut:
-            Text("未登录")
-                .font(SettingsTheme.body)
-                .foregroundStyle(SettingsTheme.secondaryText)
+            // No words: the button sits where every state's button sits.
+            Color.clear.frame(height: 1)
         case .waiting:
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 ProgressView()
@@ -708,8 +713,10 @@ struct CursorLoginBlock: View {
     private var action: some View {
         switch login.phase {
         case .signedOut:
-            Button("登录") { login.signIn() }
-                .buttonStyle(.settings)
+            if canSignIn {
+                Button("登录") { login.signIn() }
+                    .buttonStyle(.settings)
+            }
         case .waiting:
             Button("取消") { login.cancelSignIn() }
                 .buttonStyle(.settings)
@@ -723,8 +730,10 @@ struct CursorLoginBlock: View {
             HStack(spacing: 8) {
                 Button("退出") { login.signOut() }
                     .buttonStyle(.settings)
-                Button("重新登录") { login.signIn() }
-                    .buttonStyle(.settings)
+                if canSignIn {
+                    Button("重新登录") { login.signIn() }
+                        .buttonStyle(.settings)
+                }
             }
         }
     }
