@@ -8,8 +8,9 @@ import SwiftUI
 /// not next to its button: pages scroll and cards clip, and the menu must
 /// hang over both. The button publishes what to show; the overlay places it
 /// under the button (above it when the window is too short) and closes it on
-/// a click outside, Escape, a choice, or when the button moves (the page
-/// scrolled). One menu per window.
+/// a click outside, Escape, a choice, Tab (focus leaving the menu), the window
+/// no longer being key, or when the button moves (the page scrolled). One
+/// menu per window.
 @MainActor
 @Observable
 final class SettingsMenuState {
@@ -120,6 +121,7 @@ enum SettingsMenuPlacement {
 /// The window-level layer that draws the open menu.
 struct SettingsMenuOverlay: View {
     @Environment(SettingsMenuState.self) private var menu
+    @Environment(\.controlActiveState) private var windowState
 
     var body: some View {
         if let request = menu.request {
@@ -138,6 +140,10 @@ struct SettingsMenuOverlay: View {
             }
             // Same origin as `space` (the whole window, title bar included).
             .ignoresSafeArea()
+            // Another window or app took the keyboard: a menu does not stay.
+            .onChange(of: windowState) { _, state in
+                if state != .key { menu.close() }
+            }
         }
     }
 }
@@ -176,6 +182,11 @@ private struct SettingsMenuList: View {
         .focusEffectDisabled()
         .focused($focused)
         .onAppear { focused = true }
+        // Tab (or anything else) moving the focus away closes it.
+        .onChange(of: focused) { _, isFocused in
+            if !isFocused { dismiss() }
+        }
+        .onKeyPress(.tab) { dismiss(); return .ignored }
         .onKeyPress(.escape) { dismiss(); return .handled }
         .onKeyPress(.downArrow) { move(1); return .handled }
         .onKeyPress(.upArrow) { move(-1); return .handled }

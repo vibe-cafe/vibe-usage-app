@@ -103,11 +103,13 @@ struct SettingsThemeTests {
         let suite = "SettingsThemeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
+        // An external-test build in its own preferences domain: the choice is
+        // offered and starts on modern.
         let appState = AppState(
             loadConfig: { nil },
             quotaDefaults: defaults,
             quotaProductDiscoverer: { [] },
-            interfaceStyle: InterfaceStylePreference(rollout: .forced(.modern))
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
         )
         let model = SettingsModel(appState: appState)
         let navigation = SettingsNavigation(defaults: defaults)

@@ -1,3 +1,6 @@
+// Debug only: the fixtures use Debug-only hooks (a forced interface style,
+// sample usage, the test-build diagnostic export row).
+#if DEBUG
 import AppKit
 import SwiftUI
 import Testing
@@ -11,7 +14,8 @@ import Testing
 /// Fixtures only: in-memory preferences, a fake Keychain and CLI, no shared
 /// config, no desktop picture (the preview draws its fallback gradient), no
 /// network. Each window is drawn with `NSHostingView.cacheDisplay`, so text
-/// fields and scroll views render like the real window.
+/// fields and scroll views render like the real window, with the bundled
+/// fonts the modern style uses.
 @MainActor
 @Suite(.serialized)
 struct SettingsRenderTests {
@@ -23,6 +27,7 @@ struct SettingsRenderTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         _ = NSApplication.shared
         NSApp.applicationIconImage = Self.appIcon
+        #expect(AppFonts.register(from: .appResources) == AppFonts.fileNames)
 
         for style in [InterfaceStyle.classic, .modern] {
             for state in SettingsRenderState.all {
@@ -33,6 +38,15 @@ struct SettingsRenderTests {
                 try Self.render(fixture.window, size: CGSize(width: 700, height: state.height),
                                 to: directory.appendingPathComponent("\(name).png"))
             }
+            // A dragged 订阅配额 row (140a).
+            let theme = SettingsTheme.of(style)
+            try Self.render(
+                QuotaDragPreview(provider: .codex, isOn: true, status: (.ok, "已检测"), theme: theme)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(theme.background),
+                size: CGSize(width: 500, height: 100),
+                to: directory.appendingPathComponent("\(style.rawValue)-quotas-drag-preview.png")
+            )
         }
     }
 
@@ -231,6 +245,9 @@ final class SettingsRenderFixture {
     private let suite = "SettingsRender.\(UUID().uuidString)"
     private let state: SettingsRenderState
     private let cursorCLI = CursorLoginTests.FakeCLI()
+    /// `showTokensInMenuBar` writes `UserDefaults.standard` (the test
+    /// runner's own domain); the value it had is put back in `cleanUp`.
+    private let savedShowTokens = UserDefaults.standard.object(forKey: "showTokensInMenuBar")
     private let proxyWatch = CursorLoginTests.ProxyWatchStub()
     let appState: AppState
     let model: SettingsModel
@@ -320,8 +337,11 @@ final class SettingsRenderFixture {
     func cleanUp() {
         appState.cursorLogin.cancelSignIn()
         if state.showTokens {
-            // `showTokensInMenuBar` writes the test runner's own defaults.
-            UserDefaults.standard.removeObject(forKey: "showTokensInMenuBar")
+            if let savedShowTokens {
+                UserDefaults.standard.set(savedShowTokens, forKey: "showTokensInMenuBar")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "showTokensInMenuBar")
+            }
         }
         UserDefaults().removePersistentDomain(forName: suite)
     }
@@ -334,3 +354,4 @@ final class SettingsRenderFixture {
         ProviderRateLimit(provider: .kimiCode, status: .error("fixture"), fetchedAt: Date()),
     ]
 }
+#endif

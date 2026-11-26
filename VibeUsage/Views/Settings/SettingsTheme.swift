@@ -205,17 +205,17 @@ struct SettingsTheme: Sendable {
     )
 }
 
-/// The modern style's two typefaces: Schibsted Grotesk for text, JetBrains
-/// Mono for digits, versions, paths and keys. Until the app bundles them
-/// (#107) both fall back to the system's; switch to the bundled faces here,
-/// the one place Settings asks for them.
+/// The modern style's two typefaces, the new panel's own (`ModernTheme`,
+/// bundled in `Resources/Fonts` and registered by `AppFonts`): Schibsted
+/// Grotesk for text, JetBrains Mono for digits, versions, paths and keys.
+/// Chinese falls back to PingFang SC. Classic keeps the system font.
 enum SettingsFont {
     static func text(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight)
+        ModernTheme.text(size, weight)
     }
 
     static func number(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        ModernTheme.mono(size, weight)
     }
 }
 

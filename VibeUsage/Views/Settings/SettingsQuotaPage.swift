@@ -497,7 +497,17 @@ struct QuotaDragPreview: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             QuotaStatusCell(value: status, isOn: isOn)
-            SettingsSwitchTrack(isOn: isOn)
+            if theme.isModern {
+                SettingsSwitchTrack(isOn: isOn)
+            } else {
+                // The classic preview's own switch: no knob shadow.
+                Capsule()
+                    .fill(isOn ? theme.ok : Color.white.opacity(0.17))
+                    .overlay(alignment: isOn ? .trailing : .leading) {
+                        Circle().fill(Color(settingsHex: 0xF4F4F4)).frame(width: 14, height: 14).padding(2)
+                    }
+                    .frame(width: 30, height: 18)
+            }
         }
         .padding(.leading, theme.isModern ? 16 : 20)
         .padding(.trailing, theme.isModern ? 14 : 18)
