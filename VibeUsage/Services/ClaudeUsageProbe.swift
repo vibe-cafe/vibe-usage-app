@@ -615,14 +615,20 @@ enum ClaudeUsageProbe {
                     }
                     group.addTask {
                         try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                        control.stop()
                         throw ProbeError.timedOut
                     }
                     defer { group.cancelAll() }
-                    guard let first = try await group.next() else {
-                        throw ProbeError.noResponse
+                    do {
+                        guard let first = try await group.next() else {
+                            throw ProbeError.noResponse
+                        }
+                        return first
+                    } catch ProbeError.timedOut {
+                        // Stopping the child closes stdout. Select the timeout first
+                        // so the resulting EOF cannot win the race as noResponse.
+                        control.stop()
+                        throw ProbeError.timedOut
                     }
-                    return first
                 }
                 try Task.checkCancellation()
                 return data
