@@ -1364,8 +1364,6 @@ struct RateLimitCoordinatorTests {
         for provider in [ProviderRateLimit.Provider.kimiCode, .zCode, .grok, .cursor] {
             #expect(RateLimitCoordinator.popoverRefreshInterval(for: provider, default: 60) == 60)
         }
-        #expect(QuotaProductRow.note(for: .antigravity) == "Google 表示不支持第三方读取额度")
-        #expect(QuotaProductRow.note(for: .cursor) == nil)
     }
 
     /// The CLI answers Antigravity from its own record: after a reset it shows

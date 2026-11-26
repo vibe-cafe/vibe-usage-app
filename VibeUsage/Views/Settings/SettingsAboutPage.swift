@@ -102,7 +102,7 @@ struct SettingsAboutPage: View {
     @ViewBuilder
     private var diagnosticSummaryRow: some View {
         SettingsRow(tall: true) {
-            SettingsRowLabel(title: "复制诊断信息", caption: "已脱敏，可以直接贴到群里")
+            SettingsRowLabel(title: "复制诊断信息")
             Spacer(minLength: 8)
             Button {
                 Task { await model.copyDiagnosticSummary() }

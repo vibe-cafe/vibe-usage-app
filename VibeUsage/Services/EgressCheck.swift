@@ -51,15 +51,6 @@ enum EgressCheck {
             case .allow: return "照常读取"
             }
         }
-
-        /// The grey line under the menu, for the option chosen.
-        var caption: String {
-            switch self {
-            case .auto: return "网络在中国大陆等地区时，暂停读取 Codex、Claude、Grok、Antigravity，避免真实 IP 和账号一起暴露。"
-            case .pause: return "暂停读取 Codex、Claude、Grok、Antigravity，检测到代理后自动继续。"
-            case .allow: return "照常读取 Codex、Claude、Grok、Antigravity，厂商可能看到你的真实 IP。"
-            }
-        }
     }
 
     static let modeKey = "egressMode"
