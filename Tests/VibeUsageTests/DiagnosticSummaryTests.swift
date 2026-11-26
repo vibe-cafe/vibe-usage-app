@@ -133,6 +133,9 @@ struct DiagnosticSummaryTests {
         let classic = DiagnosticSummary.render(fields)
         #expect(classic.contains("界面样式：经典"))
         #expect(!classic.contains("界面样式：新版"))
+
+        fields.interfaceStyle = nil
+        #expect(!DiagnosticSummary.render(fields).contains("界面样式"))
     }
 
     /// Even if a hostile value slipped into a whitelisted field by mistake,

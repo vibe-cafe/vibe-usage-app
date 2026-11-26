@@ -53,8 +53,11 @@ final class InterfaceStylePreference {
         "egressMode", "egressCheckEnabled", "egressRequireLocalProxy",
     ]
     private let defaults: UserDefaults?
+    /// A forced (Debug) style can still be switched in memory, so renders and
+    /// manual checks see the settings row; nothing is written to preferences.
+    private var switchesInMemory = false
     private(set) var current: InterfaceStyle
-    var canSelect: Bool { defaults != nil }
+    var canSelect: Bool { defaults != nil || switchesInMemory }
 
     init(domain: String? = nil, rollout: Rollout = .current) {
         switch rollout {
@@ -66,6 +69,7 @@ final class InterfaceStylePreference {
         case .forced(let style):
             defaults = nil
             current = style
+            switchesInMemory = true
             return
         #endif
         case .externalTest, .released:
@@ -86,8 +90,8 @@ final class InterfaceStylePreference {
     }
 
     func select(_ style: InterfaceStyle) {
-        guard let defaults else { return }
-        defaults.set(style.rawValue, forKey: Self.key)
+        guard canSelect else { return }
+        defaults?.set(style.rawValue, forKey: Self.key)
         current = style
     }
 }
