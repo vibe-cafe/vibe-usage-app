@@ -420,7 +420,7 @@ Display names and families (server-supplied):
 
 ## Styling Conventions
 
-The panel and Settings share `appState.interfaceStyle.current` (`.modern` / `.classic`). Settings can offer the choice when `canSelect` is true and apply it with `select(_:)`. Debug builds accept `VIBE_USAGE_FORCE_INTERFACE_STYLE=modern|classic` for rendering. A forced style lasts for that run and never writes a preference. The copied diagnostic summary includes the effective style as 「界面样式：新版」 or 「界面样式：经典」.
+The panel and Settings share `appState.interfaceStyle.current` (`.modern` / `.classic`). Settings can offer the choice when `canSelect` is true and apply it with `select(_:)`. Debug builds accept `VIBE_USAGE_FORCE_INTERFACE_STYLE=modern|classic` for rendering. A forced style lasts for that run and never writes a preference; it can still be switched in memory (`canSelect` is true), so renders and manual checks see the Settings row. The copied diagnostic summary includes the effective style as 「界面样式：新版」 or 「界面样式：经典」 only where the style can be chosen (external-test builds, forced Debug runs, and every build once the gate opens); release builds before that keep today's report.
 
 | Element | Color |
 |---------|-------|

@@ -108,7 +108,7 @@ struct InterfaceStyleTests {
 
     #if DEBUG
     @Test(arguments: ["modern", "classic"])
-    func debugOverrideIsReadOnlyAndDoesNotReplaceTheSavedChoice(raw: String) throws {
+    func debugOverrideSwitchesInMemoryWithoutReplacingTheSavedChoice(raw: String) throws {
         let opposite: InterfaceStyle = raw == "modern" ? .classic : .modern
         let forced = try #require(InterfaceStylePreference.Rollout.debugOverride(
             environment: ["VIBE_USAGE_FORCE_INTERFACE_STYLE": raw]
@@ -116,9 +116,10 @@ struct InterfaceStyleTests {
         withPreferences { domain, defaults in
             defaults.set(opposite.rawValue, forKey: "interfaceStyle")
             let preview = InterfaceStylePreference(domain: domain, rollout: forced)
-            preview.select(opposite)
             #expect(preview.current.rawValue == raw)
-            #expect(!preview.canSelect)
+            #expect(preview.canSelect)
+            preview.select(opposite)
+            #expect(preview.current == opposite)
             #expect(InterfaceStylePreference(domain: domain, rollout: .released).current == opposite)
         }
     }
