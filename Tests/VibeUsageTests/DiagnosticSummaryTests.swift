@@ -360,6 +360,18 @@ struct DiagnosticSummaryTests {
 
     // MARK: - Claude attempt lines
 
+    /// `rate_limits_available: false` names what Claude Code is not using,
+    /// not the account: a subscriber whose Claude Code runs on a token lands here.
+    @Test
+    func claudeAttemptWithoutPlanLimitsNamesTheSignIn() {
+        let text = DiagnosticSummary.attemptText(.init(
+            template: "~/.local/bin/claude", kind: .cli, initializeSeconds: 1.0,
+            usageSeconds: 0.0, outcome: .notApplicable, exit: .code(143)
+        ))
+        #expect(text.contains("Claude Code 未使用订阅登录（令牌 / API Key / 云厂商，或未登录）"))
+        #expect(!text.contains("账号没有订阅额度"))
+    }
+
     @Test
     func claudeSectionListsEachCandidateWithTimingsAndExit() {
         let log = ClaudeUsageProbe.AttemptLog(

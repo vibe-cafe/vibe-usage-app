@@ -61,6 +61,12 @@ struct SettingsWindowTests {
         #expect(SettingsQuotaStatus.status(for: codex, zCodeKeyConfigured: false, warningSnapshot: .init(
             provider: .codex, status: .noData, liveFailure: .credentialsNotFound
         )) == (.warning, "需登录"))
+
+        // Claude names what Claude Code is not using; other products keep 「不适用」.
+        let claude = QuotaProduct(provider: .claudeCode, availability: .ready, isDetected: true)
+        #expect(SettingsQuotaStatus.status(for: claude, zCodeKeyConfigured: false, warningSnapshot: .init(
+            provider: .claudeCode, status: .noData, fetchedAt: Date(), emptyReason: .sessionWithoutPlanLimits
+        )) == (.warning, "未用订阅登录"))
     }
 
     // MARK: - Navigation

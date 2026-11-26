@@ -337,7 +337,7 @@ enum DiagnosticSummary {
         parts.append("get_usage " + (attempt.usageSeconds.map(seconds) ?? "未完成"))
         switch attempt.outcome {
         case .ok: parts.append("正常")
-        case .notApplicable: parts.append("账号没有订阅额度（API Key / Bedrock / Vertex）")
+        case .notApplicable: parts.append("Claude Code 未使用订阅登录（令牌 / API Key / 云厂商，或未登录）")
         case let .failed(reason): parts.append(RateLimitCardView.liveFailureText(reason, provider: .claudeCode))
         case .pending: parts.append("未结束")
         }

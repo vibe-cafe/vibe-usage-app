@@ -153,7 +153,11 @@ struct RateLimitCardView: View {
         case .notEntitled:
             return "未订阅 \(snapshot.provider.displayName)"
         case .sessionWithoutPlanLimits:
-            return "当前登录方式不含订阅额度"
+            // Claude Code answers `rate_limits_available: false` for a token
+            // (a gateway or relay), an API key, a cloud provider, and for no
+            // sign-in at all; what they share is that it is not using a
+            // subscription sign-in. The subscription itself may be fine.
+            return snapshot.provider == .claudeCode ? "Claude Code 未使用订阅登录" : "当前登录方式不含订阅额度"
         case .periodEnded:
             switch snapshot.provider {
             case .grok: return "账期已结束 · 用一次 Grok 后更新"

@@ -43,8 +43,13 @@ struct RateLimitCardViewTests {
         ]
 
         #expect(messages == ["额度已用满 · 等待重置", "没有生效的额度窗口", "未订阅 OpenCode Go",
-                             "当前登录方式不含订阅额度", "组织策略关闭了 Claude Code 非必要流量 · 无法读取",
+                             "Claude Code 未使用订阅登录", "组织策略关闭了 Claude Code 非必要流量 · 无法读取",
                              "没读到额度，原因未知", "未检测到安装"])
+        // The same reason from another product keeps the general wording.
+        #expect(RateLimitCardView.emptyStateText(
+            for: emptySnapshot(.grok, reason: .sessionWithoutPlanLimits),
+            isDetected: true
+        ) == "当前登录方式不含订阅额度")
         let placeholder = ProviderRateLimit(provider: .grok, status: .noData, fetchedAt: nil)
         #expect(RateLimitCardView.emptyStateText(for: placeholder, isDetected: true) == "尚未读取")
     }
