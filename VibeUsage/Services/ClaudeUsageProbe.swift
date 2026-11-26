@@ -1,5 +1,20 @@
 import Foundation
 
+/// A process-local comparison of the subscription account reported by Claude
+/// Code at initialize and the verified account in its config cache. Neither
+/// the account details nor the comparison key are persisted or logged.
+struct ClaudeQuotaAccountScope: Equatable, Sendable {
+    private let fingerprint: Int
+
+    init?(email: String?, organization: String?) {
+        guard let email, !email.isEmpty else { return nil }
+        var hash = Hasher()
+        hash.combine(email)
+        hash.combine(organization)
+        fingerprint = hash.finalize()
+    }
+}
+
 /// Reads Claude's subscription quota by asking a Claude Code binary for it over
 /// the stdio control protocol — the same `get_usage` request the Agent SDK
 /// exposes as `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()`.
@@ -148,26 +163,27 @@ enum ClaudeUsageProbe {
             }
             let slot = recorder.begin(candidate)
             do {
-                let raw = try await run(
+                let reply = try await run(
                     candidate: candidate,
                     timeout: min(candidateTimeout, remaining),
                     recorder: recorder,
                     slot: slot,
                     environment: environment
                 )
-                guard let payload = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
+                guard let payload = try? JSONSerialization.jsonObject(with: reply.usage) as? [String: Any] else {
                     throw ProbeError.noResponse
                 }
                 if limitsAreNotApplicable(payload) {
                     throw ProbeError.limitsNotApplicable
                 }
-                guard let snapshot = parse(payload, now: now) else {
+                guard var snapshot = parse(payload, now: now) else {
                     // Either `rate_limits` was null (the binary's own fetch of
                     // the usage endpoint failed — retryable) or the payload
                     // drifted. Another binary won't parse it differently, but a
                     // cache fallback still beats an error card.
                     throw ProbeError.limitsUnavailable
                 }
+                snapshot.claudeAccountScope = reply.accountScope
                 debugLog("[rate-limit] claude probe ok via \(candidate.label)")
                 recorder.update(slot) { $0.outcome = .ok }
                 finish()
@@ -528,13 +544,15 @@ enum ClaudeUsageProbe {
         ["subtype": "get_usage", "skip_behaviors": true]
     }
 
+    private typealias UsageReply = (usage: Data, accountScope: ClaudeQuotaAccountScope?)
+
     private static func run(
         candidate: Binary,
         timeout: TimeInterval,
         recorder: AttemptRecorder,
         slot: Int,
         environment: [String: String]
-    ) async throws -> Data {
+    ) async throws -> UsageReply {
         let process = Process()
         process.executableURL = candidate.url
         process.arguments = processArguments
@@ -576,8 +594,8 @@ enum ClaudeUsageProbe {
         return try await withTaskCancellationHandler {
             do {
                 let data = try await withThrowingTaskGroup(
-                    of: Data.self,
-                    returning: Data.self
+                    of: UsageReply.self,
+                    returning: UsageReply.self
                 ) { group in
                     group.addTask {
                         try await exchange(
@@ -638,7 +656,7 @@ enum ClaudeUsageProbe {
         stdin: FileHandle,
         stdout: FileHandle,
         onStep: @Sendable (ExchangeStep) -> Void = { _ in }
-    ) async throws -> Data {
+    ) async throws -> UsageReply {
         func send(_ object: [String: Any]) throws {
             guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
             do {
@@ -656,6 +674,7 @@ enum ClaudeUsageProbe {
         ])
 
         var sentUsageRequest = false
+        var accountScope: ClaudeQuotaAccountScope?
         for try await line in stdout.bytes.lines {
             try Task.checkCancellation()
             guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
@@ -665,6 +684,12 @@ enum ClaudeUsageProbe {
 
             switch response["request_id"] as? String {
             case "vibe-init" where !sentUsageRequest:
+                if response["subtype"] as? String == "success",
+                   let info = response["response"] as? [String: Any],
+                   let account = info["account"] as? [String: Any] {
+                    accountScope = ClaudeQuotaAccountScope(email: account["email"] as? String,
+                                                          organization: account["organization"] as? String)
+                }
                 onStep(.initialized)
                 sentUsageRequest = true
                 try send([
@@ -683,7 +708,7 @@ enum ClaudeUsageProbe {
                 else {
                     throw ProbeError.noResponse
                 }
-                return data
+                return (data, accountScope)
             default:
                 continue
             }
@@ -796,6 +821,7 @@ enum ClaudeUsageProbe {
 
         return ProviderRateLimit(
             provider: .claudeCode,
+            modelScopedMeters: modelScopedMeters(limits?["model_scoped"]),
             fiveHour: fiveHour,
             sevenDay: sevenDay,
             sevenDayOpus: opus,
@@ -816,6 +842,25 @@ enum ClaudeUsageProbe {
     /// condition isn't retried against every candidate binary.
     static func limitsAreNotApplicable(_ payload: [String: Any]) -> Bool {
         payload["rate_limits_available"] as? Bool == false
+    }
+
+    static func modelScopedMeters(_ raw: Any?) -> [RateLimitMeter] {
+        (raw as? [Any] ?? []).compactMap { entry in
+            guard let row = entry as? [String: Any] else { return nil }
+            return modelMeter(name: row["display_name"], used: row["utilization"], row: row)
+        }
+    }
+
+    static func modelMeter(name: Any?, used: Any?, row: [String: Any]) -> RateLimitMeter? {
+        guard let name = (name as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty, let used = number(used) else { return nil }
+        let duration = number(row["window_duration_seconds"])
+        let window = RateLimitWindow(
+            utilization: used,
+            resetsAt: (row["resets_at"] as? String).flatMap(parseISO8601),
+            windowDuration: duration.flatMap { $0 > 0 ? $0 : nil }
+        )
+        return RateLimitMeter(id: name, label: name, window: window)
     }
 
     /// `{ utilization: 0-100, resets_at: ISO-8601 }`. A window whose reset has

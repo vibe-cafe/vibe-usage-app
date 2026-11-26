@@ -586,6 +586,105 @@ struct RateLimitCoordinatorTests {
         )
     }
 
+    /// Exercise both actual source formats. The probe answers on stdio and
+    /// the cache is a fixture file; neither contains a real account.
+    @Test @MainActor
+    func claudeRetainsOnlyLiveModelWindowsForTheSameAccountBeforeReset() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let binary = dir.appendingPathComponent("claude")
+        let script = #"""
+        #!/bin/sh
+        read -r request
+        echo '{"type":"control_response","response":{"request_id":"vibe-init","subtype":"success","response":{"account":{"email":"a@example.invalid","organization":"Fixture"}}}}'
+        read -r request
+        echo '{"type":"control_response","response":{"request_id":"vibe-usage","subtype":"success","response":{"rate_limits":{"seven_day":{"utilization":42},"model_scoped":[{"display_name":"Fable","utilization":91,"resets_at":"2099-01-01T00:00:00Z"},{"display_name":"Expired","utilization":80,"resets_at":"2000-01-01T00:00:00Z"},{"display_name":"Undated","utilization":12}]}}}}'
+        """#
+        try Data(script.utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let live = try await ClaudeUsageProbe.fetch(
+            candidates: [.init(url: binary, kind: .cli, label: "fixture")],
+            now: now.addingTimeInterval(-60), timeout: 5)
+        #expect(live.modelScopedMeters.map(\.label) == ["Fable", "Expired", "Undated"])
+
+        let (state, defaults, suite) = selectedAppState([.claudeCode])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var nextLive: ProviderRateLimit? = live
+        var cache: ProviderRateLimit?
+        var duringProbe: ProviderRateLimit?
+        let coordinator = RateLimitCoordinator(appState: state,
+            claudeNonessentialTrafficDisabled: { false },
+            fetchClaudeLive: {
+                duringProbe = state.rateLimits.first { $0.provider == .claudeCode }
+                guard let nextLive else { throw ClaudeUsageProbe.ProbeError.timedOut }
+                return nextLive
+            }, loadClaudeCache: { cache })
+        func cached(_ account: String?, at time: Date) throws -> ProviderRateLimit {
+            var profile = ["accountUuid": "id", "organizationName": "Fixture"]
+            profile["emailAddress"] = account
+            let file: [String: Any] = [
+                "oauthAccount": profile,
+                "cachedUsageUtilization": ["accountUuid": "id", "fetchedAtMs": time.timeIntervalSince1970 * 1000,
+                                           "utilization": ["seven_day": ["utilization": 55]]],
+            ]
+            let url = dir.appendingPathComponent("cache.json")
+            try JSONSerialization.data(withJSONObject: file).write(to: url)
+            return try #require(ClaudeUsageCache.configSnapshot(from: url, now: now))
+        }
+        for account in ["a@example.invalid", "b@example.invalid", nil] {
+            // Both sides of the existing whole-card freshness comparison.
+            for age in [10.0, 100.0] {
+                nextLive = live
+                cache = nil
+                await coordinator.refreshClaude()
+                nextLive = nil
+                cache = try cached(account, at: now.addingTimeInterval(-age))
+                await coordinator.refreshClaude()
+                let expected = account == "a@example.invalid" ? ["Fable"] : []
+                #expect(duringProbe?.modelScopedMeters.map(\.label) == expected)
+                #expect(duringProbe?.sevenDay?.utilization == (age < 60 ? 55 : 42))
+                #expect(state.rateLimits.first?.modelScopedMeters.map(\.label) == expected)
+                #expect(state.rateLimits.first?.liveFailure == .claudeTimedOut)
+            }
+        }
+
+        // A newer cache may paint its own percentage while probing. Only an
+        // actual live observation is eligible to fill the next live omission.
+        cache = nil
+        nextLive = live
+        await coordinator.refreshClaude()
+        cache = try cached("a@example.invalid", at: now)
+        cache?.modelScopedMeters = [RateLimitMeter(id: "Fable", label: "Fable",
+            window: RateLimitWindow(utilization: 94, resetsAt: now.addingTimeInterval(3600)))]
+        nextLive?.modelScopedMeters = []
+        await coordinator.refreshClaude()
+        #expect(duringProbe?.modelScopedMeters.map { $0.window.utilization } == [94])
+        #expect(state.rateLimits.first?.modelScopedMeters.map { $0.window.utilization } == [91])
+    }
+
+    @Test @MainActor
+    func repeatedCacheReadShowsReportedModelButCannotCarryItIntoAnotherRead() async {
+        let (state, defaults, suite) = selectedAppState([.claudeCode])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let meter = RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(
+            utilization: 70, resetsAt: Date().addingTimeInterval(3600)))
+        var cached = ProviderRateLimit(provider: .claudeCode, modelScopedMeters: [meter],
+            sevenDay: RateLimitWindow(utilization: 15), status: .ok, dataAsOf: Date(), source: .cache)
+        let coordinator = RateLimitCoordinator(appState: state,
+            claudeNonessentialTrafficDisabled: { false },
+            fetchClaudeLive: { throw ClaudeUsageProbe.ProbeError.timedOut },
+            loadClaudeCache: { cached })
+        for _ in 0..<2 {
+            await coordinator.refreshClaude()
+            #expect(state.rateLimits.first?.modelScopedMeters == [meter])
+        }
+        cached.modelScopedMeters = []
+        await coordinator.refreshClaude()
+        #expect(state.rateLimits.first?.modelScopedMeters.isEmpty == true)
+    }
+
     /// The cold-open contract: the on-disk cache paints first so the card is
     /// never blank during the probe's ~2.5s round trip, then the live reading
     /// replaces it.

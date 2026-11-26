@@ -15,6 +15,31 @@ struct ClaudeUsageCacheTests {
 
     // MARK: - Layer 1: ~/.claude.json
 
+    @Test
+    func readsNamedWindowsWithOnlyTheirOwnTiming() throws {
+        var file = configFile(fetchedAt: now)
+        var cached = try #require(file["cachedUsageUtilization"] as? [String: Any])
+        var limits = try #require(cached["utilization"] as? [String: Any])
+        limits["model_scoped"] = [
+            ["display_name": "Fable", "utilization": 91.5, "resets_at": "2026-07-29T04:00:00Z",
+             "window_duration_seconds": 172800],
+            ["display_name": "Other", "utilization": 0],
+            ["display_name": "Unavailable", "utilization": NSNull()],
+        ]
+        cached["utilization"] = limits
+        file["cachedUsageUtilization"] = cached
+        let url = try write(file)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let snapshot = try #require(ClaudeUsageCache.configSnapshot(from: url, now: now))
+        #expect(snapshot.modelScopedMeters == [
+            RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(
+                utilization: 91.5, resetsAt: now.addingTimeInterval(86_400), windowDuration: 172_800)),
+            RateLimitMeter(id: "Other", label: "Other", window: RateLimitWindow(utilization: 0)),
+        ])
+        #expect(snapshot.meters.isEmpty)
+    }
+
     /// Verbatim shape Claude Code writes after each successful usage fetch.
     private func configFile(
         fetchedAt: Date,
@@ -37,6 +62,27 @@ struct ClaudeUsageCacheTests {
                 ],
             ],
         ]
+    }
+
+    @Test
+    func readsModelWindowsFromClaudesUnprojectedCache() throws {
+        let usage: [String: Any] = [
+            "seven_day": ["utilization": 16],
+            "limits": [
+                ["kind": "weekly_scoped", "percent": 25, "scope": ["model": ["display_name": "Fable"]],
+                 "resets_at": "2026-07-29T04:00:00Z"],
+                ["kind": "weekly_scoped", "percent": 40, "scope": ["surface": ["display_name": "Code"]]],
+            ],
+        ]
+        let url = try write([
+            "oauthAccount": ["accountUuid": "fixture"],
+            "cachedUsageUtilization": ["accountUuid": "fixture", "utilization": usage,
+                                       "fetchedAtMs": now.timeIntervalSince1970 * 1000],
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let snapshot = try #require(ClaudeUsageCache.configSnapshot(from: url, now: now))
+        #expect(snapshot.modelScopedMeters == [RateLimitMeter(id: "Fable", label: "Fable",
+            window: RateLimitWindow(utilization: 25, resetsAt: now.addingTimeInterval(86_400)))])
     }
 
     @Test
