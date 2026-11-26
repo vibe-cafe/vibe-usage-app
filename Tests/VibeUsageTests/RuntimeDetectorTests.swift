@@ -59,14 +59,19 @@ final class RuntimeDetectorTests: XCTestCase {
     /// inherits are the ones the CLI uploads with — on every runtime.
     @MainActor
     func testIdentityReachesTheCLIOnEveryRuntime() {
-        let panel = AppState()
-        let base = ["PATH": "/usr/bin:/bin", "VIBE_USAGE_SURFACE": "cli", "HOME": "/Users/test"]
+        let style = AppState().interfaceStyle
+        let base = ["PATH": "/usr/bin:/bin", "VIBE_USAGE_SURFACE": "cli",
+                    "VIBE_USAGE_INTERFACE_STYLE": "modern", "HOME": "/Users/test"]
         for kind in [RuntimeDetector.Kind.bundledNode, .systemNode, .bun, .npx] {
             let env = RuntimeDetector.Runtime(kind: kind, executablePath: "/opt/homebrew/bin/node",
                                               launcherPath: launcher).environment(base: base)
             XCTAssertEqual(env["VIBE_USAGE_SURFACE"], "mac-app", "\(kind)")
             XCTAssertEqual(env["VIBE_USAGE_SURFACE_VERSION"], AppConfig.version, "\(kind)")
-            XCTAssertEqual(env["VIBE_USAGE_INTERFACE_STYLE"], panel.interfaceStyle.current.rawValue, "\(kind)")
+            if style.canSelect {
+                XCTAssertEqual(env["VIBE_USAGE_INTERFACE_STYLE"], style.current.rawValue, "\(kind)")
+            } else {
+                XCTAssertNil(env["VIBE_USAGE_INTERFACE_STYLE"], "\(kind)")
+            }
             XCTAssertEqual(env["HOME"], "/Users/test")
         }
     }
