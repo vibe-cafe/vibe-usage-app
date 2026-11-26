@@ -78,6 +78,10 @@ struct QuotaOverviewDisplay {
 struct QuotaSubscriptionDisplay {
     enum Action { case retry, cursorSettings }
 
+    enum ReadState {
+        case normal, loading, needsLogin, loginExpired, readFailed, paused, organizationPolicy, nonSubscriptionLogin
+    }
+
     let provider: ProviderRateLimit.Provider
     let planLabel: String?
     let resetCreditsCount: Int?
@@ -90,37 +94,29 @@ struct QuotaSubscriptionDisplay {
     let comment: String?
     private let reading: Reading
     let sourceNote: String?
-    var buttonRemaining: Double? { reading == .exhausted ? 0 : tightest?.remaining }
-    var showsSkeleton: Bool { reading == .loading }
-    var detailTitle: String? {
-        guard rows.isEmpty else { return nil }
-        if case .failed = reading { return QuotaStatusText.readFailureTitle }
-        return reading.message
-    }
-    var detailReason: String? {
-        if case .failed(let reason) = reading { return reason }
-        return nil
-    }
+    let buttonRemaining: Double?
+    var readState: ReadState { reading.state }
+    var commentTone: QuotaPaceTone { readState == .normal && comment != nil ? tone : .neutral }
+    var showsSkeleton: Bool { readState == .loading }
+    var detailTitle: String? { rows.isEmpty ? reading.title : nil }
+    var detailReason: String? { reading.reason }
     var showsWhiteDot: Bool {
-        switch reading {
-        case .paused, .login, .failed, .policy, .unreadable: true
-        default: false
+        switch readState {
+        case .paused, .needsLogin, .loginExpired, .readFailed: true
+        case .organizationPolicy: rows.isEmpty
+        case .normal, .loading, .nonSubscriptionLogin: false
         }
     }
-    var action: Action? {
-        switch reading {
-        case .login(_, let action): action
-        case .failed: .retry
-        default: nil
-        }
-    }
+    var action: Action? { reading.action }
     var buttonStatus: String {
-        if case .paused = reading { return "读取已暂停" }
-        if let message = reading.message { return message }
+        if readState == .paused { return "读取已暂停" }
+        if let label = reading.shortReason(for: provider) { return label }
+        if showsSkeleton { return "正在读取…" }
+        if buttonRemaining == 0 { return "已用完" }
         switch tone {
         case .red: return "快用完"
         case .amber: return "偏快"
-        case .neutral: return tightest == nil ? (rows.first?.message ?? "暂无订阅配额数据") : "正常"
+        case .neutral: return tightest == nil ? (comment ?? "暂无订阅配额数据") : "正常"
         }
     }
 
@@ -136,8 +132,9 @@ struct QuotaSubscriptionDisplay {
         provider = snapshot.provider
         planLabel = snapshot.planLabel
         resetCreditsCount = snapshot.resetCreditsCount
-        reading = Reading(snapshot: snapshot, refreshing: refreshing, detected: detected, zCodeRegion: zCodeRegion)
-        if snapshot.status == .ok && reading.displaysMeters {
+        reading = Reading.resolve(snapshot, refreshing: refreshing, detected: detected, zCodeRegion: zCodeRegion)
+        let reportedExhausted = snapshot.emptyReason == .limitReached && reading.state == .normal
+        if snapshot.status == .ok && !reportedExhausted {
             rows = QuotaPanelMeter.rows(snapshot: snapshot, modelMeters: modelMeters, now: now)
         } else {
             rows = []
@@ -146,6 +143,7 @@ struct QuotaSubscriptionDisplay {
         let plan = rows.filter { !$0.isExtra }
         let current = plan.filter { $0.remaining != nil }
         tightest = current.min { ($0.remaining ?? 100) < ($1.remaining ?? 100) }
+        buttonRemaining = reportedExhausted ? 0 : tightest?.remaining
 
         // Only primary windows draw rings. An expired primary must never paint its old reading.
         let rings = plan.prefix(2).filter { $0.remaining != nil }.sorted {
@@ -153,91 +151,92 @@ struct QuotaSubscriptionDisplay {
         }
         outer = rings.first
         inner = rings.dropFirst().first
-        let worst = current.max {
-            ($0.tone.rawValue, $0.lag ?? -.infinity) < ($1.tone.rawValue, $1.lag ?? -.infinity)
-        }
-        tone = reading == .exhausted ? .red : worst?.tone ?? .neutral
-        if let worst, worst.tone != .neutral, !rings.contains(worst) {
-            additionalAlert = worst
-        } else {
-            additionalAlert = nil
-        }
-        if reading != .meters {
-            comment = reading.comment
+        let worstTone = current.map(\.tone).max { $0.rawValue < $1.rawValue } ?? .neutral
+        tone = reportedExhausted ? .red : worstTone
+        // The two primary windows already have bars. Use the alert to name another
+        // equally urgent allowance, even when a primary window has a larger lag.
+        additionalAlert = worstTone == .neutral ? nil : plan.dropFirst(2).first { $0.tone == worstTone }
+        if let reason = reading.shortReason(for: provider) {
+            comment = reason
+        } else if buttonRemaining == 0 {
+            comment = "已用完"
         } else if let lag = current.compactMap(\.commentLag).max() {
             if tone == .red && lag <= 0 { comment = nil }
-            else if tone == .red || lag > 5 { comment = "超额 \(Int(lag.rounded()))%" }
+            else if tone == .red || lag > 5 { comment = "超额 \(max(1, Int(lag.rounded())))%" }
             else if lag < -5 { comment = "余量 \(Int(-lag.rounded()))%" }
             else { comment = "进度正常" }
         } else {
-            comment = current.isEmpty ? plan.first?.message : nil
+            comment = current.isEmpty && !plan.isEmpty ? "已重置" : nil
         }
     }
 
-    private enum Reading: Equatable {
-        case meters, loading, exhausted
-        case paused(String), policy(String), failed(String?), noPlan(String), empty(String), unreadable(String)
-        case login(String, Action)
+    private struct Reading {
+        let state: ReadState
+        var title: String?
+        var reason: String?
+        var action: Action?
+        var emptyLabel: String?
 
-        var displaysMeters: Bool {
-            switch self {
-            case .paused, .meters: true
-            default: false
-            }
-        }
-        var message: String? {
-            switch self {
-            case .meters: nil
-            case .loading: "正在读取…"
-            case .exhausted: "已用完"
-            case .failed(let reason): reason ?? QuotaStatusText.readFailureTitle
-            case .login(let text, _), .paused(let text), .policy(let text),
-                 .noPlan(let text), .empty(let text), .unreadable(let text): text
-            }
-        }
-        var comment: String? {
-            switch self {
-            case .loading: nil
+        func shortReason(for provider: ProviderRateLimit.Provider) -> String? {
+            switch state {
+            case .normal, .loading: emptyLabel
+            case .needsLogin: provider == .zCode ? "需 Key" : "需登录"
+            case .loginExpired: provider == .zCode ? "Key 无效" : "登录已失效"
+            case .readFailed: "读取失败"
             case .paused: "已暂停读取"
-            case .noPlan: "未使用订阅登录"
-            default: message
+            case .organizationPolicy: "组织策略"
+            case .nonSubscriptionLogin: "未使用订阅登录"
             }
         }
 
-        init(snapshot: ProviderRateLimit, refreshing: Bool, detected: Bool, zCodeRegion: ZCodeQuotaRegion) {
-            if let failure = snapshot.liveFailure, failure.isPause,
-               failure.isNetworkPause || snapshot.status != .ok {
-                let reason = QuotaStatusText.liveFailureText(failure, provider: snapshot.provider)
-                self = failure.isNetworkPause ? .paused(reason) : .policy(reason)
-                return
+        static func resolve(_ snapshot: ProviderRateLimit, refreshing: Bool, detected: Bool,
+                            zCodeRegion: ZCodeQuotaRegion) -> Self {
+            let failure = snapshot.liveFailure
+            let reason = failure.map { QuotaStatusText.liveFailureText($0, provider: snapshot.provider) }
+            if let failure, failure.isPause {
+                return Self(state: failure.isNetworkPause ? .paused : .organizationPolicy, title: reason)
             }
-            if snapshot.emptyReason == .limitReached {
-                self = .exhausted
-                return
-            }
-            if snapshot.status != .ok && refreshing {
-                self = .loading
-                return
-            }
-            if snapshot.provider == .cursor, let failure = snapshot.liveFailure, failure.isCursorSignIn {
-                self = .login(QuotaStatusText.liveFailureText(failure, provider: .cursor), .cursorSettings)
-                return
+            if snapshot.status != .ok && refreshing && snapshot.emptyReason != .limitReached {
+                return Self(state: .loading, title: "正在读取…")
             }
             switch snapshot.status {
-            case .ok: self = .meters
-            case .unauthorized: self = .login(QuotaStatusText.authorizationText(for: snapshot, zCodeRegion: zCodeRegion), .retry)
+            case .ok: return Self(state: .normal)
+            case .unauthorized:
+                let title = QuotaStatusText.authorizationText(for: snapshot, zCodeRegion: zCodeRegion)
+                return credentialOrReadFailure(snapshot, title: title, action: .retry)
             case .retryableError, .error:
-                self = .failed(snapshot.liveFailure.map { QuotaStatusText.liveFailureText($0, provider: snapshot.provider) })
-            case .disabled: self = .empty("订阅配额未启用")
+                return Self(state: .readFailed, title: QuotaStatusText.readFailureTitle, reason: reason, action: .retry)
+            case .disabled: return Self(state: .normal, title: "订阅配额未启用", emptyLabel: "未启用")
             case .noData:
                 let text = QuotaStatusText.emptyStateText(for: snapshot, isDetected: detected)
                 switch snapshot.emptyReason {
-                case .nonessentialTrafficDisabled: self = .policy(text)
-                case .sessionWithoutPlanLimits: self = .noPlan(text)
-                case nil where snapshot.liveFailure != nil: self = .unreadable(text)
-                default: self = .empty(text)
+                case .nonessentialTrafficDisabled: return Self(state: .organizationPolicy, title: text)
+                case .sessionWithoutPlanLimits: return Self(state: .nonSubscriptionLogin, title: text)
+                case .noWindow: return Self(state: .normal, title: text, emptyLabel: "无窗口")
+                case .notEntitled: return Self(state: .normal, title: text, emptyLabel: "未订阅")
+                case .periodEnded: return Self(state: .normal, title: text, emptyLabel: "周期已结束")
+                case .noLocalRecord: return Self(state: .normal, title: text, emptyLabel: "无本机记录")
+                case .limitReached: return Self(state: .normal, title: "已用完")
+                case nil:
+                    if failure != nil {
+                        return credentialOrReadFailure(snapshot, title: text)
+                    }
+                    let label = snapshot.fetchedAt == nil ? "尚未读取" : (detected ? "无数据" : "未检测到安装")
+                    return Self(state: .normal, title: text, emptyLabel: label)
                 }
             }
+        }
+
+        private static func credentialOrReadFailure(_ snapshot: ProviderRateLimit, title: String, action: Action? = nil) -> Self {
+            let state: ReadState = switch snapshot.liveFailure {
+            case .credentialsNotFound, .signInRequired: .needsLogin
+            case .credentialsRejected where snapshot.provider == .antigravity: .needsLogin
+            case .credentialsExpired, .credentialsRejected, .signInExpired: .loginExpired
+            case nil: .loginExpired
+            default: .readFailed
+            }
+            let opensSettings = snapshot.provider == .cursor && snapshot.liveFailure?.isCursorSignIn == true
+            return Self(state: state, title: title, action: opensSettings ? .cursorSettings : action)
         }
     }
 }
@@ -337,7 +336,7 @@ struct QuotaPanelMeter: Equatable {
             // At the current rate the quota runs out before reset exactly when usage is ahead of time.
             let runsOutBeforeReset = lag > 0
             prediction = runsOutBeforeReset ? .runsOutIn(eta) : .untilReset
-            if runsOutBeforeReset && (remaining < 10 || eta <= 3_600) { tone = .red }
+            if left - eta >= 15 * 60 && (remaining < 10 || eta <= 3_600) { tone = .red }
             else if lag > 5 { tone = .amber }
             else { tone = .neutral }
         }

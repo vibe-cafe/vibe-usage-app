@@ -83,13 +83,15 @@ struct QuotaPanelDisplayTests {
             (10, 100, 85, .amber, "超额 75%", .runsOutIn(10 * 15 * hours / 90)),
             (10, 100, 50, .amber, "超额 40%", .runsOutIn(10 * 50 * hours / 90)),
             (20, 6, 100.0 / 3, .red, "超额 13%", .runsOutIn(hours)),
-            (49, 2, 50, .red, "超额 1%", .runsOutIn(49 * hours / 51)),
+            (49, 2, 50, .neutral, "进度正常", .runsOutIn(49 * hours / 51)),
+            (19, 5, 20, .neutral, "进度正常", .runsOutIn(19 * 4 * hours / 81)),
             (9, 100, 10, .red, "超额 1%", .runsOutIn(9 * 90 * hours / 91)),
+            (9, 168, 9.2, .red, "超额 1%", .runsOutIn(9 * 168 * 0.908 * hours / 91)),
             (7, 8, 25.0 / 480 * 100, .neutral, "进度正常", .untilReset),
             (7, 5, 7, .neutral, "进度正常", .untilReset),
             (6.8, 5, 6.8, .neutral, "进度正常", .untilReset),
             (15.8, 100, 20.8, .neutral, "进度正常", .runsOutIn(15.8 * 79.2 * hours / 84.2)),
-            (0, 20, 99, .red, "超额 99%", nil),
+            (0, 20, 99, .red, "已用完", nil),
             (100, 20, 50, .neutral, "余量 50%", .untilReset),
         ]
         for example in examples {
@@ -98,10 +100,30 @@ struct QuotaPanelDisplayTests {
             #expect(result.overview.tone == example.tone)
             #expect(row.tone == example.tone)
             #expect(result.detail?.comment == example.comment)
+            #expect(result.detail?.commentTone == (example.comment == nil ? .neutral : example.tone))
             if case let (.runsOutIn(actual)?, .runsOutIn(expected)?) = (row.prediction, example.prediction) {
                 #expect(abs(actual - expected) < 0.001)
             } else {
                 #expect(row.prediction == example.prediction)
+            }
+        }
+    }
+
+    @Test func bothForecastAlertsRequireAtLeastFifteenMinutesBeforeReset() throws {
+        // At 80% used the ETA is 57 minutes. At 92% used it is nearly four hours,
+        // so only the low-remainder rule can raise the second alert.
+        for (used, duration) in [(80.0, 5 * hours), (92.0, 50 * hours)] {
+            let elapsedAtCutoff = (duration - 900) * used / 100
+            for offset in [-1.0, 0.0, 1.0] {
+                let left = duration - elapsedAtCutoff + offset
+                let meter = RateLimitWindow(utilization: used, resetsAt: now.addingTimeInterval(left), windowDuration: duration)
+                let row = try #require(panel(snapshot(.codex, meter, nil)).detail?.outer)
+                #expect(row.tone == (offset < 0 ? .neutral : .red))
+                guard case .runsOutIn(let eta) = row.prediction else {
+                    Issue.record("Expected an exhaustion forecast even inside the alert margin")
+                    continue
+                }
+                #expect(eta < left)
             }
         }
     }
@@ -126,10 +148,37 @@ struct QuotaPanelDisplayTests {
         #expect(weekly.timeUntilReset == nil && weekly.tone == .neutral)
         #expect(detail.rows.last?.remaining == nil)
         #expect(detail.rows.last?.message == "已重置，等下次读取")
-        let exhausted = panel(snapshot(.codex, .init(utilization: 100), nil))
-        #expect(exhausted.detail?.tone == .red)
+        let exhausted = try #require(panel(snapshot(.codex, .init(utilization: 100), nil)).detail)
+        #expect(exhausted.outer?.windowDuration == nil && exhausted.outer?.prediction == nil)
+        #expect(exhausted.comment == "已用完" && exhausted.commentTone == .red && exhausted.buttonStatus == "已用完")
         let noReset = panel(snapshot(.codex, .init(utilization: 91, windowDuration: 5 * hours), nil))
         #expect(noReset.detail?.tone == .red && noReset.detail?.comment == nil)
+    }
+
+    @Test func exhaustedModelOverridesThePaceCommentAndButtonEvenWithoutDuration() throws {
+        let primary = snapshot(.claudeCode, window(12, 5 * hours, due: 29), nil)
+        for duration: TimeInterval? in [168 * hours, nil] {
+            let model = RateLimitMeter(id: "fable", label: "Fable", window: .init(
+                utilization: 100, resetsAt: now.addingTimeInterval(hours), windowDuration: duration))
+            let display = QuotaPanelDisplay(snapshots: [primary], enabled: [.claudeCode, .codex],
+                                           selected: nil, now: now, modelMeters: [.claudeCode: [model]])
+            let row = try #require(display.overview.rows.first)
+            #expect(row.comment == "已用完" && row.commentTone == .red)
+            #expect(display.buttons.first?.buttonStatus == "已用完" && row.buttonRemaining == 0)
+            #expect(display.overview.nearlyEmpty == 1)
+        }
+    }
+
+    @Test func hiddenFableGetsTheAlertWhenWeeklyIsEquallyUrgentButFurtherBehind() throws {
+        var quota = snapshot(.claudeCode, window(50, 5 * hours, due: 50), window(8, 168 * hours, due: 50))
+        quota.sevenDayOpus = window(6, 168 * hours, due: 35)
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(3, 168 * hours, due: 10))
+        let display = panel(quota, models: [fable])
+        let row = try #require(display.overview.rows.first)
+        #expect(row.outer?.tone == .red && row.outer?.label == "7d")
+        #expect(row.additionalAlert?.label == "Fable" && row.additionalAlert?.remaining == 3)
+        #expect(row.additionalAlert?.tone == .red && row.comment == "超额 42%")
+        #expect(row.buttonRemaining == 3 && display.overview.nearlyEmpty == 1)
     }
 
     @Test func multipleModelAllowancesUseTheirOwnTimingAndStaySeparateFromTheMainRings() throws {
@@ -207,6 +256,7 @@ struct QuotaPanelDisplayTests {
         let card = try #require(result.detail)
         #expect(result.overview.attentionCount == 1 && result.overview.tone == .red)
         #expect(card.tone == .red && card.comment == "已用完" && card.buttonRemaining == 0)
+        #expect(card.commentTone == .red && card.buttonStatus == "已用完")
         #expect(card.rows.isEmpty && card.tightest == nil && card.outer == nil && card.inner == nil)
         #expect(card.detailTitle == "已用完" && !card.showsWhiteDot)
     }
@@ -217,31 +267,39 @@ struct QuotaPanelDisplayTests {
                                        refreshing: Set(order))
         let cold = try #require(display.detail)
         #expect(cold.showsSkeleton && cold.detailTitle == "正在读取…" && cold.buttonRemaining == nil)
+        #expect(cold.readState == .loading && cold.comment == nil)
         #expect(!cold.showsWhiteDot && cold.action == nil)
         let warm = try #require(display.buttons.last)
-        #expect(!warm.showsSkeleton && warm.buttonRemaining == 12)
+        #expect(warm.readState == .normal && !warm.showsSkeleton && warm.buttonRemaining == 12)
         #expect(display.isRefreshing)
     }
 
     @Test func emptyStatesSupplyReasonDotAndOnlyTheApplicableAction() throws {
         typealias Example = (Provider, ProviderRateLimit.Status, ProviderRateLimit.EmptyReason?,
-                             ProviderRateLimit.LiveFailure?, String, String, Bool, QuotaSubscriptionDisplay.Action?)
+                             ProviderRateLimit.LiveFailure?, QuotaSubscriptionDisplay.ReadState,
+                             String, String, Bool, QuotaSubscriptionDisplay.Action?)
         let examples: [Example] = [
-            (.cursor, .noData, nil, .signInRequired, "需要登录 Cursor", "需要登录 Cursor", true, .cursorSettings),
-            (.cursor, .noData, nil, .signInExpired, "Cursor 登录已失效", "Cursor 登录已失效", true, .cursorSettings),
-            (.claudeCode, .unauthorized, nil, .credentialsRejected, "登录已失效，请重新登录", "登录已失效，请重新登录", true, .retry),
-            (.grok, .retryableError, nil, .endpointTimedOut, "读取超时", "暂时读不到额度", true, .retry),
-            (.codex, .error("raw"), nil, nil, "暂时读不到额度", "暂时读不到额度", true, .retry),
-            (.claudeCode, .noData, .nonessentialTrafficDisabled, nil, "组织策略关闭了 Claude Code 非必要流量 · 无法读取",
+            (.cursor, .noData, nil, .signInRequired, .needsLogin, "需登录", "需要登录 Cursor", true, .cursorSettings),
+            (.cursor, .noData, nil, .signInExpired, .loginExpired, "登录已失效", "Cursor 登录已失效", true, .cursorSettings),
+            (.claudeCode, .unauthorized, nil, .credentialsRejected, .loginExpired, "登录已失效", "登录已失效，请重新登录", true, .retry),
+            (.kimiCode, .unauthorized, nil, .credentialsNotFound, .needsLogin, "需登录", "请先登录 Kimi Code", true, .retry),
+            (.zCode, .unauthorized, nil, .credentialsRejected, .loginExpired, "Key 无效", "API Key 无效，请在设置中更换", true, .retry),
+            (.antigravity, .unauthorized, nil, .credentialsRejected, .needsLogin, "需登录", "请在 Antigravity 中登录", true, .retry),
+            (.opencodeGo, .noData, nil, .credentialsExpired, .loginExpired, "登录已失效", "打开 OpenCode 后自动显示", true, nil),
+            (.grok, .retryableError, nil, .endpointTimedOut, .readFailed, "读取失败", "暂时读不到额度", true, .retry),
+            (.codex, .error("raw"), nil, nil, .readFailed, "读取失败", "暂时读不到额度", true, .retry),
+            (.claudeCode, .noData, .nonessentialTrafficDisabled, nil, .organizationPolicy, "组织策略",
              "组织策略关闭了 Claude Code 非必要流量 · 无法读取", true, nil),
-            (.claudeCode, .noData, .sessionWithoutPlanLimits, nil, "未使用订阅登录", "Claude Code 未使用订阅登录", false, nil),
-            (.codex, .noData, .noWindow, nil, "没有生效的额度窗口", "没有生效的额度窗口", false, nil),
+            (.claudeCode, .noData, .sessionWithoutPlanLimits, nil, .nonSubscriptionLogin,
+             "未使用订阅登录", "Claude Code 未使用订阅登录", false, nil),
+            (.codex, .noData, .noWindow, nil, .normal, "无窗口", "没有生效的额度窗口", false, nil),
         ]
-        for (provider, status, empty, failure, overview, detail, dot, action) in examples {
+        for (provider, status, empty, failure, state, overview, detail, dot, action) in examples {
             let quota = ProviderRateLimit(provider: provider, status: status, fetchedAt: now,
                                           emptyReason: empty, liveFailure: failure)
             let card = try #require(panel(quota).detail)
             #expect(card.comment == overview && card.detailTitle == detail)
+            #expect(card.readState == state && card.commentTone == .neutral && card.buttonStatus == overview)
             #expect(card.detailReason == (failure == .endpointTimedOut ? "读取超时" : nil))
             #expect(card.showsWhiteDot == dot && card.action == action)
             #expect(card.outer == nil && card.buttonRemaining == nil && card.tone == .neutral)
@@ -259,14 +317,18 @@ struct QuotaPanelDisplayTests {
             var quota = ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: now, liveFailure: failure)
             let empty = try #require(panel(quota).detail)
             #expect(empty.comment == "已暂停读取" && empty.detailTitle == reason)
+            #expect(empty.readState == .paused && empty.commentTone == .neutral)
             #expect(empty.buttonRemaining == nil && empty.showsWhiteDot && empty.action == nil)
             quota.status = .ok
-            quota.sevenDay = window(36, 168 * hours, due: 48)
             quota.source = .cache
-            let kept = try #require(panel(quota).detail)
-            #expect(kept.buttonRemaining == 36 && kept.tone == .amber && kept.showsWhiteDot)
-            #expect(kept.buttonStatus == "读取已暂停" && kept.comment == "已暂停读取")
-            #expect(kept.sourceNote == "来源：缓存 · \(reason)" && kept.detailTitle == nil && kept.action == nil)
+            for (remaining, tone): (Double, QuotaPaceTone) in [(36, .amber), (0, .red)] {
+                quota.sevenDay = window(remaining, 168 * hours, due: 48)
+                let kept = try #require(panel(quota).detail)
+                #expect(kept.buttonRemaining == remaining && kept.tone == tone && kept.showsWhiteDot)
+                #expect(kept.readState == .paused && kept.commentTone == .neutral)
+                #expect(kept.buttonStatus == "读取已暂停" && kept.comment == "已暂停读取")
+                #expect(kept.sourceNote == "来源：缓存 · \(reason)" && kept.detailTitle == nil && kept.action == nil)
+            }
         }
     }
 
@@ -292,6 +354,7 @@ struct QuotaPanelDisplayTests {
         let kept = try #require(panel(quota).detail)
         #expect(kept.buttonRemaining == 72 && kept.outer?.remaining == 72 && kept.rows.count == 1)
         #expect(kept.detailTitle == nil && !kept.showsWhiteDot && kept.action == nil)
+        #expect(kept.readState == .organizationPolicy && kept.comment == "组织策略")
         #expect(kept.sourceNote == "来源：Claude 桌面端记录 · 组织策略关闭了 Claude Code 非必要流量")
         quota.status = .noData
         let empty = try #require(panel(quota).detail)
@@ -324,7 +387,7 @@ struct QuotaPanelDisplayTests {
         #expect(detail.inner?.label == "5h" && detail.outer?.label == "7d")
         #expect(detail.tightest?.label == "7d" && detail.buttonRemaining == 31)
         let stale = try #require(panel(snapshot(.codex, .init(utilization: 100, resetsAt: now.addingTimeInterval(-1)), nil)).detail)
-        #expect(stale.comment == "已重置，等下次读取")
+        #expect(stale.comment == "已重置" && stale.rows.first?.message == "已重置，等下次读取")
         #expect(stale.buttonRemaining == nil && stale.outer == nil && stale.tone == .neutral)
     }
 
@@ -362,7 +425,7 @@ struct QuotaPanelDisplayTests {
         #expect(card.additionalAlert?.label == "Model" && card.inner?.tone == .amber)
         #expect(card.comment == "超额 20%")
 
-        let smallLag = snapshot(.claudeCode, window(49, 2 * hours, due: 50), window(46, 168 * hours, due: 50))
+        let smallLag = snapshot(.claudeCode, window(10.5, 8 * hours, due: 13.5), window(46, 168 * hours, due: 50))
         let red = try #require(panel(smallLag).detail)
         #expect(red.inner?.tone == .red && red.outer?.tone == .neutral)
         #expect(red.tone == .red && red.comment == "超额 4%")
