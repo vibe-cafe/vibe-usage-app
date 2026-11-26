@@ -140,8 +140,7 @@ struct RateLimitCardView: View {
     }
 
     static func staleDataNote(for snapshot: ProviderRateLimit) -> String? {
-        guard snapshot.liveFailure != nil else { return nil }
-        return QuotaStatusText.sourceNote(for: snapshot)
+        QuotaStatusText.sourceNote(for: snapshot)
     }
 
     nonisolated static func liveFailureText(_ failure: ProviderRateLimit.LiveFailure, provider: ProviderRateLimit.Provider) -> String {

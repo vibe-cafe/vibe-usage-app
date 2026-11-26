@@ -36,7 +36,8 @@ enum QuotaPaceTone: Int {
 struct QuotaOverviewDisplay {
     struct Remainder {
         let providers: [ProviderRateLimit.Provider]
-        let summary: String
+        let summary: String?
+        let tone: QuotaPaceTone
     }
 
     let rows: [QuotaSubscriptionDisplay]
@@ -51,21 +52,26 @@ struct QuotaOverviewDisplay {
         total = subscriptions.count
         nearlyEmpty = subscriptions.filter { $0.tone == .red }.count
         fast = subscriptions.filter { $0.tone == .amber }.count
+        // Swift's stable sort preserves Settings order within each tone.
+        let ordered = subscriptions.sorted { $0.tone.rawValue > $1.tone.rawValue }
         guard total >= 5 else {
-            rows = subscriptions
+            rows = ordered
             remainder = nil
             return
         }
-        let ordered = subscriptions.filter { $0.tone != .neutral } + subscriptions.filter { $0.tone == .neutral }
         rows = Array(ordered.prefix(3))
         let hidden = ordered.dropFirst(3)
-        let alerts = hidden.filter { $0.tone != .neutral }.count
-        let notices = hidden.filter { $0.showsWhiteDot || $0.buttonRemaining == nil }.count
-        var summary: [String] = []
-        if alerts > 0 { summary.append("\(alerts) 个超额") }
-        if notices > 0 { summary.append("\(notices) 个有读取提示") }
+        let red = hidden.filter { $0.tone == .red }.count
+        let amber = hidden.filter { $0.tone == .amber }.count
+        var labels: [String] = []
+        if red > 0 { labels.append("\(red) 个快用完") }
+        if amber > 0 { labels.append("\(amber) 个超额") }
+        if labels.isEmpty, hidden.allSatisfy({ !$0.showsWhiteDot && $0.buttonRemaining != nil }) {
+            labels.append("都正常")
+        }
         remainder = Remainder(providers: hidden.map(\.provider),
-                              summary: summary.isEmpty ? "都正常" : summary.joined(separator: " · "))
+                              summary: labels.isEmpty ? nil : labels.joined(separator: " · "),
+                              tone: hidden.first?.tone ?? .neutral)
     }
 }
 
@@ -86,7 +92,15 @@ struct QuotaSubscriptionDisplay {
     let sourceNote: String?
     var buttonRemaining: Double? { reading == .exhausted ? 0 : tightest?.remaining }
     var showsSkeleton: Bool { reading == .loading }
-    var detailMessage: String? { rows.isEmpty ? reading.message : nil }
+    var detailTitle: String? {
+        guard rows.isEmpty else { return nil }
+        if case .failed = reading { return QuotaStatusText.readFailureTitle }
+        return reading.message
+    }
+    var detailReason: String? {
+        if case .failed(let reason) = reading { return reason }
+        return nil
+    }
     var showsWhiteDot: Bool {
         switch reading {
         case .paused, .login, .failed, .policy, .unreadable: true
@@ -150,10 +164,9 @@ struct QuotaSubscriptionDisplay {
         }
         if reading != .meters {
             comment = reading.comment
-        } else if tightest?.remaining == 0 {
-            comment = "已用完"
-        } else if let lag = current.compactMap(\.lag).max() {
-            if lag > 5 { comment = "超额 \(Int(lag.rounded()))%" }
+        } else if let lag = current.compactMap(\.commentLag).max() {
+            if tone == .red && lag <= 0 { comment = nil }
+            else if tone == .red || lag > 5 { comment = "超额 \(Int(lag.rounded()))%" }
             else if lag < -5 { comment = "余量 \(Int(-lag.rounded()))%" }
             else { comment = "进度正常" }
         } else {
@@ -163,7 +176,7 @@ struct QuotaSubscriptionDisplay {
 
     private enum Reading: Equatable {
         case meters, loading, exhausted
-        case paused(String), policy(String), failed(String), noPlan(String), empty(String), unreadable(String)
+        case paused(String), policy(String), failed(String?), noPlan(String), empty(String), unreadable(String)
         case login(String, Action)
 
         var displaysMeters: Bool {
@@ -177,7 +190,8 @@ struct QuotaSubscriptionDisplay {
             case .meters: nil
             case .loading: "正在读取…"
             case .exhausted: "已用完"
-            case .login(let text, _), .paused(let text), .policy(let text), .failed(let text),
+            case .failed(let reason): reason ?? QuotaStatusText.readFailureTitle
+            case .login(let text, _), .paused(let text), .policy(let text),
                  .noPlan(let text), .empty(let text), .unreadable(let text): text
             }
         }
@@ -191,7 +205,8 @@ struct QuotaSubscriptionDisplay {
         }
 
         init(snapshot: ProviderRateLimit, refreshing: Bool, detected: Bool, zCodeRegion: ZCodeQuotaRegion) {
-            if let failure = snapshot.liveFailure, failure.isPause {
+            if let failure = snapshot.liveFailure, failure.isPause,
+               failure.isNetworkPause || snapshot.status != .ok {
                 let reason = QuotaStatusText.liveFailureText(failure, provider: snapshot.provider)
                 self = failure.isNetworkPause ? .paused(reason) : .policy(reason)
                 return
@@ -211,7 +226,8 @@ struct QuotaSubscriptionDisplay {
             switch snapshot.status {
             case .ok: self = .meters
             case .unauthorized: self = .login(QuotaStatusText.authorizationText(for: snapshot, zCodeRegion: zCodeRegion), .retry)
-            case .retryableError, .error: self = .failed(QuotaStatusText.retryableErrorText(for: snapshot).title)
+            case .retryableError, .error:
+                self = .failed(snapshot.liveFailure.map { QuotaStatusText.liveFailureText($0, provider: snapshot.provider) })
             case .disabled: self = .empty("订阅配额未启用")
             case .noData:
                 let text = QuotaStatusText.emptyStateText(for: snapshot, isDetected: detected)
@@ -235,17 +251,19 @@ struct QuotaPanelMeter: Equatable {
     let id: String
     let label: String
     let resetsAt: Date?
+    let windowDuration: TimeInterval?
+    let elapsed: TimeInterval?
+    let timeUntilReset: TimeInterval?
     let breakdown: [RateLimitMeter.Part]
     fileprivate let sortDuration: TimeInterval?
     fileprivate let isExtra: Bool
     let remaining: Double?
+    let usedPercent: Double?
     let expectedRemaining: Double?
     let prediction: Prediction?
     var message: String? { remaining == nil ? "已重置，等下次读取" : nil }
-    var lag: Double? {
-        guard let expectedRemaining, let remaining else { return nil }
-        return expectedRemaining - remaining
-    }
+    let lag: Double?
+    fileprivate var commentLag: Double? { tone == .red || prediction != nil ? lag : nil }
     let tone: QuotaPaceTone
 
     fileprivate static func rows(snapshot: ProviderRateLimit, modelMeters: [RateLimitMeter], now: Date) -> [Self] {
@@ -276,36 +294,51 @@ struct QuotaPanelMeter: Equatable {
         breakdown = meter.breakdown
         let window = meter.window
         let left = window.resetsAt?.timeIntervalSince(now)
+        windowDuration = window.windowDuration.flatMap { $0 > 0 ? $0 : nil }
+        timeUntilReset = left.flatMap { $0 > 0 ? $0 : nil }
+        if let windowDuration, let timeUntilReset {
+            elapsed = max(0, windowDuration - timeUntilReset)
+        } else {
+            elapsed = nil
+        }
         if let left, left <= 0 {
+            usedPercent = nil
             remaining = nil
             expectedRemaining = nil
+            lag = nil
             prediction = nil
             tone = .neutral
             return
         }
         let used = min(100, max(0, window.utilization))
+        usedPercent = used
         let remaining = 100 - used
         self.remaining = remaining
-        guard !isExtra, let duration = window.windowDuration, duration > 0, let left else {
+        guard !isExtra, let duration = windowDuration, let elapsed, let left else {
             expectedRemaining = nil
+            lag = nil
             prediction = nil
-            tone = !isExtra && remaining == 0 ? .red : .neutral
+            tone = !isExtra && remaining < 10 ? .red : .neutral
             return
         }
-        let expected = min(100, left * 100 / duration)
-        expectedRemaining = expected
-        let elapsed = duration - left
+        expectedRemaining = min(100, left * 100 / duration)
+        // Compare reported usage directly with elapsed percent. Subtracting decimal
+        // remainders can turn an exact tie (e.g. 93.2% used) into a positive lag.
+        let lag = used - elapsed * 100 / duration
+        self.lag = lag
         if remaining == 0 {
             prediction = nil
             tone = .red
         } else if elapsed < duration * 0.15 {
             prediction = nil
-            tone = .neutral
+            tone = remaining < 10 ? .red : .neutral
         } else {
             let eta = used > 0 ? remaining * elapsed / used : .infinity
-            prediction = eta < left ? .runsOutIn(eta) : .untilReset
-            if remaining < 10 || (eta < left && eta <= 3_600) { tone = .red }
-            else if expected - remaining > 5 { tone = .amber }
+            // At the current rate the quota runs out before reset exactly when usage is ahead of time.
+            let runsOutBeforeReset = lag > 0
+            prediction = runsOutBeforeReset ? .runsOutIn(eta) : .untilReset
+            if runsOutBeforeReset && (remaining < 10 || eta <= 3_600) { tone = .red }
+            else if lag > 5 { tone = .amber }
             else { tone = .neutral }
         }
     }

@@ -1,5 +1,7 @@
 /// Fixed quota read messages shared by both panels and diagnostics.
 enum QuotaStatusText {
+    static let readFailureTitle = "暂时读不到额度"
+
     static func authorizationText(for snapshot: ProviderRateLimit, zCodeRegion: ZCodeQuotaRegion = .bigModel) -> String {
         if let failure = snapshot.liveFailure, failure != .credentialsNotFound, failure != .credentialsRejected {
             return liveFailureText(failure, provider: snapshot.provider)
@@ -62,7 +64,7 @@ enum QuotaStatusText {
     /// back to, so its source is always the live read.
     static func retryableErrorText(for snapshot: ProviderRateLimit) -> (title: String, detail: String) {
         let title = snapshot.liveFailure.map { liveFailureText($0, provider: snapshot.provider) }
-            ?? "暂时读不到额度"
+            ?? readFailureTitle
         // A local record that could not be read (Grok's log) is not a live read.
         switch snapshot.source {
         case .localLog: return (title, "来源：本地日志")
@@ -72,17 +74,17 @@ enum QuotaStatusText {
     }
 
     static func sourceNote(for snapshot: ProviderRateLimit) -> String? {
-        guard snapshot.status == .ok else { return nil }
-        let reason = snapshot.liveFailure.map { liveFailureText($0, provider: snapshot.provider) }
+        guard snapshot.status == .ok, let failure = snapshot.liveFailure else { return nil }
+        let reason = liveFailureText(failure, provider: snapshot.provider)
         let source: String
         switch snapshot.source {
-        case .live where reason != nil: source = "上次实时读取"
+        case .live: source = "上次实时读取"
         case .cache: source = "缓存"
         case .desktopRecord: source = "Claude 桌面端记录"
         case .localLog: source = "本地日志"
-        default: return reason
+        case nil: return reason
         }
-        return ["来源：\(source)", reason].compactMap { $0 }.joined(separator: " · ")
+        return "来源：\(source) · \(reason)"
     }
 
     /// Our own fixed copy for every reason a live read can report. Nothing

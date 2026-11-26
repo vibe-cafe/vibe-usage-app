@@ -46,10 +46,11 @@ struct QuotaPanelDisplayTests {
         #expect(panel.overview.tone == .red)
         #expect(panel.overview.remainder?.providers == [.kimiCode, .grok])
         #expect(panel.overview.remainder?.summary == "都正常")
+        #expect(panel.overview.remainder?.tone == .neutral)
     }
 
     @Test func eightSubscriptionsAsIn132d() {
-        let order: [Provider] = [.cursor, .codex, .antigravity, .grok, .kimiCode, .claudeCode, .opencodeGo, .zCode]
+        let order: [Provider] = [.cursor, .kimiCode, .codex, .antigravity, .grok, .claudeCode, .opencodeGo, .zCode]
         let panel = QuotaPanelDisplay(snapshots: fixtures, enabled: order, selected: nil, now: now)
         #expect(panel.buttons.map(\.provider) == order)
         #expect(panel.overview.rows.map(\.provider) == [.codex, .antigravity, .kimiCode])
@@ -60,6 +61,7 @@ struct QuotaPanelDisplayTests {
         #expect(panel.overview.fast == 2)
         #expect(panel.overview.remainder?.providers == [.claudeCode, .cursor, .grok, .opencodeGo, .zCode])
         #expect(panel.overview.remainder?.summary == "1 个超额")
+        #expect(panel.overview.remainder?.tone == .amber)
     }
 
     private func panel(_ snapshot: ProviderRateLimit, models: [RateLimitMeter] = []) -> QuotaPanelDisplay {
@@ -69,23 +71,32 @@ struct QuotaPanelDisplayTests {
 
     @Test func paceBoundariesAndForecastsUseUnroundedPercentages() throws {
         typealias Example = (remaining: Double, duration: Double, expected: Double,
-                             tone: QuotaPaceTone, comment: String, prediction: QuotaPanelMeter.Prediction?)
+                             tone: QuotaPaceTone, comment: String?, prediction: QuotaPanelMeter.Prediction?)
         let examples: [Example] = [
             (45, 20, 50, .neutral, "进度正常", .runsOutIn(45 * 10 * hours / 55)),
             (55, 20, 50, .neutral, "进度正常", .untilReset),
             (44.9, 20, 50, .amber, "超额 5%", .runsOutIn(44.9 * 10 * hours / 55.1)),
             (56, 20, 50, .neutral, "余量 6%", .untilReset),
-            (9, 20, 86, .neutral, "超额 77%", nil),
+            (9, 20, 86, .red, "超额 77%", nil),
+            (10, 20, 86, .neutral, nil, nil),
             (9, 20, 85, .red, "超额 76%", .runsOutIn(9 * 3 * hours / 91)),
+            (10, 100, 85, .amber, "超额 75%", .runsOutIn(10 * 15 * hours / 90)),
             (10, 100, 50, .amber, "超额 40%", .runsOutIn(10 * 50 * hours / 90)),
             (20, 6, 100.0 / 3, .red, "超额 13%", .runsOutIn(hours)),
-            (0, 20, 99, .red, "已用完", nil),
+            (49, 2, 50, .red, "超额 1%", .runsOutIn(49 * hours / 51)),
+            (9, 100, 10, .red, "超额 1%", .runsOutIn(9 * 90 * hours / 91)),
+            (7, 8, 25.0 / 480 * 100, .neutral, "进度正常", .untilReset),
+            (7, 5, 7, .neutral, "进度正常", .untilReset),
+            (6.8, 5, 6.8, .neutral, "进度正常", .untilReset),
+            (15.8, 100, 20.8, .neutral, "进度正常", .runsOutIn(15.8 * 79.2 * hours / 84.2)),
+            (0, 20, 99, .red, "超额 99%", nil),
             (100, 20, 50, .neutral, "余量 50%", .untilReset),
         ]
         for example in examples {
             let result = panel(snapshot(.codex, window(example.remaining, example.duration * hours, due: example.expected), nil))
             let row = try #require(result.detail?.rows.first)
             #expect(result.overview.tone == example.tone)
+            #expect(row.tone == example.tone)
             #expect(result.detail?.comment == example.comment)
             if case let (.runsOutIn(actual)?, .runsOutIn(expected)?) = (row.prediction, example.prediction) {
                 #expect(abs(actual - expected) < 0.001)
@@ -102,15 +113,23 @@ struct QuotaPanelDisplayTests {
             .init(id: "old", label: "Model A", window: .init(utilization: 100, resetsAt: now)),
         ], status: .ok)
         let detail = try #require(panel(quota).detail)
-        #expect(detail.tone == .neutral)
+        #expect(detail.tone == .red)
         #expect(detail.tightest?.label == "1d")
         #expect(detail.buttonRemaining == 1)
         #expect(detail.comment == nil)
         #expect(detail.rows.allSatisfy { $0.prediction == nil && $0.expectedRemaining == nil })
+        let daily = try #require(detail.rows.first { $0.id == "daily" })
+        #expect(daily.windowDuration == nil && daily.elapsed == nil)
+        #expect(daily.timeUntilReset == hours && daily.usedPercent == 99)
+        let weekly = try #require(detail.rows.first { $0.id == "weekly" })
+        #expect(weekly.windowDuration == 168 * hours && weekly.elapsed == nil)
+        #expect(weekly.timeUntilReset == nil && weekly.tone == .neutral)
         #expect(detail.rows.last?.remaining == nil)
         #expect(detail.rows.last?.message == "已重置，等下次读取")
         let exhausted = panel(snapshot(.codex, .init(utilization: 100), nil))
         #expect(exhausted.detail?.tone == .red)
+        let noReset = panel(snapshot(.codex, .init(utilization: 91, windowDuration: 5 * hours), nil))
+        #expect(noReset.detail?.tone == .red && noReset.detail?.comment == nil)
     }
 
     @Test func multipleModelAllowancesUseTheirOwnTimingAndStaySeparateFromTheMainRings() throws {
@@ -170,10 +189,12 @@ struct QuotaPanelDisplayTests {
         let single = display([.grok], selecting: .grok)
         #expect(single.buttons.isEmpty && single.detail?.provider == .grok)
         #expect(single.usageProvider == nil && single.refreshTargets == [.grok])
-        let order: [Provider] = [.grok, .cursor, .codex, .claudeCode]
+        let order: [Provider] = [.grok, .claudeCode, .cursor, .codex]
         let overview = display(order, selecting: .zCode)
         #expect(overview.detail == nil && overview.usageProvider == nil)
-        #expect(overview.overview.rows.map(\.provider) == order && overview.overview.remainder == nil)
+        #expect(overview.overview.rows.map(\.provider) == [.codex, .claudeCode, .grok, .cursor])
+        #expect(overview.overview.remainder == nil && overview.buttons.map(\.provider) == order)
+        #expect(display([.grok, .codex]).overview.rows.map(\.provider) == [.codex, .grok])
         #expect(overview.refreshTargets == order)
         let selected = display(order, selecting: .cursor)
         #expect(selected.detail?.provider == .cursor && selected.usageProvider == .cursor)
@@ -187,7 +208,7 @@ struct QuotaPanelDisplayTests {
         #expect(result.overview.attentionCount == 1 && result.overview.tone == .red)
         #expect(card.tone == .red && card.comment == "已用完" && card.buttonRemaining == 0)
         #expect(card.rows.isEmpty && card.tightest == nil && card.outer == nil && card.inner == nil)
-        #expect(card.detailMessage == "已用完" && !card.showsWhiteDot)
+        #expect(card.detailTitle == "已用完" && !card.showsWhiteDot)
     }
 
     @Test func coldReadsShowSkeletonsAndWarmRefreshesKeepTheirNumbers() throws {
@@ -195,7 +216,7 @@ struct QuotaPanelDisplayTests {
         let display = QuotaPanelDisplay(snapshots: [fixtures[0]], enabled: order, selected: .cursor, now: now,
                                        refreshing: Set(order))
         let cold = try #require(display.detail)
-        #expect(cold.showsSkeleton && cold.detailMessage == "正在读取…" && cold.buttonRemaining == nil)
+        #expect(cold.showsSkeleton && cold.detailTitle == "正在读取…" && cold.buttonRemaining == nil)
         #expect(!cold.showsWhiteDot && cold.action == nil)
         let warm = try #require(display.buttons.last)
         #expect(!warm.showsSkeleton && warm.buttonRemaining == 12)
@@ -209,7 +230,7 @@ struct QuotaPanelDisplayTests {
             (.cursor, .noData, nil, .signInRequired, "需要登录 Cursor", "需要登录 Cursor", true, .cursorSettings),
             (.cursor, .noData, nil, .signInExpired, "Cursor 登录已失效", "Cursor 登录已失效", true, .cursorSettings),
             (.claudeCode, .unauthorized, nil, .credentialsRejected, "登录已失效，请重新登录", "登录已失效，请重新登录", true, .retry),
-            (.grok, .retryableError, nil, .endpointTimedOut, "读取超时", "读取超时", true, .retry),
+            (.grok, .retryableError, nil, .endpointTimedOut, "读取超时", "暂时读不到额度", true, .retry),
             (.codex, .error("raw"), nil, nil, "暂时读不到额度", "暂时读不到额度", true, .retry),
             (.claudeCode, .noData, .nonessentialTrafficDisabled, nil, "组织策略关闭了 Claude Code 非必要流量 · 无法读取",
              "组织策略关闭了 Claude Code 非必要流量 · 无法读取", true, nil),
@@ -220,7 +241,8 @@ struct QuotaPanelDisplayTests {
             let quota = ProviderRateLimit(provider: provider, status: status, fetchedAt: now,
                                           emptyReason: empty, liveFailure: failure)
             let card = try #require(panel(quota).detail)
-            #expect(card.comment == overview && card.detailMessage == detail)
+            #expect(card.comment == overview && card.detailTitle == detail)
+            #expect(card.detailReason == (failure == .endpointTimedOut ? "读取超时" : nil))
             #expect(card.showsWhiteDot == dot && card.action == action)
             #expect(card.outer == nil && card.buttonRemaining == nil && card.tone == .neutral)
         }
@@ -236,7 +258,7 @@ struct QuotaPanelDisplayTests {
         for (failure, reason) in pauses {
             var quota = ProviderRateLimit(provider: .codex, status: .noData, fetchedAt: now, liveFailure: failure)
             let empty = try #require(panel(quota).detail)
-            #expect(empty.comment == "已暂停读取" && empty.detailMessage == reason)
+            #expect(empty.comment == "已暂停读取" && empty.detailTitle == reason)
             #expect(empty.buttonRemaining == nil && empty.showsWhiteDot && empty.action == nil)
             quota.status = .ok
             quota.sevenDay = window(36, 168 * hours, due: 48)
@@ -244,7 +266,7 @@ struct QuotaPanelDisplayTests {
             let kept = try #require(panel(quota).detail)
             #expect(kept.buttonRemaining == 36 && kept.tone == .amber && kept.showsWhiteDot)
             #expect(kept.buttonStatus == "读取已暂停" && kept.comment == "已暂停读取")
-            #expect(kept.sourceNote == "来源：缓存 · \(reason)" && kept.detailMessage == nil && kept.action == nil)
+            #expect(kept.sourceNote == "来源：缓存 · \(reason)" && kept.detailTitle == nil && kept.action == nil)
         }
     }
 
@@ -255,12 +277,38 @@ struct QuotaPanelDisplayTests {
         for (source, label) in sources {
             var quota = fixtures[0]
             quota.source = source
-            #expect(panel(quota).detail?.sourceNote == (source == .live ? nil : "来源：\(label)"))
+            #expect(panel(quota).detail?.sourceNote == nil)
             quota.liveFailure = .endpointTimedOut
             let kept = try #require(panel(quota).detail)
             #expect(kept.sourceNote == "来源：\(label) · 读取超时")
             #expect(!kept.showsWhiteDot && kept.buttonRemaining == 12)
         }
+    }
+
+    @Test func policyKeepsTheDesktopReadingAndExplainsOnlyTheLiveRead() throws {
+        var quota = snapshot(.claudeCode, .init(utilization: 28), nil)
+        quota.source = .desktopRecord
+        quota.liveFailure = .claudeBlockedByPolicy
+        let kept = try #require(panel(quota).detail)
+        #expect(kept.buttonRemaining == 72 && kept.outer?.remaining == 72 && kept.rows.count == 1)
+        #expect(kept.detailTitle == nil && !kept.showsWhiteDot && kept.action == nil)
+        #expect(kept.sourceNote == "来源：Claude 桌面端记录 · 组织策略关闭了 Claude Code 非必要流量")
+        quota.status = .noData
+        let empty = try #require(panel(quota).detail)
+        #expect(empty.rows.isEmpty && empty.showsWhiteDot && empty.sourceNote == nil)
+        #expect(empty.detailTitle == "组织策略关闭了 Claude Code 非必要流量")
+    }
+
+    @Test func hoverUsesTheReportedWindowAndThePanelClock() throws {
+        let quota = snapshot(.codex, window(70, 4 * hours, due: 25),
+                             .init(utilization: 90, resetsAt: now, windowDuration: 7 * 24 * hours))
+        let card = try #require(panel(quota).detail)
+        let current = card.rows[0]
+        #expect(current.windowDuration == 4 * hours && current.elapsed == 3 * hours)
+        #expect(current.usedPercent == 30 && current.timeUntilReset == hours)
+        let expired = card.rows[1]
+        #expect(expired.windowDuration == 7 * 24 * hours && expired.timeUntilReset == nil)
+        #expect(expired.usedPercent == nil && expired.elapsed == nil)
     }
 
     @Test func mixedWindowsKeepMainRowsFirstAndExpiredReadingsExplainThemselves() throws {
@@ -286,9 +334,24 @@ struct QuotaPanelDisplayTests {
         let panel = QuotaPanelDisplay(snapshots: fixtures.filter { $0.provider != .opencodeGo } + [missing],
                                      enabled: order, selected: .opencodeGo, now: now)
         #expect(panel.overview.remainder?.providers == [.grok, .opencodeGo])
-        #expect(panel.overview.remainder?.summary == "1 个有读取提示")
+        #expect(panel.overview.remainder?.summary == nil && panel.overview.remainder?.tone == .neutral)
         #expect(panel.detail?.showsWhiteDot == true)
         #expect(panel.overview.attentionCount == 2)
+    }
+
+    @Test func foldedSummaryCountsRedAndAmberSeparatelyEvenWithAnUnreadableIcon() throws {
+        let red: [Provider] = [.codex, .cursor, .kimiCode, .zCode, .opencodeGo]
+        let amber = snapshot(.claudeCode, window(45, 168 * hours, due: 60), nil)
+        let missing = ProviderRateLimit(provider: .grok, status: .noData, liveFailure: .credentialsNotFound)
+        let readings = red.map { snapshot($0, .init(utilization: 99), nil) } + [amber, missing]
+        for includeAmber in [false, true] {
+            let order = [.grok] + (includeAmber ? [.claudeCode] : []) + red
+            let panel = QuotaPanelDisplay(snapshots: readings, enabled: order, selected: nil, now: now)
+            let hidden = try #require(panel.overview.remainder)
+            #expect(hidden.providers == Array(red.suffix(2)) + (includeAmber ? [.claudeCode] : []) + [.grok])
+            #expect(hidden.summary == (includeAmber ? "2 个快用完 · 1 个超额" : "2 个快用完"))
+            #expect(hidden.tone == .red && panel.buttons.first?.showsWhiteDot == true)
+        }
     }
 
     @Test func urgencyAndCommentCanComeFromDifferentWindows() throws {
@@ -298,5 +361,15 @@ struct QuotaPanelDisplayTests {
         #expect(card.tone == .red && card.buttonRemaining == 8)
         #expect(card.additionalAlert?.label == "Model" && card.inner?.tone == .amber)
         #expect(card.comment == "超额 20%")
+
+        let smallLag = snapshot(.claudeCode, window(49, 2 * hours, due: 50), window(46, 168 * hours, due: 50))
+        let red = try #require(panel(smallLag).detail)
+        #expect(red.inner?.tone == .red && red.outer?.tone == .neutral)
+        #expect(red.tone == .red && red.comment == "超额 4%")
+
+        let early = snapshot(.claudeCode, window(20, 5 * hours, due: 90), window(44, 168 * hours, due: 50))
+        let amber = try #require(panel(early).detail)
+        #expect(amber.inner?.tone == .neutral && amber.outer?.tone == .amber)
+        #expect(amber.tone == .amber && amber.comment == "超额 6%")
     }
 }
