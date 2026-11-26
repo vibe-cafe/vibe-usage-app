@@ -19,6 +19,7 @@ enum DiagnosticSummary {
         var buildNumber: String
         /// 正式版 / 外测版 / 开发版
         var buildKind: String
+        var interfaceStyle: InterfaceStyle
         var osVersion: String
         var architecture: String
         var runtime: Runtime?
@@ -107,6 +108,7 @@ enum DiagnosticSummary {
         var environment = "环境：\(input.osVersion) \(input.architecture) · App \(input.appVersion)（\(input.buildNumber)）\(input.buildKind)"
         environment += " · 运行环境：\(runtimeText(input.runtime, prefersSystem: input.prefersSystemRuntime))"
         lines.append(environment)
+        lines.append("界面样式：\(input.interfaceStyle.displayName)")
         lines.append("自带 Node：\(bundledNodeText(input.bundledNode))")
         lines.append("CLI：\(cliText(input.cli, launcherPresent: input.launcherPresent, cachedVersion: input.cachedCLIVersion, records: input.syncRecords))")
         lines.append("账号：\(accountText(input))")
