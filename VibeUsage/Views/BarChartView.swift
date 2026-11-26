@@ -56,6 +56,7 @@ private struct BarData: Identifiable, Equatable {
 
 struct BarChartView: View {
     @Environment(AppState.self) private var appState
+    var initialHoveredIndex: Int?
 
     private var isHourly: Bool {
         appState.currentQueryRange.isHourly
@@ -203,7 +204,8 @@ struct BarChartView: View {
                 maxTotal: max(bars.map(\.total).max() ?? 0, 1),
                 maxCost: max(bars.map(\.cost).max() ?? 0, 0.001),
                 maxActiveSeconds: bars.compactMap { $0.activity?.activeSeconds }.max(),
-                labelInterval: labelInterval(count: bars.count)
+                labelInterval: labelInterval(count: bars.count),
+                hoveredIndex: initialHoveredIndex
             )
         }
         .padding(14)
@@ -231,7 +233,7 @@ private struct ChartContent: View {
     private let chartAxisGap: CGFloat = 6
     private let xLabelWidth: CGFloat = 46
 
-    @State private var hoveredIndex: Int?
+    @State var hoveredIndex: Int?
     @State private var scroll = ScrollWatcher()
 
     private var visibleLabelIndices: [Int] {
@@ -430,7 +432,7 @@ private struct ChartContent: View {
                 Text("活跃时长: \(bar.activity?.activeText ?? "—")")
                     .foregroundStyle(Color(red: 0.38, green: 0.6, blue: 1.0))
                 if let time = bar.activity {
-                    Text(time.workText)
+                    if let work = time.chartWorkText { Text(work) }
                     if let parallel = time.parallelText { Text(parallel) }
                 }
             }

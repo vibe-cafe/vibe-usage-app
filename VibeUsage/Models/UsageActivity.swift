@@ -23,6 +23,7 @@ struct ActivityTime: Equatable {
 
     var activeText: String { Self.duration(activeSeconds) }
     var workText: String { "AI 工时 \(Self.duration(workSeconds))" }
+    var chartWorkText: String? { workSeconds > 0 ? "AI 工时: \(Self.duration(workSeconds))" : nil }
     var parallelText: String? {
         guard let parallel else { return nil }
         let count = parallel.formatted(.number.locale(Locale(identifier: "en_US_POSIX")).precision(.fractionLength(0...1)))
@@ -41,7 +42,10 @@ struct ActivityTime: Equatable {
 /// Keys match the classic chart: UTC hours or Gregorian days in the viewer's time zone.
 struct ActivityReport {
     let summary: ActivityTime?
-    let coverageHint: String?
+    private let coverageHint: String?
+    var summaryHelp: String {
+        [summary?.parallelText, coverageHint].compactMap { $0 }.joined(separator: " · ")
+    }
     private let firstKey: String?
     private var periods: [String: ActivityTime] = [:]
 
