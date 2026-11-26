@@ -729,4 +729,3 @@ struct CursorLoginBlock: View {
         }
     }
 }
-

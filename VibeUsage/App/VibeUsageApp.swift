@@ -59,4 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController?.presentPanelForAppActivation()
         return true
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // A Cursor sign-in still waiting for the browser: stop its CLI too,
+        // or it would keep polling (and could finish signing in) with nothing
+        // left to keep the sign-in or watch the proxy.
+        appState.cursorLogin.cancelSignIn()
+    }
 }
