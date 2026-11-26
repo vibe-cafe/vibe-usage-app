@@ -22,7 +22,7 @@ struct SettingsSyncPage: View {
                 syncRow
                 SettingsSeparator()
                 SettingsRow(tall: true) {
-                    SettingsRowLabel(title: "重置配置", caption: "清除 API Key，停止同步")
+                    SettingsRowLabel(title: "重置配置")
                     Spacer(minLength: 8)
                     Button("重置…") { showingResetConfirmation = true }
                         .buttonStyle(.settingsDanger)
