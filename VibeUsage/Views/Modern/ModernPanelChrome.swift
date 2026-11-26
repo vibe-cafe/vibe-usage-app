@@ -339,6 +339,21 @@ struct ModernTextButtonStyle: ButtonStyle {
 /// Icon-only buttons: same hover rule.
 typealias ModernIconButtonStyle = ModernTextButtonStyle
 
+/// The one button that matters on its card (「登录并链接数据」, 「重新登录」):
+/// dark 13 pt label on a 26 pt capsule in the text color.
+struct ModernPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(ModernTheme.text(13, .semibold))
+            .foregroundStyle(ModernTheme.prominentLabel)
+            .padding(.horizontal, 13)
+            .frame(height: 26)
+            .background(Capsule().fill(ModernTheme.text))
+            .contentShape(Capsule())
+            .opacity(configuration.isPressed ? 0.8 : 1)
+    }
+}
+
 private struct ModernHoverLabel: View {
     let configuration: ButtonStyleConfiguration
     let color: Color

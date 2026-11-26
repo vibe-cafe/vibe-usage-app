@@ -33,6 +33,7 @@ struct PanelSnapshotTests {
         for scene in PanelScene.scenes where wanted?.contains(scene.id) ?? true {
             let fixture = PanelFixture(scene)
             defer { fixture.tearDown() }
+            try await fixture.prepare()
             let png = try await PanelSnapshot.render(fixture: fixture, maxHeight: scene.maxHeight)
             let url = directory.appendingPathComponent("\(scene.id).png")
             try png.write(to: url)
@@ -63,6 +64,31 @@ struct PanelSnapshotTests {
         try modern.write(to: directory.appendingPathComponent("switch-modern.png"))
         try classic.write(to: directory.appendingPathComponent("switch-classic.png"))
     }
+
+    /// The classic panel without a linked account, at its 520 × 620 size,
+    /// in the three sign-in steps it shares with the new panel.
+    @Test(.enabled(if: PanelSnapshot.isEnabled))
+    @MainActor func renderClassicSignIn() async throws {
+        let bundle = try #require(PanelTestResources.bundle)
+        AppFonts.register(from: bundle)
+        let directory = PanelSnapshot.outputDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for step in [PanelScene.SignIn.idle, .waiting, .failed] {
+            let fixture = PanelFixture(PanelScene(id: "classic-signin", title: "经典：没登录", linked: false, signIn: step))
+            defer { fixture.tearDown() }
+            fixture.state.interfaceStyle.select(.classic)
+            try await fixture.prepare()
+            let host = OffscreenHost(
+                PanelRootView(layout: ModernPanelLayout())
+                    .environment(fixture.state)
+                    .environmentObject(fixture.updater),
+                size: CGSize(width: ModernTheme.panelWidth, height: 620)
+            )
+            try await host.settle()
+            try await host.settle()
+            try host.png(scale: 2).write(to: directory.appendingPathComponent("classic-signin-\(step).png"))
+        }
+    }
 }
 
 /// One rendered state of the panel.
@@ -80,6 +106,19 @@ struct PanelScene {
     var refreshing: Set<ProviderRateLimit.Provider> = []
     /// The screen's limit; finite values show the scrolling middle.
     var maxHeight: CGFloat = .infinity
+    /// The device sign-in's step (unlinked scenes).
+    var signIn: SignIn = .idle
+
+    enum SignIn: String {
+        /// 「登录并链接数据」.
+        case idle
+        /// Asked the server for a code, no answer yet.
+        case asking
+        /// Code shown, waiting for the browser.
+        case waiting
+        /// The code expired.
+        case failed
+    }
 
     static let scenes: [PanelScene] = [
         PanelScene(id: "131a", title: "概览：4 个订阅"),
@@ -95,7 +134,10 @@ struct PanelScene {
         )),
         PanelScene(id: "136g", title: "底栏：还没同步过", lastSyncMinutesAgo: nil),
         PanelScene(id: "136i", title: "展开以后：收起详情", expanded: true),
-        PanelScene(id: "136j", title: "没登录：底栏只剩关闭", linked: false, lastSyncMinutesAgo: nil),
+        PanelScene(id: "136j", title: "没登录：近期消耗换成登录，底栏只剩关闭", linked: false, lastSyncMinutesAgo: nil),
+        PanelScene(id: "136k", title: "登录：等浏览器里确认", linked: false, lastSyncMinutesAgo: nil, signIn: .waiting),
+        PanelScene(id: "136k-asking", title: "登录：验证码还没拿到", linked: false, lastSyncMinutesAgo: nil, signIn: .asking),
+        PanelScene(id: "136l", title: "登录没成功：原因和重新登录", linked: false, lastSyncMinutesAgo: nil, signIn: .failed),
         PanelScene(id: "overflow", title: "展开后超过屏幕：顶栏底栏固定、中间滚动", expanded: true, maxHeight: 640),
     ]
 }
@@ -105,10 +147,12 @@ struct PanelScene {
 final class PanelFixture {
     let state: AppState
     let updater = UpdaterViewModel()
+    private let scene: PanelScene
     private let defaults: UserDefaults
     private let suite: String
 
     init(_ scene: PanelScene, now: Date = Date()) {
+        self.scene = scene
         suite = "PanelSnapshot.\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suite)!
         defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
@@ -126,7 +170,8 @@ final class PanelFixture {
             quotaProductDiscoverer: {
                 QuotaProductRegistry.catalog.map { QuotaProduct(provider: $0.0, availability: $0.1, isDetected: true) }
             },
-            interfaceStyle: InterfaceStylePreference(rollout: .forced(.modern))
+            interfaceStyle: InterfaceStylePreference(rollout: .forced(.modern)),
+            deviceLinkService: .fixture(scene.signIn)
         )
         state.initializeQuotaProducts()
         state.syncStatus = scene.syncStatus
@@ -143,8 +188,46 @@ final class PanelFixture {
         if scene.hasUpdate { updater.availableUpdate = SUAppcastItem.empty() }
     }
 
+    /// Walks the sign-in to the scene's step against the fixture server.
+    func prepare() async throws {
+        guard !scene.linked, scene.signIn != .idle else { return }
+        state.deviceLink.start()
+        for _ in 0..<200 {
+            switch (scene.signIn, state.deviceLink.phase) {
+            case (.asking, .requestingCode), (.waiting, .awaitingApproval), (.failed, .failed): return
+            default: try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        Issue.record("sign-in did not reach \(scene.signIn)")
+    }
+
     func tearDown() {
+        state.deviceLink.cancel()
         defaults.removePersistentDomain(forName: suite)
+    }
+}
+
+private extension DeviceLinkService {
+    /// A server that never hands out a code (asking), or hands out the
+    /// design's code and then never answers (waiting) or says it expired
+    /// (failed). No browser is opened.
+    static func fixture(_ step: PanelScene.SignIn) -> DeviceLinkService {
+        DeviceLinkService(
+            requestCode: { _, _, _ in
+                if step == .asking { try await Task.sleep(for: .seconds(3_600)) }
+                return DeviceCodeResponse(
+                    deviceCode: "fixture", userCode: "WDJB-MJHT", verificationUri: "",
+                    verificationUriComplete: "", expiresIn: 900, interval: 5
+                )
+            },
+            poll: { _, _ in DevicePollResponse(apiKey: nil, apiUrl: nil, error: "expired_token") },
+            sleep: { _ in
+                if step == .waiting { try await Task.sleep(for: .seconds(3_600)) }
+            },
+            now: { Date() },
+            openURL: { _ in },
+            hostname: { nil }
+        )
     }
 }
 
