@@ -54,6 +54,8 @@ open "dist/Vibe Usage.app"
 
 「设置 → 关于 → 复制诊断信息」只复制固定字段（版本、状态、固定原因等），已经脱敏，不含 Key、令牌、路径和账号，可以直接贴到群里；只在点按钮时生成，不上传、不写盘。
 
+新面板的订阅配额规则可用 `swift test --disable-sandbox --scratch-path .build --filter QuotaPanelDisplayTests` 单独验证。测试用固定额度和时间检查最紧窗口、消耗节奏、折叠和读取状态。
+
 ### 测试诊断（仅 Debug）
 
 Debug 构建的设置页提供“导出诊断日志”入口。日志仅保存在当前 macOS 用户的 `~/Library/Logs/Vibe Usage/`，只记录结构化错误码、Provider、App/系统版本和配额 meter 数量，不记录 API Key、OAuth Token、请求头、响应正文、账号信息或本机路径。Release 构建会在编译期移除日志写入实现和导出入口。
