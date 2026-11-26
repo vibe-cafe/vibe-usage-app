@@ -57,19 +57,20 @@ actor SyncEngine {
         }
 
         do {
+            // The Cursor sign-in Vibe Usage keeps goes on stdin (`CursorLogin`),
+            // renewed first when it is due. The proxy is read after that, right
+            // before the CLI starts, so a renewal cannot leave it stale.
+            let cursorLogin = await CursorLogin.credentialForCLIRun()
             let environment = await SystemProxy.cliEnvironment(
                 base: runtime.environment(base: ProcessInfo.processInfo.environment)
             )
-            // The Cursor sign-in Vibe Usage keeps goes on stdin (`CursorLogin`),
-            // renewed first when it is due.
-            let cursorLogin = await CursorLogin.credentialForCLIRun()
             let output = try await CLIProcessRunner.run(
                 executable: runtime.executablePath,
                 arguments: runtime.arguments(cursorLogin == nil ? ["sync"] : ["sync", "--cursor-login-stdin"]),
                 environment: environment, timeout: 120,
                 standardInput: cursorLogin?.data
             )
-            if let cursorLogin, Self.reportsCursorSignInEnded(output) {
+            if let cursorLogin, cursorLogin.hasCredential, Self.reportsCursorSignInEnded(output) {
                 // Renewed for the next sync, or recorded as ended.
                 _ = await CursorLogin.shared.renewAfterRejection(of: cursorLogin)
             }

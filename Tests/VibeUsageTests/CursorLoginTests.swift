@@ -281,14 +281,19 @@ struct CursorLoginTests {
         let cli = FakeCLI()
         cli.renewAnswer = .expired
         let login = login(store: store, cli: cli)
-        #expect(await login.credentialForCLI() == nil)
+        // The token-free record is still handed over, so the CLI reads
+        // nothing for Cursor instead of another login on this Mac.
+        let handed = try #require(await login.credentialForCLI())
+        #expect(!handed.hasCredential)
+        #expect(!String(decoding: handed.data, as: UTF8.self).contains(Self.fakeToken))
         #expect(login.phase == .expired(email: "dev@example.com"))
         #expect(login.hasEnded)
         #expect(login.needsSignIn)
         let kept = String(decoding: try #require(store.current), as: UTF8.self)
         #expect(!kept.contains(Self.fakeToken))
-        // Nothing more is handed to the CLI.
-        #expect(await login.credentialForCLI() == nil)
+        // No more renewals, and a rejection of it asks nothing.
+        #expect(await login.credentialForCLI()?.hasCredential == false)
+        #expect(await login.renewAfterRejection(of: handed) == .ended)
         #expect(cli.renewCalls.count == 1)
     }
 
@@ -352,10 +357,26 @@ struct CursorLoginTests {
         // Renewed meanwhile by another run: no second request.
         #expect(await login.renewAfterRejection(of: passed) == .renewed(renewed))
         #expect(cli.renewCalls.count == 1)
-        // Cursor ends it.
-        cli.renewAnswer = .expired
+        // The renewed one is rejected too: Cursor no longer takes it. It ends
+        // without another renewal (no new session on cursor.com each time).
         #expect(await login.renewAfterRejection(of: renewed) == .ended)
         #expect(login.phase == .expired(email: "dev@example.com"))
+        #expect(await login.renewAfterRejection(of: renewed) == .ended)
+        #expect(cli.renewCalls.count == 1)
+    }
+
+    @Test
+    func aRejectionLongAfterTheLastRenewalIsRenewedAgain() async throws {
+        let clock = Clock(Self.start)
+        let cli = FakeCLI()
+        let login = login(store: MemoryStore(Self.credential()), cli: cli, clock: clock)
+        let passed = try #require(await login.credentialForCLI())
+        guard case .renewed(let renewed) = await login.renewAfterRejection(of: passed) else {
+            Issue.record("expected a renewal")
+            return
+        }
+        clock.advance(6 * 3600 + 1)
+        cli.renewAnswer = .expired
         #expect(await login.renewAfterRejection(of: renewed) == .ended)
         #expect(cli.renewCalls.count == 2)
     }

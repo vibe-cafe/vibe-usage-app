@@ -369,18 +369,6 @@ struct QuotaCLIBridgeTests {
         #expect(encrypted.liveFailure == .credentialsEncrypted)
     }
 
-    @Test @MainActor
-    func anEndedAppSignInStillReadsAsLapsedWhenCursorsOwnLoginIsEncrypted() throws {
-        let product: [String: Any] = [
-            "id": "cursor", "status": "unsupported", "source": "live", "fetchedAt": "2026-11-20T00:00:00Z",
-            "meters": [], "failureReason": "credentialsEncrypted", "signIn": "required",
-        ]
-        let data = try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "products": [product]])
-        let envelope = try QuotaCLIBridge.decode(String(decoding: data, as: UTF8.self))
-        let result = try #require(QuotaCLIBridge.snapshots(from: envelope, cursorSignInEnded: true).first)
-        #expect(result.liveFailure == .signInExpired)
-    }
-
     @Test
     func syncNoticeOfAnEndedSignInIsRecognized() {
         let notice = "cursor: Cursor 登录已失效（在 Vibe Usage 里登录的那一份），Cursor 用量暂停同步，其他工具照常同步。"

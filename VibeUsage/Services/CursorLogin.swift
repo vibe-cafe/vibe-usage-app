@@ -355,6 +355,8 @@ final class CursorLogin {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var renewal: (task: Task<Renewal, Never>, generation: Int)?
     @ObservationIgnored private var renewalHeldUntil: Date?
+    /// The last renewal made because a run was rejected (`renewAfterRejection`).
+    @ObservationIgnored private var rejectionRenewal: (record: CursorLoginRecord, at: Date)?
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private var lastSupportCheck: Date?
     @ObservationIgnored private var loaded = false
@@ -534,27 +536,40 @@ final class CursorLogin {
         record.expiresAt.map { $0.timeIntervalSince(now()) <= Self.renewalLead } ?? false
     }
 
-    /// The sign-in for this CLI run (sync or quota read), renewed first when
-    /// it is within 7 days of expiry. Nil when there is none or Cursor ended it.
+    /// What this CLI run (sync or quota read) gets on stdin, renewed first
+    /// when it is within 7 days of expiry. Nil when there is no sign-in. After
+    /// Cursor ended it, the token-free record is still handed over: the CLI
+    /// takes it as a sign-in that exists but cannot be used, reads nothing
+    /// for Cursor and says so, instead of falling back to another login on
+    /// this Mac (Cursor's own, or the CLI's file), which may be another
+    /// account. Signing in again, or 「退出」, ends that.
     func credentialForCLI() async -> CursorLoginRecord? {
-        guard let current = record, current.hasCredential else { return nil }
-        guard isDue(current) else { return current }
+        guard let current = record else { return nil }
+        guard current.hasCredential, isDue(current) else { return current }
         switch await renew(current) {
         case .renewed(let next): return next
-        case .ended: return nil
+        case .ended: return record
         case .kept(let kept): return kept
         }
     }
 
     /// A CLI run said Cursor rejected `passed` (or that it lapsed). Renew it
-    /// once (the CLI renews a stored sign-in the same way); called at most
-    /// once per run.
+    /// once, as the CLI does for a sign-in it stores itself; when the sign-in
+    /// that renewal produced is rejected too, Cursor no longer takes it and it
+    /// ends without another request. Called at most once per run.
     func renewAfterRejection(of passed: CursorLoginRecord) async -> RejectionOutcome {
-        guard let current = record, current.hasCredential else { return .ended }
+        guard passed.hasCredential, let current = record, current.hasCredential else { return .ended }
         // Renewed by another run, or signed in again, meanwhile.
         guard current == passed else { return .renewed(current) }
+        if let last = rejectionRenewal, last.record == current,
+           now().timeIntervalSince(last.at) < Self.renewalHold {
+            markEnded(current)
+            return .ended
+        }
         switch await renew(current) {
-        case .renewed(let next): return .renewed(next)
+        case .renewed(let next):
+            rejectionRenewal = (next, now())
+            return .renewed(next)
         case .ended: return .ended
         case .kept: return .notRenewed
         }
@@ -597,9 +612,7 @@ final class CursorLogin {
             renewalHeldUntil = nil
             return .renewed(next)
         case .expired:
-            let ended = CursorLoginRecord.ended(email: current.email, at: now())
-            try? store.store(ended.data)
-            record = ended
+            markEnded(current)
             return .ended
         case .incomplete:
             renewalHeldUntil = now().addingTimeInterval(Self.renewalHold)
@@ -609,6 +622,13 @@ final class CursorLogin {
 }
 
 extension CursorLogin {
+    /// Cursor ended the sign-in: keep only what the Settings row shows.
+    fileprivate func markEnded(_ current: CursorLoginRecord) {
+        let ended = CursorLoginRecord.ended(email: current.email, at: now())
+        try? store.store(ended.data)
+        record = ended
+    }
+
     /// For callers outside the main actor (`SyncEngine`, `QuotaCLIBridge`).
     nonisolated static func credentialForCLIRun() async -> CursorLoginRecord? {
         await shared.credentialForCLI()
