@@ -163,7 +163,8 @@ enum SettingsQuotaStatus {
             case .noData:
                 switch snapshot.emptyReason {
                 case .notEntitled: return (.warning, "未订阅")
-                case .sessionWithoutPlanLimits: return (.warning, "不适用")
+                case .sessionWithoutPlanLimits:
+                    return (.warning, product.provider == .claudeCode ? "未用订阅登录" : "不适用")
                 case .nonessentialTrafficDisabled: return (.warning, "已禁止")
                 case .limitReached: return (.warning, "已用满")
                 case .noWindow: return (.warning, "无窗口")
