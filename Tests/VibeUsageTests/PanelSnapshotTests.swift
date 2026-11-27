@@ -295,6 +295,8 @@ struct PanelScene {
             scene("134-active-hero-hover", "活跃当大数字，悬停大数字", .init(hero: .activeTime, preview: .init(heroHovered: true))),
             scene("134-90d", "90D：按周", .init(range: .ninetyDays)),
             scene("134-30d", "30D", .init(range: .thirtyDays, hero: .token)),
+            scene("134-30d-hover", "30D 费用：悬停第 3 天，小块不盖峰值标签",
+                  .init(range: .thirtyDays, preview: .init(hoveredSlot: 2))),
             scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
             scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
                                                                        singleCustomDay: true, preview: .init(hoveredSlot: 15))),
@@ -303,6 +305,9 @@ struct PanelScene {
             scene("134-subscription-active-row", "点进 Codex：活跃小数字读取中", .init(loading: .subscription(.codex))),
             scene("134-subscription-active-hero", "点进 Codex：活跃大数字读取中",
                   .init(hero: .activeTime, loading: .subscription(.codex))),
+            scene("134-peak-left", "峰值在最左边：今天 0 点最贵，标签不压曲线", .init(peakAtMidnight: true)),
+            scene("134-peak-left-hover", "峰值在最左边，鼠标停在峰值上", .init(peakAtMidnight: true,
+                                                                       preview: .init(hoveredSlot: 0))),
             scene("134-chips", "条件很多时标题那一行；所选模型没用量时活跃照画", .init(
                 range: .custom, hero: .activeTime,
                 filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
@@ -424,6 +429,8 @@ struct RecentUsageScene {
     var singleCustomDay = false
     /// The active-time read fails.
     var activityFails = false
+    /// Today peaks at its first hour (`RecentUsageFixtures`).
+    var peakAtMidnight = false
     var loading: Loading = .none
     var preview = RecentUsagePreview()
 
@@ -468,7 +475,7 @@ final class PanelFixture {
         let config = scene.linked ? VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test") : nil
         let usage = scene.usage
         let recent = scene.recent
-        let reads = FixtureReads(empty: recent?.empty ?? false)
+        let reads = FixtureReads(empty: recent?.empty ?? false, peakAtMidnight: recent?.peakAtMidnight ?? false)
         reads.activityFails = recent?.activityFails ?? false
         self.reads = reads
         state = AppState(
@@ -478,7 +485,8 @@ final class PanelFixture {
                 if recent != nil {
                     try await reads.waitIfHanging()
                     if await reads.fails { throw URLError(.timedOut) }
-                    return RecentUsageFixtures.response(for: range, empty: reads.empty)
+                    return RecentUsageFixtures.response(for: range, empty: reads.empty,
+                                                        peakAtMidnight: reads.peakAtMidnight)
                 }
                 guard let usage else { throw URLError(.notConnectedToInternet) }
                 return usage.response(for: range, now: now)
@@ -487,7 +495,8 @@ final class PanelFixture {
                 guard recent != nil else { throw URLError(.notConnectedToInternet) }
                 try await reads.waitIfHanging()
                 if await reads.activityFails { throw URLError(.timedOut) }
-                return RecentUsageFixtures.activity(for: range, hourly: hourly, empty: reads.empty)
+                return RecentUsageFixtures.activity(for: range, hourly: hourly, empty: reads.empty,
+                                                    peakAtMidnight: reads.peakAtMidnight)
             },
             quotaDefaults: defaults,
             zCodeAPIKeyStore: FixtureZCodeKeys(),
@@ -607,6 +616,7 @@ final class PanelFixture {
 @MainActor
 private final class FixtureReads: Sendable {
     let empty: Bool
+    let peakAtMidnight: Bool
     var hangs = false
     /// Usage reads fail (active time still answers).
     var fails = false
@@ -614,7 +624,10 @@ private final class FixtureReads: Sendable {
     var activityFails = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
-    init(empty: Bool) { self.empty = empty }
+    init(empty: Bool, peakAtMidnight: Bool) {
+        self.empty = empty
+        self.peakAtMidnight = peakAtMidnight
+    }
 
     func waitIfHanging() async throws {
         guard hangs else { return }

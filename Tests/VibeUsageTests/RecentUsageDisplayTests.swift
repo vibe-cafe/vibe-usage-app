@@ -539,6 +539,67 @@ struct RecentUsageDisplayTests {
         #expect(chart.tooltips.last == .line(period: "15:00–15:42", value: "$7.90"))
     }
 
+    /// The peak's label has the top band to itself: the dearest hour at the
+    /// far left (today's first hour) sits on the dashed line under the label,
+    /// and nothing the curve draws — its stroke, the end dot, the hover
+    /// marker — reaches up into the band.
+    @Test func aPeakAtTheLeftEdgeStaysUnderThePeakLabel() throws {
+        typealias Layout = RecentUsagePlotLayout
+        let now = date("2026-11-27T07:42:00Z")  // 15:42 in Singapore
+        let costs = [134, 41, 8.2, 0, 0, 0, 0, 0, 3.6, 18, 36, 29, 12, 44, 57, 39]  // from 0:00
+        let buckets = costs.enumerated().filter { $0.element > 0 }.map { index, cost in
+            bucket(date("2026-11-26T16:00:00Z").addingTimeInterval(Double(index) * 3_600).formatted(.iso8601), cost: cost)
+        }
+        let snapshot = UsageDisplaySnapshot(buckets: buckets, dataRange: .from(calendar.startOfDay(for: now)),
+                                            now: now, calendar: calendar)
+        let chart = RecentUsageChart(snapshot: snapshot, metric: .cost, activity: [], units: UsagePanelState(),
+                                     rolling: false, now: now, calendar: calendar)
+        let first = try #require(chart.hoverPoints.first)
+        #expect(first.value == chart.peak && first.x < 0.05)
+        #expect(chart.peakLabel == "$134")
+
+        // The curve's area keeps its height; only the scale under the band changed.
+        let height = Layout.curveHeight
+        #expect(height == ModernTheme.cardBodyHeight - Layout.spacing - Layout.axisHeight)
+        #expect(Layout.y(chart.peak, peak: chart.peak, height: height) == Layout.peakY)
+        #expect(Layout.y(0, peak: chart.peak, height: height) == height - 1.5)
+        #expect(Layout.y(0, peak: 0, height: height) == height - 1.5)
+        for point in chart.curve + chart.hoverPoints {
+            let y = Layout.y(point.value, peak: chart.peak, height: height)
+            #expect(y >= Layout.peakY && y <= height - 1.5)
+        }
+        // The highest marks, centered on the peak: half the 1.5 pt stroke,
+        // the 6 pt end dot, the 8 pt hover marker. None crosses the label's band.
+        for reach in [0.75, 3, Layout.markerRadius] {
+            #expect(Layout.peakY - reach >= Layout.labelBottom)
+        }
+    }
+
+    /// The one-line hover block (cost) steps under its point when above it
+    /// would cover the peak's label, and stays where it was everywhere else.
+    @Test func theCostHoverBlockStepsUnderThePointRatherThanCoverThePeakLabel() {
+        typealias Layout = RecentUsagePlotLayout
+        let label = CGRect(x: 0, y: Layout.labelTop, width: 24, height: Layout.labelHeight)  // 「$67」
+        let size = CGSize(width: 104, height: 22)  // 「10/31  $60.00」
+        let width: CGFloat = 304
+        func origin(_ x: CGFloat, _ y: CGFloat, label: CGRect = label) -> CGPoint {
+            Layout.lineTooltipOrigin(pointX: x, pointY: y, size: size, width: width, peakLabel: label)
+        }
+        // 30D: day 3 at $60 under a $67 peak, near the left edge. The top
+        // edge alone would keep the block above, over the label.
+        let day3 = Layout.y(60, peak: 67, height: Layout.curveHeight)
+        #expect(day3 - 10 - size.height > -6)
+        let near = origin(25, day3)
+        #expect(near.y == day3 + 10)
+        #expect(!CGRect(origin: near, size: size).intersects(label))
+        // The same height away from the label, or a lower point: above, as before.
+        #expect(origin(220, day3).y == day3 - 10 - size.height)
+        #expect(origin(25, 90).y == 90 - 10 - size.height)
+        // Near the top edge: below, as before; with no label drawn, only that rule.
+        #expect(origin(220, Layout.peakY).y == Layout.peakY + 10)
+        #expect(origin(25, day3, label: .null).y == day3 - 10 - size.height)
+    }
+
     @Test func rollingDayStartsAtItsFirstValueAndNamesYesterday() {
         let now = date("2026-11-27T07:42:00Z")
         var buckets = [bucket("2026-11-26T07:00:00Z", cost: 0.6), bucket("2026-11-26T13:00:00Z", cost: 2.9)]
