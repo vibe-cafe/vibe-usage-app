@@ -65,6 +65,38 @@ struct PanelSnapshotTests {
         try classic.write(to: directory.appendingPathComponent("switch-classic.png"))
     }
 
+    /// The round buttons alone, enlarged, to judge the provider marks next to
+    /// the design (133a): every product unselected, then selected, at 2× and
+    /// 3× (`buttons-2x.png`, `buttons-3x.png`).
+    @Test(.enabled(if: PanelSnapshot.isEnabled))
+    @MainActor func renderRoundButtons() async throws {
+        let bundle = try #require(PanelTestResources.bundle)
+        AppFonts.register(from: bundle)
+        let directory = PanelSnapshot.outputDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let order: [(ProviderRateLimit.Provider, Double)] = [
+            (.claudeCode, 31), (.codex, 12), (.cursor, 41), (.grok, 88),
+            (.antigravity, 9), (.kimiCode, 40), (.opencodeGo, 22), (.zCode, 72),
+        ]
+        let rows = VStack(alignment: .leading, spacing: 10) {
+            ForEach([false, true], id: \.self) { selected in
+                HStack(spacing: 6) {
+                    ForEach(order, id: \.0) { provider, remaining in
+                        ModernRoundButtonFace(provider: provider, remaining: remaining, isSelected: selected, showsDot: false)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(ModernTheme.panel)
+        let size = CGSize(width: 24 + 8 * ModernRoundButtonFace.size + 7 * 6, height: 24 + 2 * ModernRoundButtonFace.size + 10)
+        let host = OffscreenHost(rows, size: size)
+        try await host.settle()
+        for scale in [2, 3] {
+            try host.png(scale: CGFloat(scale)).write(to: directory.appendingPathComponent("buttons-\(scale)x.png"))
+        }
+    }
+
     /// The classic panel without a linked account, at its 520 × 620 size,
     /// in the three sign-in steps it shares with the new panel.
     @Test(.enabled(if: PanelSnapshot.isEnabled))

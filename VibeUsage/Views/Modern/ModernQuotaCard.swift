@@ -585,13 +585,13 @@ struct ModernQuotaDetail: View {
     private var ringCenter: some View {
         if subscription.showsSkeleton {
             ModernRingSpinner()
-        } else if let tightest = subscription.tightest, let remaining = tightest.remaining {
+        } else if let center = subscription.ringCenter, let remaining = center.remaining {
             VStack(spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text(ModernQuotaFormat.percent(remaining))
                         .font(ModernTheme.mono(44, .light))
                         .tracking(-2.64)
-                        .foregroundStyle(ModernTheme.toned(tightest.tone))
+                        .foregroundStyle(ModernTheme.toned(center.tone))
                     Text("%")
                         .font(ModernTheme.mono(22, .light))
                         .foregroundStyle(ModernTheme.secondaryText)
@@ -599,7 +599,7 @@ struct ModernQuotaDetail: View {
                 }
                 .frame(height: 44)
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(tightest.label).font(ModernTheme.mono(11))
+                    Text(center.label).font(ModernTheme.mono(11))
                     Text("剩余").font(ModernTheme.text(11)).tracking(1.1)
                 }
                 .foregroundStyle(ModernTheme.secondaryText)

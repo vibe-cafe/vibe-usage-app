@@ -90,6 +90,16 @@ struct QuotaSubscriptionDisplay {
     let additionalAlert: QuotaPanelMeter?
     let outer: QuotaPanelMeter?
     let inner: QuotaPanelMeter?
+    /// The big number in the middle of the rings: the ring window with the
+    /// least left. Model allowances (Fable, Opus, Sonnet) and pay-as-you-go
+    /// spend never take the middle, even when tightest (maintainer
+    /// 2026-11-27); they keep driving the button, the counts and the
+    /// overview's extra label. Without any ring window, the tightest.
+    var ringCenter: QuotaPanelMeter? {
+        let rings = [outer, inner].compactMap { $0 }
+        guard !rings.isEmpty else { return tightest }
+        return rings.min { ($0.remaining ?? 100) < ($1.remaining ?? 100) }
+    }
     let tone: QuotaPaceTone
     let comment: String?
     private let reading: Reading

@@ -218,9 +218,9 @@ struct ModernRoundButtonFace: View {
             well
             arc
             face
-            ProviderGlyph(provider: provider, size: 12)
+            ModernButtonGlyph(provider: provider)
                 .foregroundStyle(glyphColor)
-                .shadow(color: .black.opacity(isSelected ? 0.4 : 0.45), radius: 0, x: 0, y: 0.55)
+                .shadow(color: .black.opacity(isSelected ? 0.4 : 0), radius: 0, x: 0, y: 0.5)
         }
         .frame(width: Self.size, height: Self.size)
         .overlay(alignment: .topLeading) {
@@ -239,7 +239,7 @@ struct ModernRoundButtonFace: View {
         // A subscription with nothing to show and a problem to look at dims
         // its mark (132e); hovering brings it up like other icon buttons.
         if isHovered { return ModernTheme.text }
-        return showsDot && remaining == nil ? Color(settingsHex: 0x555A60) : Color(settingsHex: 0x8B9096)
+        return showsDot && remaining == nil ? Color(settingsHex: 0x5E6369) : ModernButtonGlyph.restingColor
     }
 
     private var well: some View {
@@ -316,6 +316,38 @@ struct ModernRoundButtonFace: View {
                 Circle().fill(.black.opacity(0.7)).frame(width: 20.5, height: 20.5)
                     .blur(radius: 0.85).offset(y: 1.2)
             )
+    }
+}
+
+/// A provider's mark inside a round button. The real marks are finer than
+/// the design's stand-in symbols (thin strands, many points), so at this size
+/// they are drawn a step brighter than the design's `#8B9096` to read as
+/// bright as its solid symbols, each in a box sized to its own visual weight
+/// so the row looks even, and placed on whole points (crisp straight edges
+/// at 2×). The classic panel and Settings keep `ProviderGlyph` unchanged.
+struct ModernButtonGlyph: View {
+    let provider: ProviderRateLimit.Provider
+
+    /// Resting mark color: the design's stand-ins measured against these
+    /// marks, about 78 % of the text color.
+    static let restingColor = ModernTheme.text.opacity(0.78)
+
+    var body: some View {
+        let side = Self.side(for: provider)
+        ProviderGlyphShape(provider: provider)
+            .fill(style: FillStyle(eoFill: true))
+            .frame(width: side, height: side)
+    }
+
+    /// Side of the box the 24-unit mark is drawn in, in whole points.
+    static func side(for provider: ProviderRateLimit.Provider) -> CGFloat {
+        switch provider {
+        // Fine strands get more room, solid shapes less.
+        case .claudeCode, .grok: 13
+        case .codex, .kimiCode: 12
+        case .cursor, .antigravity, .opencodeGo: 11
+        case .zCode: 10
+        }
     }
 }
 

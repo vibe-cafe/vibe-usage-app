@@ -192,6 +192,29 @@ struct QuotaPanelDisplayTests {
         let overview = try #require(display.overview.rows.first)
         #expect(overview.outer?.label == "7d" && overview.inner == nil)
         #expect(overview.additionalAlert?.label == "Fable" && overview.additionalAlert?.tone == .red)
+        // Fable never takes the middle of the rings, even when tightest.
+        #expect(detail.ringCenter?.label == "7d" && detail.ringCenter?.remaining == 60)
+    }
+
+    @Test func ringCenterIsTheTighterRingWindowAndNeverAModelAllowanceOrExtra() throws {
+        var quota = snapshot(.claudeCode, window(36, 5 * hours, due: 16), window(31, 168 * hours, due: 39))
+        quota.sevenDayOpus = window(4, 168 * hours, due: 14)
+        quota.extraUsage = .init(isEnabled: true, spend: 99, limit: 100)
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(9, 168 * hours, due: 61))
+        let detail = try #require(panel(quota, models: [fable]).detail)
+        #expect(detail.tightest?.label == "Opus" && detail.buttonRemaining == 4)
+        #expect(detail.ringCenter?.label == "7d" && detail.ringCenter?.remaining == 31)
+
+        let shortTighter = snapshot(.claudeCode, window(12, 5 * hours, due: 29), window(79, 168 * hours, due: 53))
+        #expect(try #require(panel(shortTighter, models: [fable]).detail).ringCenter?.label == "5h")
+
+        // No ring window at all (Cursor's team pool alone): the tightest.
+        let team = ProviderRateLimit(provider: .cursor, meters: [
+            .init(id: "team", label: "Team", window: window(5, 720 * hours, due: 33)),
+        ], status: .ok)
+        let pool = try #require(panel(team).detail)
+        #expect(pool.outer == nil && pool.inner == nil)
+        #expect(pool.ringCenter?.label == "Team" && pool.ringCenter == pool.tightest)
     }
 
     @Test func claudeProWithoutModelAllowancesShowsOnlyItsTwoWindows() throws {
