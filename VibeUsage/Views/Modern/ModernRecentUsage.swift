@@ -228,7 +228,7 @@ private struct RecentUsageNumbers: View {
     /// AI work time and average concurrency (or why it is missing).
     private var heroHoverLines: (primary: String?, secondary: String?)? {
         if hero == .activeTime {
-            guard let help = activity?.summaryHelp, !help.isEmpty else { return nil }
+            guard let help = activity?.summaryHelp(duration: RecentUsageNumber.duration), !help.isEmpty else { return nil }
             return (nil, help)
         }
         guard !isEmpty, let exact = figures.exactText(hero) else { return nil }
@@ -245,7 +245,8 @@ private struct RecentUsageNumbers: View {
         .buttonStyle(.plain)
         .disabled(!isInteractive)
         .overlay(alignment: .bottomLeading) {
-            if metric == .activeTime, activityHovered, let help = activity?.summaryHelp, !help.isEmpty {
+            if metric == .activeTime, activityHovered,
+               let help = activity?.summaryHelp(duration: RecentUsageNumber.duration), !help.isEmpty {
                 RecentUsageHoverBlock(primary: nil, secondary: help)
                     .fixedSize()
                     .offset(x: -2, y: -22)

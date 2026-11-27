@@ -71,6 +71,76 @@ struct RecentUsageDisplayTests {
         #expect(RecentUsageFigures.rows(besides: .token) == [.cost, .activeTime])
     }
 
+    @Test func tokensUseThreeSignificantDigitsAndDurationsPadMinutes() {
+        // The design's figures (134a–134l); the classic formatter is untouched.
+        let expected: [(Int, String)] = [
+            (1_040_000_000, "1.04B"), (421_000_000, "421M"), (93_100_000, "93.1M"), (210_000, "210K"),
+            (65_500_000, "65.5M"), (12_000_000, "12M"), (999_950, "1M"), (999_449_999, "999M"),
+            (1_234, "1.23K"), (950, "950"), (0, "0"), (999_949_999, "1B"),
+        ]
+        for (tokens, text) in expected {
+            #expect(Formatters.formatPanelTokens(tokens) == text, "\(tokens)")
+        }
+        #expect(Formatters.formatNumber(421_000_000) == "421.0M")
+        var units = UsagePanelState()
+        #expect(units.formatTokens(421_000_000) == "421M")
+        units.hero = .token
+        units.toggleHeroUnit()
+        #expect(units.formatTokens(65_500_000) == "6550万")
+
+        let durations: [(Int, String)] = [(0, "0m"), (30, "30s"), (2_880, "48m"), (11_520, "3h 12m"),
+                                          (68_700, "19h 05m"), (169_200, "47h")]
+        for (seconds, text) in durations {
+            #expect(RecentUsageNumber.duration(seconds) == text, "\(seconds)")
+        }
+        #expect(ActivityTime.duration(68_700) == "19h 5m")
+        let report = ActivityReport(UsageActivity(activeSeconds: 11_520, workSeconds: 16_080, parallel: 1.4,
+                                                  series: [], firstBucketStart: "2026-01-01T00:00:00Z"),
+                                    rangeStart: date("2026-11-27T00:00:00Z"), hourly: true)
+        #expect(report.summaryHelp(duration: RecentUsageNumber.duration) == "AI 工时 4h 28m · 平均同时 1.4 个")
+        #expect(report.summaryHelp == "AI 工时 4h 28m · 平均同时 1.4 个")
+    }
+
+    // MARK: Activity granularity
+
+    @Test @MainActor
+    func aSingleCustomDayAsksActivityByTheHourOnlyInTheNewPanel() async throws {
+        let suite = "RecentUsageDisplayTests.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var asked: [Bool] = []
+        let config = VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test")
+        let state = AppState(
+            initialConfig: config, loadConfig: { config },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: true, names: nil) },
+            activityFetcher: { _, _, _, _, hourly in
+                asked.append(hourly)
+                throw URLError(.notConnectedToInternet)
+            },
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
+        )
+        #expect(state.interfaceStyle.current == .modern)
+        let day = Calendar.current.startOfDay(for: Date().addingTimeInterval(-9 * 86_400))
+        // Each read waits for its activity request (a new read cancels the previous one).
+        func read() async throws {
+            let before = asked.count
+            await state.fetchUsageData()
+            try await waitForDashboard { asked.count == before + 1 }
+        }
+        state.customRangeFrom = day
+        state.customRangeTo = day
+        state.timeRange = .custom
+        try await read()
+        state.customRangeTo = Calendar.current.date(byAdding: .day, value: 1, to: day)!
+        try await read()
+        state.timeRange = .today
+        try await read()
+        state.interfaceStyle.select(.classic)
+        state.customRangeTo = day
+        state.timeRange = .custom
+        try await read()
+        #expect(asked == [true, false, true, false])
+    }
+
     // MARK: Curve
 
     @Test func todayRunsFromTheFirstUsageHourToNowWithRoundTicks() throws {
@@ -153,8 +223,8 @@ struct RecentUsageDisplayTests {
                                      rolling: false, now: now, calendar: calendar)
         #expect(chart.peakLabel == "15M")
         #expect(chart.tooltips.first == .table(period: "14:00–15:00", rows: [
-            .init(label: "总 Token", value: "15.1M"), .init(label: "输出", value: "1.5M"),
-            .init(label: "输入", value: "1.5M"), .init(label: "缓存", value: "12.1M"),
+            .init(label: "总 Token", value: "15.1M"), .init(label: "输出", value: "1.51M"),
+            .init(label: "输入", value: "1.51M"), .init(label: "缓存", value: "12.1M"),
         ]))
 
         units.toggleHeroUnit()

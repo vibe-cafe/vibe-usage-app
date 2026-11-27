@@ -374,7 +374,8 @@ final class AppState {
     private let loadConfig: () -> VibeUsageConfig?
     var usageServer: UsageServer { UsageServer(config?.apiUrl) }
     private let usageFetcher: (UsageServer, String, UsageQueryRange) async throws -> UsageResponse
-    private let activityFetcher: (UsageServer, String, UsageQueryRange, FilterState) async throws -> UsageActivity
+    /// Server, key, range, filters, and whether to ask for hour periods.
+    private let activityFetcher: (UsageServer, String, UsageQueryRange, FilterState, Bool) async throws -> UsageActivity
     private let quotaDefaults: UserDefaults
     private let zCodeAPIKeyStore: any ZCodeAPIKeyStoring
     private let quotaProductDiscoverer: () -> [QuotaProduct]
@@ -387,8 +388,8 @@ final class AppState {
         usageFetcher: @escaping (UsageServer, String, UsageQueryRange) async throws -> UsageResponse = { server, apiKey, range in
             try await APIClient(server: server, apiKey: apiKey).fetchUsage(range: range)
         },
-        activityFetcher: @escaping (UsageServer, String, UsageQueryRange, FilterState) async throws -> UsageActivity = { server, key, range, filters in
-            try await APIClient(server: server, apiKey: key).fetchActivity(range: range, filters: filters)
+        activityFetcher: @escaping (UsageServer, String, UsageQueryRange, FilterState, Bool) async throws -> UsageActivity = { server, key, range, filters, hourly in
+            try await APIClient(server: server, apiKey: key).fetchActivity(range: range, filters: filters, hourly: hourly)
         },
         quotaDefaults: UserDefaults = .standard,
         zCodeAPIKeyStore: any ZCodeAPIKeyStoring = KeychainZCodeAPIKeyStore(),
@@ -690,16 +691,24 @@ final class AppState {
         }
     }
 
+    /// Hour periods for today and the rolling day; in the new panel also for
+    /// a single custom day, whose curve is drawn by the hour (#105). The
+    /// classic chart keeps one day there, so its request is unchanged.
+    func activityIsHourly(_ range: UsageQueryRange) -> Bool {
+        range.isHourly || interfaceStyle.current == .modern && range.isSingleCustomDay
+    }
+
     private func startActivityFetch(range: UsageQueryRange, key: String) {
         activityTask?.cancel()
         if activityRange != range { activity = nil }
         activityRange = range
         let start = range.start(at: Date())
+        let hourly = activityIsHourly(range)
         activityTask = Task { [weak self, activityFetcher, server = usageServer, filters] in
             guard !Task.isCancelled else { return }
-            let result = try? await activityFetcher(server, key, range, filters)
+            let result = try? await activityFetcher(server, key, range, filters, hourly)
             guard !Task.isCancelled else { return }
-            self?.activity = result.map { ActivityReport($0, rangeStart: start, hourly: range.isHourly) }
+            self?.activity = result.map { ActivityReport($0, rangeStart: start, hourly: hourly) }
         }
     }
 

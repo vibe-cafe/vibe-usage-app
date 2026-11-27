@@ -11,6 +11,11 @@ enum RecentUsageFixtures {
         Calendar.current.date(bySettingHour: 15, minute: 42, second: 0, of: Date())!
     }
 
+    /// One custom day, nine days ago.
+    static var customDay: Date {
+        Calendar.current.date(byAdding: .day, value: -9, to: Calendar.current.startOfDay(for: now))!
+    }
+
     /// The custom range drawn in 134h/134i: sixteen days ending nine days ago.
     static var customRange: (from: Date, to: Date) {
         let calendar = Calendar.current
@@ -68,6 +73,11 @@ enum RecentUsageFixtures {
                 let wave = 34 + 22 * sin(Double(index) / 2.3) + 12 * sin(Double(index) / 0.9)
                 return (day(index - count + 1), max(0, wave.rounded()))
             }
+        case .custom(let days, _) where range.isSingleCustomDay:
+            // The server answers a single day by the hour.
+            let pattern: [Double] = [0, 0, 0, 0, 0, 0, 0, 0, 0.6, 3.8, 5.2, 4.1, 0.3, 0.2, 4.6, 6.3,
+                                     5.8, 2.2, 0.4, 0, 1.8, 3.1, 0.9, 0]
+            return pattern.enumerated().map { (hour($0.offset, from: days.start), $0.element) }
         case .custom(let days, _):
             let pattern: [Double] = [8, 44, 52, 41, 47, 30, 6, 4, 49, 55, 38, 46, 33, 8, 5, 47, 57]
             var result: [(Date, Double)] = []
@@ -106,7 +116,7 @@ enum RecentUsageFixtures {
 
     /// Server-side active time: explicit for today, about four minutes per
     /// dollar elsewhere, AI work time 1.4× that. Recorded since long before.
-    static func activity(for range: UsageQueryRange, empty: Bool) -> UsageActivity {
+    static func activity(for range: UsageQueryRange, hourly: Bool, empty: Bool) -> UsageActivity {
         let first = Calendar.current.date(byAdding: .day, value: -200, to: now)!.formatted(.iso8601)
         guard !empty else {
             return UsageActivity(activeSeconds: 0, workSeconds: 0, parallel: nil, series: [], firstBucketStart: first)
@@ -117,7 +127,7 @@ enum RecentUsageFixtures {
             let active: Int
             if case .from = range {
                 active = todayActive[index]
-            } else if range.isHourly {
+            } else if hourly {
                 active = min(3_600, Int(slot.cost * 300))
             } else {
                 active = Int(slot.cost * 256)

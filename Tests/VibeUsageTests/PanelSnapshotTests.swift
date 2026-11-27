@@ -177,6 +177,8 @@ struct PanelScene {
             scene("134-90d", "90D：按周", .init(range: .ninetyDays)),
             scene("134-30d", "30D", .init(range: .thirtyDays, hero: .token)),
             scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
+            scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
+                                                                       singleCustomDay: true, preview: .init(hoveredSlot: 15))),
             scene("134-chips", "条件很多时标题那一行", .init(
                 range: .custom,
                 filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
@@ -194,6 +196,8 @@ struct RecentUsageScene {
     var filters = FilterState()
     /// No usage in the period (134s).
     var empty = false
+    /// The custom range is a single day (`RecentUsageFixtures.customDay`).
+    var singleCustomDay = false
     var loading: Loading = .none
     var preview = RecentUsagePreview()
 
@@ -240,9 +244,9 @@ final class PanelFixture {
                 try await reads.waitIfHanging()
                 return RecentUsageFixtures.response(for: range, empty: reads.empty)
             },
-            activityFetcher: { _, _, range, _ in
+            activityFetcher: { _, _, range, _, hourly in
                 try await reads.waitIfHanging()
-                return RecentUsageFixtures.activity(for: range, empty: reads.empty)
+                return RecentUsageFixtures.activity(for: range, hourly: hourly, empty: reads.empty)
             },
             quotaDefaults: defaults,
             zCodeAPIKeyStore: FixtureZCodeKeys(),
@@ -290,8 +294,8 @@ final class PanelFixture {
     private func prepareUsage() async throws {
         let usage = scene.usage
         let custom = RecentUsageFixtures.customRange
-        state.customRangeFrom = custom.from
-        state.customRangeTo = custom.to
+        state.customRangeFrom = usage.singleCustomDay ? RecentUsageFixtures.customDay : custom.from
+        state.customRangeTo = usage.singleCustomDay ? RecentUsageFixtures.customDay : custom.to
         state.filters = usage.filters
         state.modernPanel.hero = usage.hero
         if usage.cny {

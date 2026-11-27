@@ -60,7 +60,7 @@ struct UsagePanelState {
     }
 
     func formatTokens(_ tokens: Int) -> String {
-        usesChineseTokens ? Formatters.formatPanelChineseTokens(tokens) : Formatters.formatNumber(tokens)
+        usesChineseTokens ? Formatters.formatPanelChineseTokens(tokens) : Formatters.formatPanelTokens(tokens)
     }
 
     /// Called on presentation, including when the panel reuses its hosting view.

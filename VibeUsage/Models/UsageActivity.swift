@@ -43,8 +43,12 @@ struct ActivityTime: Equatable {
 struct ActivityReport: Equatable {
     let summary: ActivityTime?
     private let coverageHint: String?
-    var summaryHelp: String {
-        [summary.flatMap { $0.workSeconds > 0 ? $0.workText : nil }, summary?.parallelText, coverageHint]
+    var summaryHelp: String { summaryHelp(duration: ActivityTime.duration) }
+
+    /// The same line with the new panel's duration format.
+    func summaryHelp(duration: (Int) -> String) -> String {
+        [summary.flatMap { $0.workSeconds > 0 ? "AI 工时 \(duration($0.workSeconds))" : nil },
+         summary?.parallelText, coverageHint]
             .compactMap { $0 }.joined(separator: " · ")
     }
     private let firstKey: String?

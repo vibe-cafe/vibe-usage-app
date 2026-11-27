@@ -58,6 +58,17 @@ enum RecentUsageNumber {
         return parts
     }
 
+    /// Durations as drawn: 「3h 12m」「19h 05m」「47h」「48m」, and 「0m」 for
+    /// none. The classic panel keeps `ActivityTime.duration`.
+    static func duration(_ seconds: Int) -> String {
+        if seconds <= 0 { return "0m" }
+        if seconds < 60 { return "\(seconds)s" }
+        let hours = seconds / 3_600
+        let minutes = seconds % 3_600 / 60
+        if hours == 0 { return "\(minutes)m" }
+        return minutes == 0 ? "\(hours)h" : String(format: "%dh %02dm", hours, minutes)
+    }
+
     /// The new panel writes the yuan sign as drawn (¥), not the full-width
     /// one the shared formatter uses: a full-width sign leaves a gap in the
     /// monospaced figures.
@@ -78,7 +89,7 @@ struct RecentUsageFigures {
         switch metric {
         case .cost: RecentUsageNumber.cost(total.cost, units: units)
         case .token: units.formatTokens(total.totalTokens)
-        case .activeTime: activity?.activeText ?? "—"
+        case .activeTime: activity.map { RecentUsageNumber.duration($0.activeSeconds) } ?? "—"
         }
     }
 
@@ -199,9 +210,9 @@ struct RecentUsageChart {
                 let time = index < activity.count ? activity[index] : nil
                 values.append(Double(time?.activeSeconds ?? 0))
                 if let time {
-                    var rows = [RecentUsageTooltip.Row(label: "活跃", value: time.activeText)]
+                    var rows = [RecentUsageTooltip.Row(label: "活跃", value: RecentUsageNumber.duration(time.activeSeconds))]
                     if time.workSeconds > 0 {
-                        rows.append(.init(label: "AI 工时", value: ActivityTime.duration(time.workSeconds)))
+                        rows.append(.init(label: "AI 工时", value: RecentUsageNumber.duration(time.workSeconds)))
                     }
                     if let parallel = time.parallelText {
                         rows.append(.init(label: "平均同时",
@@ -259,10 +270,11 @@ struct RecentUsageChart {
             guard !units.usesChineseTokens, let unit = text.last, "KMB".contains(unit),
                   let mantissa = Double(text.dropLast()) else { return text }
             if mantissa >= 10 { return "\(Int(mantissa.rounded()))\(unit)" }
-            let short = text.dropLast().hasSuffix(".0") ? String(text.dropLast().dropLast(2)) : String(text.dropLast())
+            var short = String(format: "%.1f", mantissa)
+            if short.hasSuffix(".0") { short.removeLast(2) }
             return "\(short)\(unit)"
         case .activeTime:
-            return ActivityTime.duration(Int(value.rounded()))
+            return RecentUsageNumber.duration(Int(value.rounded()))
         }
     }
 

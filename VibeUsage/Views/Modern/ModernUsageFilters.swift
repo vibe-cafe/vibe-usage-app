@@ -113,10 +113,11 @@ struct RecentUsageControls: View {
         Button {
             if menu.isOpen { menu.close() } else { menu.open() }
         } label: {
+            // The rows shorten downwards, as drawn.
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.system(size: 11, weight: .semibold))
-                .frame(width: 12, height: 20)
-                .padding(.horizontal, 7)
+                .font(.system(size: 12, weight: .regular))
+                .frame(width: 14, height: 20)
+                .padding(.horizontal, 6)
                 .background(Capsule().fill(menu.isOpen ? ModernTheme.chip : .clear))
                 .contentShape(Capsule())
         }

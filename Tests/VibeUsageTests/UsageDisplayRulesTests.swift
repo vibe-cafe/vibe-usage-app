@@ -254,7 +254,7 @@ struct UsageDisplayRulesTests {
     func tappingTheHeroSwitchesOnlyItsOwnDisplayUnit() {
         var state = UsagePanelState()
         #expect(state.formatCost(10.25) == "$10.25")
-        #expect(state.formatTokens(12_000_000) == "12.0M")
+        #expect(state.formatTokens(12_000_000) == "12M")
         state.toggleHeroUnit()
         #expect(state.formatCost(10.25) == "￥71.75")
         state.hero = .token
