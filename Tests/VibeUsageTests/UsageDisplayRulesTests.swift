@@ -123,7 +123,7 @@ struct UsageDisplayRulesTests {
                                                     bucket("2026-11-17T16:00:00Z", 2),
                                                     bucket("2026-11-18T15:30:00Z", 4),
                                                     bucket("2026-11-18T16:00:00Z", 8)],
-                                          dataRange: .custom(from: from, to: to),
+                                          dataRange: .custom(from: from, to: to, timeZone: calendar.timeZone),
                                           now: date("2026-11-27T00:00:00Z"), calendar: calendar)
         #expect(result.series.map(\.amount.totalTokens) == [2] + Array(repeating: 0, count: 22) + [4])
         #expect(result.series.first?.start == date("2026-11-17T16:00:00Z"))
@@ -138,7 +138,7 @@ struct UsageDisplayRulesTests {
         let now = date("2026-11-27T04:00:00Z")
         for (days, slots, firstLength) in [(2, 2, 1), (60, 60, 1), (61, 9, 5), (63, 9, 7), (64, 10, 1)] {
             let start = calendar.date(byAdding: .day, value: 1 - days, to: end)!
-            let dataRange = UsageQueryRange.custom(from: start, to: end)
+            let dataRange = UsageQueryRange.custom(from: start, to: end, timeZone: calendar.timeZone)
             let result = UsageDisplaySnapshot(buckets: [bucket("2026-11-16T16:00:00Z", 2)],
                                               dataRange: dataRange, now: now, calendar: calendar)
             #expect(result.series.count == slots)
@@ -158,7 +158,7 @@ struct UsageDisplayRulesTests {
         // Local midnight is 18:15 UTC. The first hourly API row is labelled 18:00.
         let result = UsageDisplaySnapshot(buckets: [bucket("2026-11-17T18:00:00Z", 3),
                                                     bucket("2026-11-18T18:00:00Z", 4)],
-                                          dataRange: .custom(from: selected, to: selected),
+                                          dataRange: .custom(from: selected, to: selected, timeZone: local.timeZone),
                                           now: date("2026-11-27T00:00:00Z"), calendar: local)
         #expect(result.series.map(\.amount.totalTokens) == [3] + Array(repeating: 0, count: 23) + [4])
         #expect(result.series.first?.start == date("2026-11-17T18:15:00Z"))
