@@ -139,14 +139,21 @@ struct ModernDetailsTests {
         await state.fetchUsageData()
         #expect(shown() == "figures")
 
+        // The same period read again without success keeps its figures.
+        fails = true
+        await state.fetchUsageData()
+        #expect(shown() == "figures")
+
         // A new period: the previous figures fade while its read runs, and
-        // only until it ends — a failure is 「—」, not the old numbers.
+        // only until it ends — a failure is 「—」, not the old numbers, and a
+        // retry shows loading blocks, not the old numbers again.
         state.timeRange = .sevenDays
         state.isLoadingData = true
         #expect(shown() == "faded")
-        fails = true
         await state.fetchUsageData()
         #expect(shown() == "unavailable")
+        state.isLoadingData = true
+        #expect(shown() == "loading")
 
         // Zero only for a period read successfully without usage.
         fails = false
@@ -163,6 +170,37 @@ struct ModernDetailsTests {
         #expect(shown() == "loading")
         state.isLoadingData = true
         #expect(shown() == "loading")
+    }
+
+    @Test @MainActor
+    func theAccountChangesOnlyWithTheKeyOrTheServer() async {
+        let linked = VibeUsageConfig(apiKey: "one", apiUrl: "https://example.test")
+        let suite = "ModernDetailsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = AppState(
+            initialConfig: linked,
+            loadConfig: { linked },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) },
+            quotaDefaults: defaults
+        )
+        let start = state.usageAccount
+        // An ordinary refresh re-reads the same key on the same server.
+        await state.fetchUsageData()
+        state.applyConfig(linked)
+        #expect(state.usageAccount == start)
+        // The same key on another server.
+        state.applyConfig(VibeUsageConfig(apiKey: "one", apiUrl: "https://other.test"))
+        let movedServer = state.usageAccount
+        #expect(movedServer != start)
+        // Another key (a relink).
+        state.applyConfig(VibeUsageConfig(apiKey: "two", apiUrl: "https://other.test"))
+        let relinked = state.usageAccount
+        #expect(relinked != movedServer)
+        // 「重置配置」.
+        state.applyConfig(nil)
+        #expect(state.usageAccount != relinked)
     }
 
     @Test

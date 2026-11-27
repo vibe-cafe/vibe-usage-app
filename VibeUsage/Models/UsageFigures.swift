@@ -40,7 +40,11 @@ final class UsageFiguresKeeper {
         }
         let current = appState.usageDisplaySnapshot(filters: filters, now: now)
         if let current { retained = current }
-        return .resolve(current: current, retained: retained, isLoading: appState.isLoadingData,
-                        hasFinishedRead: appState.hasLoadedUsageData)
+        let figures = UsageFigures.resolve(current: current, retained: retained, isLoading: appState.isLoadingData,
+                                           hasFinishedRead: appState.hasLoadedUsageData)
+        // The new period's read ended without figures: the faded ones are
+        // done, and a retry shows loading blocks until its answer.
+        if case .unavailable = figures { retained = nil }
+        return figures
     }
 }
