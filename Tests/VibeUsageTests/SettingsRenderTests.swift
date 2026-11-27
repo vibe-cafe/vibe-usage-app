@@ -136,12 +136,11 @@ struct SettingsRenderState: Sendable {
         },
         .init(name: "sync-relinking", page: .sync) { model, appState in
             Self.linked(model, appState)
-            model.isRelinking = true
-            model.relinkUserCode = "WDJB-MJHT"
+            model.relink.showForPreview(.awaitingApproval(userCode: "WDJB-MJHT"))
         },
         .init(name: "sync-relink-error", page: .sync) { model, appState in
             Self.linked(model, appState)
-            model.relinkError = "验证码已过期，请重新登录。"
+            model.relink.showForPreview(.failed(reason: "验证码已过期，请重新登录。"))
         },
         .init(name: "sync-syncing", page: .sync) { model, appState in
             Self.linked(model, appState)

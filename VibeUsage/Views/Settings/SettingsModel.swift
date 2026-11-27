@@ -286,10 +286,14 @@ final class SettingsModel {
     // 数据同步
     var apiKeyDisplay = ""
     var hasAPIKey = false
-    var isRelinking = false
-    var relinkUserCode: String?
-    var relinkError: String?
-    private var relinkTask: Task<Void, Never>?
+    /// 「链接」 / 「重新链接」: this window's own device sign-in, the same flow
+    /// as the panel's. A link reloads the key line.
+    @ObservationIgnored private(set) lazy var relink: DeviceLinkFlow = appState.makeDeviceLink { [weak self] in
+        self?.load()
+    }
+    var isRelinking: Bool { relink.isRunning }
+    var relinkUserCode: String? { relink.userCode }
+    var relinkError: String? { relink.failureReason }
 
     // 通用
     var autoStartEnabled = false
@@ -361,81 +365,13 @@ final class SettingsModel {
     // MARK: 数据同步
 
     func startRelink() {
-        relinkTask = Task { await relink() }
-    }
-
-    private func relink() async {
-        relinkError = nil
-        relinkUserCode = nil
-        isRelinking = true
-        defer { isRelinking = false }
-
-        appState.reloadConfig()
-        let server = appState.usageServer
-        let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
-        let device: DeviceCodeResponse
-        do {
-            device = try await requestDeviceCode(server: server, clientName: "\(AppConfig.displayName).app", hostname: hostname)
-        } catch {
-            relinkError = "无法连接服务端：\(error.localizedDescription)"
-            return
-        }
-
-        relinkUserCode = device.userCode
-        if let url = server.verificationURL(device.verificationUriComplete) {
-            NSWorkspace.shared.open(url)
-        }
-
-        let intervalNs = UInt64(max(device.interval, 1)) * 1_000_000_000
-        let deadline = Date().addingTimeInterval(TimeInterval(device.expiresIn))
-
-        while Date() < deadline {
-            if Task.isCancelled { return }
-            try? await Task.sleep(nanoseconds: intervalNs)
-            if Task.isCancelled { return }
-            let res: DevicePollResponse
-            do {
-                res = try await pollDeviceCode(server: server, deviceCode: device.deviceCode)
-            } catch {
-                continue
-            }
-            if let apiKey = res.apiKey {
-                appState.configure(apiKey: apiKey, server: res.linkedServer(fallingBackTo: server))
-                await appState.fetchUsageData()
-                relinkUserCode = nil
-                load()
-                return
-            }
-            switch res.error {
-            case "authorization_pending", nil:
-                continue
-            case "access_denied":
-                relinkError = DeviceFlowError.denied.localizedDescription
-                relinkUserCode = nil
-                return
-            case "expired_token":
-                relinkError = DeviceFlowError.expired.localizedDescription
-                relinkUserCode = nil
-                return
-            default:
-                relinkError = "服务端返回未知错误：\(res.error ?? "unknown")"
-                relinkUserCode = nil
-                return
-            }
-        }
-        relinkError = DeviceFlowError.expired.localizedDescription
-        relinkUserCode = nil
+        relink.start()
     }
 
     /// Abort an in-flight re-link so the user can start over immediately rather
-    /// than waiting out the 15-minute timeout. The cancelled task returns at its
-    /// next checkpoint; its `defer` clears `isRelinking`.
+    /// than waiting out the 15-minute timeout.
     func cancelRelink() {
-        relinkTask?.cancel()
-        relinkTask = nil
-        relinkUserCode = nil
-        relinkError = nil
-        isRelinking = false
+        relink.cancel()
     }
 
     func resetConfig() {

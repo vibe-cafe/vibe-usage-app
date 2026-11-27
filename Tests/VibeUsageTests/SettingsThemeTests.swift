@@ -99,7 +99,7 @@ struct SettingsThemeTests {
     /// per-window model (drafts, re-link) and navigation are the same objects
     /// with the same contents afterwards.
     @Test @MainActor
-    func switchingStyleKeepsDraftsAndNavigation() {
+    func switchingStyleKeepsDraftsAndNavigation() async throws {
         let suite = "SettingsThemeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -109,16 +109,20 @@ struct SettingsThemeTests {
             loadConfig: { nil },
             quotaDefaults: defaults,
             quotaProductDiscoverer: { [] },
-            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
+            deviceLinkService: .awaitingApproval
         )
         let model = SettingsModel(appState: appState)
+        defer { model.relink.cancel() }
         let navigation = SettingsNavigation(defaults: defaults)
         navigation.page = .directories
         navigation.expandedProviders = [.zCode]
         model.codexExtraHome = "~/work/codex"
         model.zCodeAPIKeyDraft = "draft-key"
-        model.isRelinking = true
-        model.relinkUserCode = "WDJB-MJHT"
+        model.relink.start()
+        for _ in 0..<200 where model.relinkUserCode == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
 
         #expect(appState.interfaceStyle.canSelect)
         #expect(SettingsTheme.of(appState.interfaceStyle.current).isModern)
@@ -132,4 +136,20 @@ struct SettingsThemeTests {
         #expect(model.isRelinking)
         #expect(model.relinkUserCode == "WDJB-MJHT")
     }
+}
+
+private extension DeviceLinkService {
+    /// Hands out a code, then waits for an approval that never comes. No
+    /// server, browser or real wait is involved.
+    static let awaitingApproval = DeviceLinkService(
+        requestCode: { _, _, _ in
+            DeviceCodeResponse(deviceCode: "fixture", userCode: "WDJB-MJHT", verificationUri: "",
+                               verificationUriComplete: "", expiresIn: 900, interval: 5)
+        },
+        poll: { _, _ in DevicePollResponse(apiKey: nil, apiUrl: nil, error: "authorization_pending") },
+        sleep: { _ in try await Task.sleep(for: .seconds(3_600)) },
+        now: { Date() },
+        openURL: { _ in },
+        hostname: { nil }
+    )
 }

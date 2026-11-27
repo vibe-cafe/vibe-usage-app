@@ -43,8 +43,9 @@ struct PanelRootView: View {
 }
 
 /// The new panel (design 131, 136): header, 概览 row, 订阅配额 and 近期消耗
-/// cards, footer. This is the shell: card contents, the round buttons and the
-/// details cards are filled in by later tickets.
+/// cards, footer. Without a linked account 近期消耗 holds the sign-in
+/// (136j–136l). Card contents, the round buttons and the details cards are
+/// filled in by later tickets.
 struct ModernPanelView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -133,7 +134,12 @@ struct ModernPanelView: View {
             ModernCard(title: "近期消耗") {
                 EmptyView()
             } content: {
-                Color.clear.frame(height: 116)
+                if appState.isConfigured {
+                    Color.clear.frame(height: ModernTheme.recentUsageBodyHeight)
+                } else {
+                    // Not linked: the same card walks through the sign-in.
+                    ModernSignInBody()
+                }
             }
 
             if appState.isConfigured && appState.modernPanel.detailsExpanded {

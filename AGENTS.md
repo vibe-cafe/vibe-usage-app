@@ -29,7 +29,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   └── SyncHistory.swift      # Last 10 sync summaries (typed fields only) in the app's preferences
 │   ├── Views/
 │   │   ├── PopoverView.swift      # Classic dashboard container (520 × 620 popover)
-│   │   ├── Modern/                # New panel (interface style .modern): PanelRootView (style switch), ModernPanelView (header, 概览 row, cards, footer; height follows content), ModernPanelChrome (header, footer, 同步用量, spinner), ModernTheme (palette, fonts, card surface)
+│   │   ├── Modern/                # New panel (interface style .modern): PanelRootView (style switch), ModernPanelView (header, 概览 row, cards, footer; height follows content), ModernPanelChrome (header, footer, 同步用量, spinner, primary button), ModernSignInBody (近期消耗 while not linked), ModernTheme (palette, fonts, card surface)
 │   │   ├── SummaryCardsView.swift # 4 stat cards (cost, total tokens, cached tokens, active time)
 │   │   ├── BarChartView.swift     # Custom-drawn bar chart (hourly/daily trend)
 │   │   ├── DistributionChartsView.swift  # 4 donut pie charts (terminal, tool, model, project)
@@ -38,6 +38,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── Settings/              # One file per page, plus SettingsTheme (classic + modern themes: palette, type, metrics, card/row/section, switch/button/segment/field), SettingsMenu (modern pop-up menu, drawn by a window-level overlay), SettingsModel (pages, navigation, display rules, per-window state), ProviderGlyph + SVGPathParser (monochrome provider marks)
 │   ├── Services/
 │   │   ├── APIClient.swift        # HTTP client for /api/usage (Bearer auth with vbu_ key) + unauthenticated device-flow helpers (requestDeviceCode/pollDeviceCode)
+│   │   ├── DeviceLinkFlow.swift   # Device sign-in state machine (code → browser → poll → save): one on AppState for both panels, one per Settings window
 │   │   ├── SyncEngine.swift       # Orchestrates CLI sync (runs the CLI through cli-bootstrap.mjs)
 │   │   ├── SyncScheduler.swift    # 30-minute interval auto-sync timer
 │   │   ├── CLIBridge.swift        # Executes vibe-usage CLI config commands
@@ -226,11 +227,11 @@ VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
     │   ├── ModernSubscriptionRow  # 概览 lamp, round buttons (later ticket), gear; only with 2+ enabled
     │   ├── ScrollView             # scrolls only when the panel would outgrow the screen
     │   │   ├── ModernCard 订阅配额 # + 刷新额度 (scope: 概览 = all, detail = that one)
-    │   │   ├── ModernCard 近期消耗
+    │   │   ├── ModernCard 近期消耗 # ModernSignInBody while not linked (136j–136l)
     │   │   └── 4 detail cards     # while 展开详情
     │   └── ModernFooterBar        # 展开/收起详情, 同步用量, quit
     └── PopoverView (.classic; 520 × 620)
-        ├── unconfiguredView          # First-run device-flow linking (browser login → poll → save key)
+        ├── unconfiguredView          # First-run linking, the same `AppState.deviceLink` as the new panel
         └── dashboardView
             ├── headerBar             # Title, web links (详情/排行榜), settings
             ├── ScrollView
@@ -247,8 +248,8 @@ The new panel is a separate view layer over the same `AppState`; the classic pan
 
 - **Two buttons, two jobs (design §2, §3-19).** The footer's 「同步用量」 runs `triggerSync()` only. The 订阅配额 card's 「刷新额度」 runs `AppState.refreshQuotas(_:)` only: on 概览 `refreshAllRateLimits()`, in one subscription's detail (or when only one is enabled) `refreshRateLimit(for:)`; no button without an enabled subscription (`ModernPanelState.quotaRefreshScope`). While any read in its scope is running (including the reads an open starts) the icon spins and the button takes no clicks, and `refreshQuotas` ignores the call: on 概览 a second `refreshAll()` would read again the providers that already answered. The classic footer's 「更新数据」 still does both. Neither button adds a request kind: the reads keep their proxy handling and egress check.
 - **Last successful sync** (`AppState.lastSuccessfulSyncAt`) is kept in the app's preferences (`lastSuccessfulSyncAt`; on first run after the upgrade it is taken from the newest successful `SyncHistoryStore` record and saved at once, before later failures can push that record out), so the footer still says 「N 分钟前同步」 after a restart; 「重置配置」 removes it. The classic footer keeps the in-memory `lastSyncTime` (「就绪」 after launch).
-- **Not linked:** the footer keeps only the quit icon; 订阅配额 still shows (local reads).
-- **Shell only so far:** card contents, the round buttons, the sign-in card and the detail cards' contents come with the quota and usage tickets; `ModernPanelState.selectedSubscription` is a stand-in until the usage rules bring the selected-subscription state.
+- **Not linked (136j–136l):** the footer keeps only the quit icon; 订阅配额 still shows (local reads); 近期消耗 keeps its title and its body height (`ModernTheme.recentUsageBodyHeight`, 116 pt) and holds the sign-in instead: 「登录后可以看用量」 + 「登录并链接数据」; 「等待浏览器确认…」, the hint, the code (a loading block until the server answers) and 「取消，重新开始」; 「登录没成功」, the reason (the existing copy) and 「重新登录」. The flow is `AppState.deviceLink` (`DeviceLinkFlow`), the same object the classic panel's button drives, so closing the panel or switching the style keeps an attempt in progress. Each Settings window keeps its own `DeviceLinkFlow` for 「链接」 / 「重新链接」, on the same `deviceLinkService`, which reloads its key line after a link. The flow sends what the classic panel always sent (code, then a poll every `interval` seconds until approval, refusal or expiry); an attempt that was cancelled never writes over the one after it, and an approval its poll brings back after the cancel is dropped, not saved (no config write, no sync).
+- **Shell only so far:** card contents, the round buttons and the detail cards' contents come with the quota and usage tickets; `ModernPanelState.selectedSubscription` is a stand-in until the usage rules bring the selected-subscription state.
 - **Rendering:** `Tests/VibeUsageTests/PanelSnapshotTests.swift` is the off-screen renderer (opt-in, `VIBE_USAGE_RENDER_PANEL=1`; `VIBE_USAGE_RENDER_SCENES` picks ids, `VIBE_USAGE_SNAPSHOT_DIR` moves the output). Scenes are fixed data named after the design ids, in their own preference domain with the external-test rollout (so the renderer also builds and runs with `-c release`); it hosts the real view in an off-screen `NSHostingView` and draws it with `cacheDisplay` (which also draws `ScrollView`, unlike `ImageRenderer`), with the bundled fonts registered. Add a scene for every visual state a ticket introduces.
 
 ### Data Flow
@@ -321,7 +322,7 @@ Release builds always run `@latest` (CLI version policy above): the app must wor
 1. `SyncScheduler` fires every 30 minutes (background upload + fetch)
 2. `SyncEngine` runs `<runtime> cli-bootstrap.mjs sync`; `CLIBridge` does the same for config and quota commands
 3. `RuntimeDetector` chooses the runtime (see **Bundled Node** below)
-4. After a successful sync, `fetchUsageData()` reads the CLI's latest config and refreshes the dashboard. Device linking uses the configured server for both code and poll, then saves the mapped address returned on approval (or the requesting server if omitted). The CLI owns on-disk domain migration.
+4. After a successful sync, `fetchUsageData()` reads the CLI's latest config and refreshes the dashboard. Device linking (`DeviceLinkFlow`) uses the configured server for both code and poll, then saves the mapped address returned on approval (or the requesting server if omitted). The CLI owns on-disk domain migration.
 5. Opening the popover calls `fetchUsageDataIfNeeded()` (60s debounce, through `AppState.panelWillOpen()`) — fetch only, no upload
 6. A sync whose account changed while it waited or while the CLI ran (「重置配置」, relink) is dropped: no history record, no sync time, status back to idle; after a relink the new account is synced instead, once, in a task of its own: the stale run may be the launch task that `startScheduler()` cancelled, and the CLI runner stops on cancellation (`AppState.triggerSync`; `configure` writes through the `saveConfig` seam so tests never touch `~/.vibe-usage`).
 7. Settings can persist one legacy `codexExtraHome` plus per-source isolated runtime roots (Codex / Grok / Antigravity, e.g. Multica homes) through the CLI (`config roots` / `add-root` / `remove-root`, CLI ≥ 0.10.20) — both editors sit on the Settings 数据目录（高级）page; sync then scans them together with each tool's default directory (`$CODEX_HOME` / `~/.codex` for Codex). The app never writes these fields itself — `CLIBridge` shells out so the CLI stays the single writer. Config writes must preserve unknown CLI fields, especially local privacy controls and `deviceId`. `VIBE_USAGE_CONFIG_DIR` / `VIBE_USAGE_CLI_PACKAGE` are integration-test hooks (the latter forces `npx` with a local package path).

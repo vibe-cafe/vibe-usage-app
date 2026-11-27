@@ -79,6 +79,12 @@ final class AppState {
     /// Navigation of the new panel (概览 or one subscription, hero, expanded).
     let modernPanel = ModernPanelState()
 
+    /// The panel's 「登录并链接数据」 sign-in, shared by the classic and the new
+    /// panel so it survives closing the panel and switching the style.
+    @ObservationIgnored private(set) lazy var deviceLink: DeviceLinkFlow = makeDeviceLink()
+    /// What every device sign-in of this app reaches (a seam for tests).
+    @ObservationIgnored let deviceLinkService: DeviceLinkService
+
     // MARK: - Sync State
     var syncStatus: SyncStatus = .idle
     var lastSyncTime: Date?
@@ -390,9 +396,11 @@ final class AppState {
             QuotaProductRegistry.discover()
         },
         cursorLogin: CursorLogin? = nil,
-        interfaceStyle: InterfaceStylePreference = InterfaceStylePreference()
+        interfaceStyle: InterfaceStylePreference = InterfaceStylePreference(),
+        deviceLinkService: DeviceLinkService = .live
     ) {
         self.interfaceStyle = interfaceStyle
+        self.deviceLinkService = deviceLinkService
         self.config = initialConfig
         self.loadConfig = loadConfig
         self.isConfigured = initialConfig?.apiKey != nil

@@ -22,6 +22,9 @@ enum ModernTheme {
     static let cardCornerRadius: CGFloat = 10
     /// The card's left column (big number or ring).
     static let leadingColumnWidth: CGFloat = 160
+    /// The body of 近期消耗 under its title row, the same with usage (131a)
+    /// and with the sign-in in its place (136j–136l).
+    static let recentUsageBodyHeight: CGFloat = 116
 
     // MARK: Surfaces
 
@@ -45,6 +48,10 @@ enum ModernTheme {
     static let separator = text.opacity(0.14)
     /// Fill of a chip (「发现更新」, the selected period).
     static let chip = text.opacity(0.1)
+    /// A loading block where a number will be (134).
+    static let placeholder = text.opacity(0.07)
+    /// Label of the one prominent button, on a `text`-colored capsule.
+    static let prominentLabel = Color(settingsHex: 0x16191C)
 
     // MARK: Accents
 
