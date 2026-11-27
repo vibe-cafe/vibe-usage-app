@@ -118,6 +118,9 @@ final class AppState {
     var hasLoadedUsageData: Bool = false
     private var usageFetchGeneration: UInt = 0
     private var loadedUsageRange: UsageQueryRange?
+    /// Changes whenever the account or server changes (link, relink, reset):
+    /// figures a view kept from before belong to someone else.
+    private(set) var usageAccount: UInt = 0
 
     var isInitialDataLoad: Bool {
         isLoadingData && !hasLoadedUsageData && buckets.isEmpty
@@ -566,6 +569,7 @@ final class AppState {
         if latest == nil || config?.apiKey != latest?.apiKey || usageServer != UsageServer(latest?.apiUrl) {
             // A pending response or cached dashboard belongs to the previous account/server.
             usageFetchGeneration &+= 1
+            usageAccount &+= 1
             activityTask?.cancel()
             activityTask = nil
             activityRange = nil

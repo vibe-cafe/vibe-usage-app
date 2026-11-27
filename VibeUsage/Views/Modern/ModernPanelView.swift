@@ -45,8 +45,8 @@ struct PanelRootView: View {
 /// The new panel (design 131, 136): header, 概览 row, 订阅配额 and 近期消耗
 /// cards, footer. Without a linked account 近期消耗 holds the sign-in
 /// (136j–136l); with one, the figures, the curve and the filter menu (134).
-/// The quota card's contents, the round buttons and the details cards are
-/// filled in by their own tickets.
+/// 展开详情 adds the four details cards (135). The quota card's contents
+/// and the round buttons are filled in by their own tickets.
 struct ModernPanelView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -148,7 +148,7 @@ struct ModernPanelView: View {
             }
 
             if appState.isConfigured && appState.modernPanel.detailsExpanded {
-                ModernDetailsPlaceholder()
+                ModernDetailsSection()
             }
         }
         .padding(.horizontal, ModernTheme.cardInset)
@@ -209,33 +209,5 @@ struct ModernRefreshQuotasButton: View {
         .disabled(isRefreshing)
         .help("刷新额度")
         .accessibilityLabel("刷新额度")
-    }
-}
-
-/// The four cards 展开详情 adds (135): 模型分布 and Token 构成, then 终端分布
-/// and 工具分布, 244 × 252 each. Frames only; their contents come with the
-/// usage cards.
-private struct ModernDetailsPlaceholder: View {
-    var body: some View {
-        VStack(spacing: ModernTheme.cardSpacing) {
-            row("模型分布", "Token 构成")
-            row("终端分布", "工具分布")
-        }
-    }
-
-    private func row(_ first: String, _ second: String) -> some View {
-        HStack(spacing: ModernTheme.cardSpacing) {
-            card(first)
-            card(second)
-        }
-    }
-
-    private func card(_ title: String) -> some View {
-        ModernCard(title: title) {
-            EmptyView()
-        } content: {
-            // 252 minus the padding, the title row and its gap.
-            Color.clear.frame(height: 252 - 2 * ModernTheme.cardPadding - 20 - 8)
-        }
     }
 }
