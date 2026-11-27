@@ -181,6 +181,9 @@ struct RecentUsageChart {
     let endLabel: String
     /// The two labelled ticks between them.
     let ticks: [Tick]
+    /// False when no slot is known (active time that did not come): no peak
+    /// label either, rather than a 「0m」.
+    var hasKnownPoints: Bool { !curve.isEmpty }
 
     init(snapshot: UsageDisplaySnapshot, metric: ChartMode, activity: [ActivityTime?],
          units: UsagePanelState, rolling: Bool, now: Date, calendar: Calendar = .current) {

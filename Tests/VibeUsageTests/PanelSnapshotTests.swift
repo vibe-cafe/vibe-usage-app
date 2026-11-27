@@ -263,6 +263,7 @@ struct PanelScene {
             scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
                                                                        singleCustomDay: true, preview: .init(hoveredSlot: 15))),
             scene("134-unavailable", "读取失败：数字写「—」，不画曲线", .init(loading: .failed)),
+            scene("134-active-missing", "活跃当大数字，活跃时长没读到：不印峰值", .init(hero: .activeTime, activityFails: true)),
             scene("134-chips", "条件很多时标题那一行；所选模型没用量时活跃照画", .init(
                 range: .custom, hero: .activeTime,
                 filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
@@ -282,6 +283,8 @@ struct RecentUsageScene {
     var empty = false
     /// The custom range is a single day (`RecentUsageFixtures.customDay`).
     var singleCustomDay = false
+    /// The active-time read fails.
+    var activityFails = false
     var loading: Loading = .none
     var preview = RecentUsagePreview()
 
@@ -324,6 +327,7 @@ final class PanelFixture {
         let usage = scene.usage
         let recent = scene.recent
         let reads = FixtureReads(empty: recent?.empty ?? false)
+        reads.activityFails = recent?.activityFails ?? false
         self.reads = reads
         state = AppState(
             initialConfig: config,
@@ -340,6 +344,7 @@ final class PanelFixture {
             activityFetcher: { _, _, range, _, hourly in
                 guard recent != nil else { throw URLError(.notConnectedToInternet) }
                 try await reads.waitIfHanging()
+                if await reads.activityFails { throw URLError(.timedOut) }
                 return RecentUsageFixtures.activity(for: range, hourly: hourly, empty: reads.empty)
             },
             quotaDefaults: defaults,
@@ -410,7 +415,7 @@ final class PanelFixture {
         case .none:
             state.timeRange = usage.range
             await state.fetchUsageData()
-            try await waitFor { self.state.activity != nil }
+            if !usage.activityFails { try await waitFor { self.state.activity != nil } }
         case .initial:
             state.timeRange = usage.range
             reads.hangs = true
@@ -457,6 +462,8 @@ private final class FixtureReads: Sendable {
     var hangs = false
     /// Usage reads fail (active time still answers).
     var fails = false
+    /// Active-time reads fail (usage still answers).
+    var activityFails = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(empty: Bool) { self.empty = empty }

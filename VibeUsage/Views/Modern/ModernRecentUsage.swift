@@ -9,6 +9,15 @@ struct RecentUsagePreview {
     var activityHovered = false
     var menu: UsageFilterMenuState.Submenu??
     var expandedFamilies: Set<String> = []
+    /// View tests: what the card settled on after each update.
+    var onShow: (@MainActor (RecentUsageShown) -> Void)?
+}
+
+/// What 近期消耗 drew, reported to view tests.
+struct RecentUsageShown: Equatable {
+    enum Kind: Equatable { case loading, unavailable, figures, faded }
+    let kind: Kind
+    let cost: Double?
 }
 
 extension EnvironmentValues {
@@ -54,15 +63,16 @@ struct ModernRecentUsageBody: View {
         appState.modernPanel.usageFilters(appState.filters, enabled: appState.quotaCardProviders)
     }
 
+    /// Every end of a read counts (`usageReadsFinished`), not the loading
+    /// flag or the bucket count: a read that ends before the next update, or
+    /// a refresh with as many buckets but other figures, must still redraw.
     private struct RebuildKey: Equatable {
         let filters: UsagePanelFilters
         let range: TimeRange
         let from: Date
         let to: Date
-        let isLoading: Bool
-        let hasLoaded: Bool
+        let readsFinished: UInt
         let account: UInt
-        let bucketCount: Int
         let presentation: Int
     }
 
@@ -70,8 +80,7 @@ struct ModernRecentUsageBody: View {
         RebuildKey(
             filters: filters, range: appState.timeRange,
             from: appState.customRangeFrom, to: appState.customRangeTo,
-            isLoading: appState.isLoadingData, hasLoaded: appState.hasLoadedUsageData,
-            account: appState.usageAccount, bucketCount: appState.buckets.count,
+            readsFinished: appState.usageReadsFinished, account: appState.usageAccount,
             presentation: appState.modernPanel.presentation
         )
     }
@@ -107,6 +116,14 @@ struct ModernRecentUsageBody: View {
         case .loading, .unavailable:
             activityGrid = nil
             activity = appState.activity
+        }
+        if let report = preview.onShow {
+            switch figures {
+            case .loading: report(RecentUsageShown(kind: .loading, cost: nil))
+            case .unavailable: report(RecentUsageShown(kind: .unavailable, cost: nil))
+            case .figures(let snapshot, let faded):
+                report(RecentUsageShown(kind: faded ? .faded : .figures, cost: snapshot.total.cost))
+            }
         }
     }
 
@@ -461,7 +478,7 @@ private struct RecentUsagePlot: View {
                     // 134r: only the old curve stays, faded, under 「加载中」.
                     RecentUsageCurve(chart: chart)
                         .opacity(isFaded ? 0.3 : 1)
-                    if !isFaded {
+                    if !isFaded, chart.hasKnownPoints {
                         peakLine
                         ForEach(Array(chart.ticks.enumerated()), id: \.offset) { _, tick in
                             Rectangle()

@@ -18,11 +18,11 @@ enum QuotaRefreshScope: Equatable {
 /// The usage controls (#105) are `usage`; the properties below read and write
 /// the same values, so there is one selected subscription, one hero and one
 /// 展开详情 for the whole panel. Units and the distribution cards' metrics
-/// survive reopening (they live for the app session).
+/// (stored apart, below) survive reopening (they live for the app session).
 @Observable
 @MainActor
 final class ModernPanelState {
-    /// Selected subscription, hero, units, 展开详情 and distribution metrics.
+    /// Selected subscription, hero, units and 展开详情.
     var usage = UsagePanelState()
     /// Counts real opens, so views that keep a snapshot rebuild it against a
     /// fresh clock on every open.
@@ -50,10 +50,14 @@ final class ModernPanelState {
     }
 
     /// Token / 费用 of each 展开详情 distribution card. Unlike the rest, it
-    /// is not reset on open: it lasts for the app session (#105).
+    /// is not reset on open: it lasts for the app session (#105). Kept apart
+    /// from `usage`, so switching a card's metric does not touch what the
+    /// figures are worked out from (the details snapshot is not rebuilt).
+    private var distributionMetrics: [UsageRanking.Dimension: MetricMode] = [:]
+
     subscript(metricFor dimension: UsageRanking.Dimension) -> MetricMode {
-        get { usage[metricFor: dimension] }
-        set { usage[metricFor: dimension] = newValue }
+        get { distributionMetrics[dimension, default: .tokens] }
+        set { distributionMetrics[dimension] = newValue }
     }
 
     /// What every usage number of the new panel counts (近期消耗 and the

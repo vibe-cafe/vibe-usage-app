@@ -121,6 +121,10 @@ final class AppState {
     /// Changes whenever the account or server changes (link, relink, reset):
     /// figures a view kept from before belong to someone else.
     private(set) var usageAccount: UInt = 0
+    /// Counts the usage reads that ended, success or failure (the newest one
+    /// only). A view keyed on it sees every end, even when the loading flag
+    /// went on and off between two of its updates.
+    private(set) var usageReadsFinished: UInt = 0
     /// The range the newest usage read asked for (nil after an account change).
     private var attemptedUsageRange: UsageQueryRange?
 
@@ -734,6 +738,7 @@ final class AppState {
                 lastFetchTime = Date()
                 hasLoadedUsageData = true
                 isLoadingData = false
+                usageReadsFinished &+= 1
             }
         }
 
