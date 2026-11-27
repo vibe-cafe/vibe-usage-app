@@ -34,7 +34,8 @@ struct PanelSnapshotTests {
             let fixture = PanelFixture(scene)
             defer { fixture.tearDown() }
             try await fixture.prepare()
-            let png = try await PanelSnapshot.render(fixture: fixture, maxHeight: scene.maxHeight)
+            let png = try await PanelSnapshot.render(fixture: fixture, maxHeight: scene.maxHeight,
+                                                     scrolledToEnd: scene.scrolledToEnd)
             let url = directory.appendingPathComponent("\(scene.id).png")
             try png.write(to: url)
             print("[panel-snapshot] \(scene.id) \(scene.title) → \(url.path)")
@@ -97,6 +98,51 @@ struct PanelSnapshotTests {
         }
     }
 
+    /// Crops of the details cards (135d, the faded figures of 134r): states
+    /// held inside the view, which a whole-panel scene cannot set.
+    @Test(.enabled(if: PanelSnapshot.isEnabled))
+    @MainActor func renderDetailCrops() async throws {
+        let bundle = try #require(PanelTestResources.bundle)
+        AppFonts.register(from: bundle)
+        let directory = PanelSnapshot.outputDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        struct Crop {
+            let id: String
+            let usage: PanelUsage
+            var open: UsageRanking.Dimension?
+            var faded = false
+            /// The height of a scrolling area around the grid (a short screen).
+            var viewport: CGFloat?
+        }
+        let crops = [
+            Crop(id: "135d", usage: .today, open: .model),
+            Crop(id: "135d-viewport", usage: .today, open: .model, viewport: 252),
+            Crop(id: "135d-up", usage: .many, open: .tool),
+            Crop(id: "135d-scroll", usage: .many, open: .model),
+            Crop(id: "135-faded", usage: .today, faded: true),
+        ]
+        let wanted = ProcessInfo.processInfo.environment["VIBE_USAGE_RENDER_SCENES"]
+            .map { Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }) }
+        for crop in crops where wanted?.contains(crop.id) ?? true {
+            let fixture = PanelFixture(PanelScene(id: crop.id, title: crop.id, usage: crop.usage))
+            defer { fixture.tearDown() }
+            try await fixture.prepare()
+            // A new period whose response has not come back yet.
+            var fade: (@MainActor (AppState) -> Void)?
+            if crop.faded {
+                fade = { state in
+                    state.timeRange = .sevenDays
+                    state.isLoadingData = true
+                }
+            }
+            let png = try await PanelSnapshot.renderDetails(fixture: fixture, openRemainder: crop.open,
+                                                            viewport: crop.viewport, change: fade)
+            let url = directory.appendingPathComponent("\(crop.id).png")
+            try png.write(to: url)
+            print("[panel-snapshot] \(crop.id) → \(url.path)")
+        }
+    }
+
     /// The classic panel without a linked account, at its 520 × 620 size,
     /// in the three sign-in steps it shares with the new panel.
     @Test(.enabled(if: PanelSnapshot.isEnabled))
@@ -141,10 +187,25 @@ struct PanelScene {
     var maxHeight: CGFloat = .infinity
     /// The device sign-in's step (unlinked scenes).
     var signIn: SignIn = .idle
+    /// Usage the fixture server answers with; nil = never asked (no figures).
+    var usage: PanelUsage?
+    var timeRange: TimeRange = .today
+    var filters: FilterState = .init()
+    /// Token / 费用 of the details cards; unset ones are Token.
+    var metrics: [UsageRanking.Dimension: MetricMode] = [:]
+    /// The first usage read is still on its way.
+    var loading = false
+    /// The usage read failed (no figures for the period).
+    var failedRead = false
+    /// Drawn with the scrolling middle at its end (`maxHeight` scenes).
+    var scrolledToEnd = false
+    /// 近期消耗's data, period, filters, units and forced hover (134 scenes,
+    /// `RecentUsageFixtures`); nil for the other scenes.
+    var recent: RecentUsageScene?
     /// The quota readings on screen.
     var quotas: PanelQuotas = .design
-    /// Hover and fold states the renderer cannot reach with a pointer.
-    var preview = ModernQuotaPreview()
+    /// 订阅配额 hover and fold states the renderer cannot reach with a pointer.
+    var quotaPreview = ModernQuotaPreview()
 
     enum SignIn: String {
         /// 「登录并链接数据」.
@@ -159,7 +220,8 @@ struct PanelScene {
 
     static let scenes: [PanelScene] = shell + quota + quotaStates
 
-    /// The shell (#122): header, footer, sign-in, overflow.
+    /// The shell (#122): header, footer, sign-in, overflow; 展开详情 (135)
+    /// and 近期消耗 (134).
     static let shell: [PanelScene] = [
         PanelScene(id: "136b", title: "顶栏：发现更新", hasUpdate: true),
         PanelScene(id: "136e", title: "底栏：同步中", syncStatus: .syncing),
@@ -168,28 +230,107 @@ struct PanelScene {
             "同步失败: 本地同步工具读取历史记录时崩溃（RangeError: Invalid string length）。请更新 @vibe-cafe/vibe-usage 后重试"
         )),
         PanelScene(id: "136g", title: "底栏：还没同步过", lastSyncMinutesAgo: nil),
-        PanelScene(id: "136i", title: "展开以后：收起详情", expanded: true),
+        PanelScene(id: "136i", title: "展开以后：收起详情", expanded: true, usage: .today),
         PanelScene(id: "136j", title: "没登录：近期消耗换成登录，底栏只剩关闭", linked: false, lastSyncMinutesAgo: nil),
         PanelScene(id: "136k", title: "登录：等浏览器里确认", linked: false, lastSyncMinutesAgo: nil, signIn: .waiting),
         PanelScene(id: "136k-asking", title: "登录：验证码还没拿到", linked: false, lastSyncMinutesAgo: nil, signIn: .asking),
         PanelScene(id: "136l", title: "登录没成功：原因和重新登录", linked: false, lastSyncMinutesAgo: nil, signIn: .failed),
-        PanelScene(id: "overflow", title: "展开后超过屏幕：顶栏底栏固定、中间滚动", expanded: true, maxHeight: 640),
-    ]
+        PanelScene(id: "overflow", title: "展开后超过屏幕：顶栏底栏固定、中间滚动", expanded: true, maxHeight: 640,
+                   usage: .today),
+        PanelScene(id: "overflow-end", title: "展开后超过屏幕：中间滚到底，底栏仍在", expanded: true, maxHeight: 640,
+                   usage: .today, scrolledToEnd: true),
+        // 135: 展开详情.
+        PanelScene(id: "135a", title: "展开详情：今天，四张卡，都按 Token", expanded: true, usage: .today),
+        PanelScene(id: "135b", title: "周期 7D、工具 Codex，再展开：只算 Codex 这 7 天", expanded: true,
+                   usage: .week, timeRange: .sevenDays, filters: FilterState(sources: ["codex"])),
+        PanelScene(id: "135c", title: "模型分布换成费用：按钱排名次", expanded: true, usage: .today,
+                   metrics: [.model: .cost]),
+        PanelScene(id: "135c-all", title: "三个分布都按费用", expanded: true, usage: .today,
+                   metrics: [.model: .cost, .terminal: .cost, .tool: .cost]),
+        PanelScene(id: "135e", title: "名字太长：中间省略", expanded: true, usage: .longNames),
+        PanelScene(id: "135-selected", title: "点进 Claude：四张卡只算 Claude Code", selected: .claudeCode,
+                   expanded: true, usage: .today),
+        PanelScene(id: "135-single", title: "只有一个订阅：四张卡仍是全部用量", subscriptions: [.claudeCode],
+                   expanded: true, usage: .today),
+        PanelScene(id: "135-filter", title: "终端筛选 Mac-Studio", expanded: true, usage: .today,
+                   filters: FilterState(hostnames: ["Mac-Studio"])),
+        PanelScene(id: "135-filter-empty", title: "筛选后没有用量", expanded: true, usage: .today,
+                   filters: FilterState(hostnames: ["Mac-mini"])),
+        PanelScene(id: "135-empty", title: "这段时间没有用量", expanded: true, usage: PanelUsage.none),
+        PanelScene(id: "135-loading", title: "第一次打开，用量还没读出来", expanded: true, loading: true),
+        PanelScene(id: "135-unavailable", title: "读取失败：写「—」，不写 0", expanded: true, failedRead: true),
+        PanelScene(id: "135-many", title: "模型、工具很多：前三名加其余", expanded: true, usage: .many),
+    ] + recentUsageScenes
+
+    /// 近期消耗 (134a–134s) and a few states the design did not draw.
+    static let recentUsageScenes: [PanelScene] = {
+        func scene(_ id: String, _ title: String, _ usage: RecentUsageScene, selected: ProviderRateLimit.Provider? = nil) -> PanelScene {
+            PanelScene(id: id, title: title, selected: selected, recent: usage)
+        }
+        let codex = FilterState(sources: ["codex"])
+        return [
+            scene("134a", "平时：今天", .init()),
+            scene("134b", "鼠标停在曲线上", .init(preview: .init(hoveredSlot: 2))),
+            scene("134c", "24H：鼠标停在昨晚", .init(range: .oneDay, preview: .init(hoveredSlot: 6))),
+            scene("134d", "7D：一天一个点", .init(range: .sevenDays)),
+            scene("134e", "筛选菜单：四行", .init(preview: .init(menu: .some(nil)))),
+            scene("134f", "工具那一行，选了 Codex", .init(range: .sevenDays, filters: codex, preview: .init(menu: .tool))),
+            scene("134g", "选好以后：7D、Codex", .init(range: .sevenDays, filters: codex)),
+            scene("134h", "自定义日期", .init(range: .custom, preview: .init(menu: .time))),
+            scene("134i", "自定义日期选好以后", .init(range: .custom)),
+            scene("134j", "工具多选：Codex +1", .init(filters: FilterState(sources: ["codex", "cursor"]),
+                                                  preview: .init(menu: .tool))),
+            scene("134k", "模型按家族分组", .init(filters: FilterState(models: ["Opus 5.5", "Sonnet 5.5"]),
+                                                  preview: .init(menu: .model, expandedFamilies: ["claude"]))),
+            scene("134l", "Token 当大数字，悬停看细分", .init(hero: .token, preview: .init(hoveredSlot: 5))),
+            scene("134m", "活跃当大数字", .init(hero: .activeTime)),
+            scene("134n", "费用换成人民币", .init(cny: true)),
+            scene("134o", "Token 换成万、亿", .init(hero: .token, chineseTokens: true)),
+            scene("134p", "鼠标停在大数字上", .init(preview: .init(heroHovered: true))),
+            scene("134q", "第一次打开，还没读出来", .init(loading: .initial)),
+            scene("134r", "换了周期，旧的变淡", .init(loading: .switching(.sevenDays))),
+            scene("134s", "这段时间没有用量", .init(empty: true)),
+            scene("134-active-hover", "活跃当大数字，悬停看 AI 工时", .init(hero: .activeTime, preview: .init(hoveredSlot: 1))),
+            scene("134-active-row", "悬停小数字「活跃」", .init(preview: .init(activityHovered: true))),
+            scene("134-active-hero-hover", "活跃当大数字，悬停大数字", .init(hero: .activeTime, preview: .init(heroHovered: true))),
+            scene("134-90d", "90D：按周", .init(range: .ninetyDays)),
+            scene("134-30d", "30D", .init(range: .thirtyDays, hero: .token)),
+            scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
+            scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
+                                                                       singleCustomDay: true, preview: .init(hoveredSlot: 15))),
+            scene("134-unavailable", "读取失败：数字写「—」，不画曲线", .init(loading: .failed)),
+            scene("134-active-missing", "活跃当大数字，活跃时长没读到：不印峰值", .init(hero: .activeTime, activityFails: true)),
+            scene("134-chips", "条件很多时标题那一行；所选模型没用量时活跃照画", .init(
+                range: .custom, hero: .activeTime,
+                filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
+            )),
+        ]
+    }()
 
     private static let eight: [ProviderRateLimit.Provider] = [
         .claudeCode, .codex, .antigravity, .kimiCode, .cursor, .grok, .opencodeGo, .zCode,
     ]
 
+    /// Quota scenes show the whole panel: a linked scene without usage of
+    /// its own gets 近期消耗's fixed day (134a), as in the design.
+    private static func withRecentUsage(_ scenes: [PanelScene]) -> [PanelScene] {
+        scenes.map { scene in
+            var scene = scene
+            if scene.linked, scene.usage == nil, scene.recent == nil { scene.recent = RecentUsageScene() }
+            return scene
+        }
+    }
+
     /// 订阅配额 (#109), one scene per drawing of 131–133. Pointer-only states
     /// (native tooltips, dragging) render as their resting state.
-    static let quota: [PanelScene] = [
+    static let quota: [PanelScene] = withRecentUsage([
         PanelScene(id: "131a", title: "概览：4 个订阅，两家要留意"),
         PanelScene(id: "131b", title: "点 Codex 的圆钮", selected: .codex),
         PanelScene(id: "131c", title: "点 Claude：第三行是 Fable", selected: .claudeCode),
         PanelScene(id: "131d", title: "点 Cursor：只有一个额度", selected: .cursor),
         PanelScene(id: "131e", title: "概览：都正常", quotas: .normal),
         PanelScene(id: "131f", title: "概览里鼠标停在 Claude 那一行",
-                   preview: ModernQuotaPreview(hoveredOverviewRow: .claudeCode)),
+                   quotaPreview: ModernQuotaPreview(hoveredOverviewRow: .claudeCode)),
         PanelScene(id: "132a", title: "概览：2 个订阅", subscriptions: [.codex, .claudeCode],
                    quotas: .codexRedClaudeNormal),
         PanelScene(id: "132b", title: "概览：3 个订阅", subscriptions: [.claudeCode, .codex, .cursor],
@@ -207,7 +348,7 @@ struct PanelScene {
                    selected: .opencodeGo),
         PanelScene(id: "132k", title: "四个额度：另有 1 项", selected: .claudeCode, quotas: .claudeExtra),
         PanelScene(id: "132l", title: "点另有 1 项：全部列出", selected: .claudeCode, quotas: .claudeExtra,
-                   preview: ModernQuotaPreview(expanded: true)),
+                   quotaPreview: ModernQuotaPreview(expanded: true)),
         PanelScene(id: "132m", title: "点进一家：还在读", selected: .cursor, refreshing: [.cursor],
                    quotas: .cursorLoading),
         PanelScene(id: "132n", title: "点进一家：读取失败，可以重试", selected: .cursor, quotas: .cursorReadFailed),
@@ -215,7 +356,7 @@ struct PanelScene {
         PanelScene(id: "132p", title: "点进一家：未订阅", selected: .cursor, quotas: .cursorNotEntitled),
         PanelScene(id: "132q", title: "读到的是旧数据：来源和原因", selected: .claudeCode, quotas: .claudeStale),
         PanelScene(id: "132r", title: "鼠标停在 7d 那一行", selected: .codex,
-                   preview: ModernQuotaPreview(hoveredDetailRow: "7d")),
+                   quotaPreview: ModernQuotaPreview(hoveredDetailRow: "7d")),
         PanelScene(id: "132s", title: "刷新额度（悬停是系统提示）"),
         PanelScene(id: "132t", title: "刷新额度：读取中转圈，数字留着", refreshing: [.claudeCode]),
         PanelScene(id: "132u", title: "只看一家时刷新：只读这一家", selected: .codex, refreshing: [.codex]),
@@ -226,11 +367,11 @@ struct PanelScene {
         PanelScene(id: "133e", title: "拖动圆钮（实际窗口验收）"),
         PanelScene(id: "133f", title: "8 个订阅：一排放得下", subscriptions: eight, selected: .antigravity),
         PanelScene(id: "133g", title: "齿轮（系统提示：打开订阅配额设置）"),
-    ]
+    ])
 
     /// Every row of #98's special-state table, plus Claude without 5h and
     /// Claude Pro.
-    static let quotaStates: [PanelScene] = [
+    static let quotaStates: [PanelScene] = withRecentUsage([
         PanelScene(id: "state-loading-overview", title: "读取中：概览行灰块、圆钮无圈", refreshing: [.cursor],
                    quotas: .cursorLoading),
         PanelScene(id: "state-cursor-signin-overview", title: "Cursor 需要登录：概览写原因、白点", quotas: .cursorSignIn),
@@ -264,7 +405,34 @@ struct PanelScene {
                    quotas: .claudeWeeklyFable),
         PanelScene(id: "claude-pro-detail", title: "Claude Pro：没有 Fable", selected: .claudeCode, quotas: .claudePro),
         PanelScene(id: "claude-pro-single", title: "只开 Claude Pro 一家", subscriptions: [.claudeCode], quotas: .claudePro),
-    ]
+    ])
+}
+
+/// What 近期消耗 shows in a scene.
+struct RecentUsageScene {
+    var range: TimeRange = .today
+    var hero: ChartMode = .cost
+    var cny = false
+    var chineseTokens = false
+    var filters = FilterState()
+    /// No usage in the period (134s).
+    var empty = false
+    /// The custom range is a single day (`RecentUsageFixtures.customDay`).
+    var singleCustomDay = false
+    /// The active-time read fails.
+    var activityFails = false
+    var loading: Loading = .none
+    var preview = RecentUsagePreview()
+
+    enum Loading {
+        case none
+        /// The first read has not answered (134q).
+        case initial
+        /// Loaded, then switched to another period that has not answered (134r).
+        case switching(TimeRange)
+        /// The first read failed.
+        case failed
+    }
 }
 
 /// An AppState (and updater) holding a scene's data.
@@ -273,6 +441,12 @@ final class PanelFixture {
     let state: AppState
     let updater = UpdaterViewModel()
     let scene: PanelScene
+    private let reads: FixtureReads
+    private var pending: [Task<Void, Never>] = []
+    /// Runs once the rendered view has laid out with the loaded data: the
+    /// switch to a period that is still loading (134r) must find the view
+    /// already showing the previous one.
+    private(set) var afterFirstLayout: (@MainActor () async throws -> Void)?
     private let defaults: UserDefaults
     private let suite: String
 
@@ -287,10 +461,29 @@ final class PanelFixture {
             defaults.set(now.addingTimeInterval(-minutes * 60), forKey: AppState.lastSuccessfulSyncKey)
         }
         let config = scene.linked ? VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test") : nil
+        let usage = scene.usage
+        let recent = scene.recent
+        let reads = FixtureReads(empty: recent?.empty ?? false)
+        reads.activityFails = recent?.activityFails ?? false
+        self.reads = reads
         state = AppState(
             initialConfig: config,
             loadConfig: { config },
-            usageFetcher: { _, _, _ in throw URLError(.notConnectedToInternet) },
+            usageFetcher: { _, _, range in
+                if recent != nil {
+                    try await reads.waitIfHanging()
+                    if await reads.fails { throw URLError(.timedOut) }
+                    return RecentUsageFixtures.response(for: range, empty: reads.empty)
+                }
+                guard let usage else { throw URLError(.notConnectedToInternet) }
+                return usage.response(for: range, now: now)
+            },
+            activityFetcher: { _, _, range, _, hourly in
+                guard recent != nil else { throw URLError(.notConnectedToInternet) }
+                try await reads.waitIfHanging()
+                if await reads.activityFails { throw URLError(.timedOut) }
+                return RecentUsageFixtures.activity(for: range, hourly: hourly, empty: reads.empty)
+            },
             quotaDefaults: defaults,
             zCodeAPIKeyStore: FixtureZCodeKeys(),
             quotaProductDiscoverer: {
@@ -306,6 +499,9 @@ final class PanelFixture {
         state.syncStatus = scene.syncStatus
         state.modernPanel.selectedSubscription = scene.selected
         state.modernPanel.detailsExpanded = scene.expanded
+        state.timeRange = scene.timeRange
+        state.filters = scene.filters
+        for (dimension, metric) in scene.metrics { state.modernPanel[metricFor: dimension] = metric }
         for provider in scene.refreshing {
             switch provider {
             case .codex: state.isCodexRateLimitRefreshing = true
@@ -317,8 +513,15 @@ final class PanelFixture {
         if scene.hasUpdate { updater.availableUpdate = SUAppcastItem.empty() }
     }
 
-    /// Walks the sign-in to the scene's step against the fixture server.
+    /// Loads the scene's usage from the fixture server (or leaves a 近期消耗
+    /// read hanging), or walks the sign-in to the scene's step against it.
     func prepare() async throws {
+        if scene.linked, scene.recent != nil {
+            try await prepareRecentUsage()
+            return
+        }
+        if scene.linked, scene.usage != nil || scene.failedRead { await state.fetchUsageData() }
+        if scene.loading { state.isLoadingData = true }
         guard !scene.linked, scene.signIn != .idle else { return }
         state.deviceLink.start()
         for _ in 0..<200 {
@@ -330,9 +533,89 @@ final class PanelFixture {
         Issue.record("sign-in did not reach \(scene.signIn)")
     }
 
+    private func prepareRecentUsage() async throws {
+        guard let usage = scene.recent else { return }
+        let custom = RecentUsageFixtures.customRange
+        state.customRangeFrom = usage.singleCustomDay ? RecentUsageFixtures.customDay : custom.from
+        state.customRangeTo = usage.singleCustomDay ? RecentUsageFixtures.customDay : custom.to
+        state.filters = usage.filters
+        state.modernPanel.hero = usage.hero
+        if usage.cny {
+            state.modernPanel.hero = .cost
+            state.modernPanel.usage.toggleHeroUnit()
+        }
+        if usage.chineseTokens {
+            state.modernPanel.hero = .token
+            state.modernPanel.usage.toggleHeroUnit()
+        }
+        state.modernPanel.hero = usage.hero
+        switch usage.loading {
+        case .none:
+            state.timeRange = usage.range
+            await state.fetchUsageData()
+            if !usage.activityFails { try await waitFor { self.state.activity != nil } }
+        case .initial:
+            state.timeRange = usage.range
+            reads.hangs = true
+            pending.append(Task { await self.state.fetchUsageData() })
+            try await waitFor { self.state.isLoadingData }
+        case .switching(let next):
+            state.timeRange = usage.range
+            await state.fetchUsageData()
+            try await waitFor { self.state.activity != nil }
+            afterFirstLayout = { [self] in
+                reads.hangs = true
+                state.timeRange = next
+                pending.append(Task { await self.state.fetchUsageData() })
+                try await waitFor { self.state.isLoadingData }
+            }
+        case .failed:
+            state.timeRange = usage.range
+            reads.fails = true
+            await state.fetchUsageData()
+            try await waitFor { self.state.activity != nil }
+        }
+    }
+
+    private func waitFor(_ condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<400 where !condition() {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        try #require(condition())
+    }
+
     func tearDown() {
+        pending.forEach { $0.cancel() }
+        reads.release()
         state.deviceLink.cancel()
         defaults.removePersistentDomain(forName: suite)
+    }
+}
+
+/// The fixture server's reads: answered at once, or left hanging until the
+/// scene is torn down (a read still loading).
+@MainActor
+private final class FixtureReads: Sendable {
+    let empty: Bool
+    var hangs = false
+    /// Usage reads fail (active time still answers).
+    var fails = false
+    /// Active-time reads fail (usage still answers).
+    var activityFails = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(empty: Bool) { self.empty = empty }
+
+    func waitIfHanging() async throws {
+        guard hangs else { return }
+        await withCheckedContinuation { waiters.append($0) }
+        throw CancellationError()
+    }
+
+    func release() {
+        hangs = false
+        waiters.forEach { $0.resume() }
+        waiters = []
     }
 }
 
@@ -388,12 +671,16 @@ enum PanelSnapshot {
     /// Lays the panel out once to learn the height it asks for (the same
     /// number `MenuBarController` would size the window to), then draws it at
     /// that height with the window's 16 pt corners and shadow.
-    static func render(fixture: PanelFixture, maxHeight: CGFloat, scale: CGFloat = 2) async throws -> Data {
+    static func render(fixture: PanelFixture, maxHeight: CGFloat, scrolledToEnd: Bool = false,
+                       scale: CGFloat = 2) async throws -> Data {
+        var preview = fixture.scene.recent?.preview ?? RecentUsagePreview()
+        preview.now = RecentUsageFixtures.now
         let reported = HeightBox()
         let measuring = ModernPanelView(maxHeight: maxHeight) { reported.value = $0 }
             .environment(fixture.state)
+            .environment(\.recentUsagePreview, preview)
             .environmentObject(fixture.updater)
-            .environment(\.modernQuotaPreview, fixture.scene.preview)
+            .environment(\.modernQuotaPreview, fixture.scene.quotaPreview)
         let probe = OffscreenHost(measuring, size: CGSize(width: ModernTheme.panelWidth, height: 2_000))
         for _ in 0..<40 where reported.value == nil {
             try await probe.settle()
@@ -403,8 +690,9 @@ enum PanelSnapshot {
 
         let framed = ModernPanelView(maxHeight: maxHeight)
             .environment(fixture.state)
+            .environment(\.recentUsagePreview, preview)
             .environmentObject(fixture.updater)
-            .environment(\.modernQuotaPreview, fixture.scene.preview)
+            .environment(\.modernQuotaPreview, fixture.scene.quotaPreview)
             .frame(width: ModernTheme.panelWidth, height: height)
             .clipShape(RoundedRectangle(cornerRadius: ModernTheme.panelCornerRadius, style: .continuous))
             .overlay(
@@ -418,7 +706,53 @@ enum PanelSnapshot {
         let host = OffscreenHost(framed, size: size)
         try await host.settle()
         try await host.settle()
+        if let action = fixture.afterFirstLayout {
+            try await action()
+            try await host.settle()
+            try await host.settle()
+        }
+        if scrolledToEnd {
+            host.scrollToEnd()
+            try await host.settle()
+        }
         return try host.png(scale: scale)
+    }
+
+    /// The details cards alone (135c–135e crops): the grid at the panel's
+    /// width on the panel's background. `change` runs after a first pass,
+    /// for states that need a previous one (the faded figures of 134r).
+    static func renderDetails(fixture: PanelFixture, openRemainder: UsageRanking.Dimension? = nil,
+                              viewport: CGFloat? = nil,
+                              change: (@MainActor (AppState) -> Void)? = nil) async throws -> Data {
+        let grid = ModernDetailsSection(openRemainder: openRemainder)
+            .padding(.horizontal, ModernTheme.cardInset)
+            .padding(.vertical, 12)
+            .frame(width: ModernTheme.panelWidth, alignment: .top)
+        let fullHeight: CGFloat = 2 * 252 + 8 + 24
+        let details = Group {
+            if let viewport {
+                ScrollView(.vertical) { grid }
+                    .scrollIndicators(.never)
+                    .frame(height: viewport)
+            } else {
+                grid
+            }
+        }
+        .background(ModernTheme.panel)
+        .environment(\.colorScheme, .dark)
+        .environment(fixture.state)
+        .padding(margin)
+        .background(board)
+        let size = CGSize(width: ModernTheme.panelWidth + 2 * margin, height: (viewport ?? fullHeight) + 2 * margin)
+        let host = OffscreenHost(details, size: size)
+        try await host.settle()
+        try await host.settle()
+        if let change {
+            change(fixture.state)
+            try await host.settle()
+            try await host.settle()
+        }
+        return try host.png(scale: 2)
     }
 }
 
@@ -457,6 +791,19 @@ private final class OffscreenHost<Content: View> {
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(30))
         host.layoutSubtreeIfNeeded()
+    }
+
+    /// Scrolls the panel's middle (the one `NSScrollView`) to its end.
+    func scrollToEnd() {
+        func find(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        guard let scroll = find(host), let document = scroll.documentView else { return }
+        let clip = scroll.contentView
+        let y = document.isFlipped ? document.bounds.height - clip.bounds.height : 0
+        clip.scroll(to: CGPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(clip)
     }
 
     func png(scale: CGFloat) throws -> Data {

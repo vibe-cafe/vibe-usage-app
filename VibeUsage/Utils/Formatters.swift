@@ -76,6 +76,25 @@ enum Formatters {
         return ((value + floatingPointGuard) * scale).rounded() / scale
     }
 
+    /// The modern panel's Token figures in K, M and B: three significant
+    /// digits without trailing zeros (1.04B, 421M, 93.1M, 210K), exact below
+    /// one thousand.
+    static func formatPanelTokens(_ tokens: Int) -> String {
+        guard tokens >= 0 else { return "—" }
+        guard tokens >= 1_000 else { return "\(tokens)" }
+        let units: [(factor: Double, suffix: String)] = [(1_000, "K"), (1_000_000, "M"), (1_000_000_000, "B")]
+        var index = units.lastIndex { Double(tokens) >= $0.factor } ?? 0
+        while true {
+            let value = roundToThreeSignificantDigits(Double(tokens) / units[index].factor)
+            // 999,950 rounds to 1000K: write it 1M.
+            if value >= 1_000, index + 1 < units.count {
+                index += 1
+                continue
+            }
+            return "\(formatCoefficient(value))\(units[index].suffix)"
+        }
+    }
+
     /// The modern panel uses only 万 and 亿, keeping exact counts below one 万.
     static func formatPanelChineseTokens(_ tokens: Int) -> String {
         guard tokens >= 0 else { return "—" }

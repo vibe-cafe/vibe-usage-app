@@ -11,9 +11,11 @@ struct APIClient: Sendable {
         try await get("api/usage", range: range)
     }
 
-    func fetchActivity(range: UsageQueryRange, filters: FilterState) async throws -> UsageActivity {
+    /// `hourly` defaults to the range's own granularity; the new panel asks
+    /// for hours on a single custom day.
+    func fetchActivity(range: UsageQueryRange, filters: FilterState, hourly: Bool? = nil) async throws -> UsageActivity {
         try await get("api/usage/activity", range: range, parameters: filters.activityQueryItems + [
-            URLQueryItem(name: "granularity", value: range.isHourly ? "hour" : "day"),
+            URLQueryItem(name: "granularity", value: (hourly ?? range.isHourly) ? "hour" : "day"),
         ])
     }
 
@@ -106,6 +108,14 @@ enum UsageQueryRange: Sendable, Equatable {
         case .from, .days(1): true
         default: false
         }
+    }
+
+    /// A custom range of exactly one local day (the new panel draws it by the hour).
+    var isSingleCustomDay: Bool {
+        guard case .custom(let days, let zone) = self else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        return calendar.dateInterval(of: .day, for: days.start) == days
     }
 
     /// Mirrors the inclusive lower bound parsed by the usage routes.

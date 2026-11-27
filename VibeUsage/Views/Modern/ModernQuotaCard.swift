@@ -665,7 +665,7 @@ struct ModernQuotaDetail: View {
         let shown = visibleRows
         let labelWidth = ModernQuotaFormat.labelColumnWidth(shown.map(\.label))
         ForEach(shown, id: \.id) { meter in
-            ModernDetailRow(
+            ModernAllowanceRow(
                 meter: meter,
                 provider: subscription.provider,
                 labelWidth: labelWidth,
@@ -780,7 +780,7 @@ struct ModernQuotaDetail: View {
 
 /// One allowance in the detail: label, remaining, the forecast, the reset.
 /// Hovering lights the row and publishes its tooltip to the panel root.
-struct ModernDetailRow: View {
+struct ModernAllowanceRow: View {
     let meter: QuotaPanelMeter
     let provider: ProviderRateLimit.Provider
     let labelWidth: CGFloat

@@ -66,7 +66,7 @@ struct SettingsGeneralPage: View {
                                       (.classic, InterfaceStyle.classic.displayName)],
                             selection: Binding(
                                 get: { appState.interfaceStyle.current },
-                                set: { appState.interfaceStyle.select($0) }
+                                set: { appState.selectInterfaceStyle($0) }
                             )
                         )
                         .accessibilityLabel("界面样式")

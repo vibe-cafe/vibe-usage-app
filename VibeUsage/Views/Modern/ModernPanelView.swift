@@ -44,8 +44,9 @@ struct PanelRootView: View {
 
 /// The new panel (design 131, 136): header, 概览 row, 订阅配额 and 近期消耗
 /// cards, footer. 订阅配额 is `ModernQuotaCardBody` (131–133). Without a
-/// linked account 近期消耗 holds the sign-in (136j–136l). The contents of
-/// 近期消耗 and the details cards are filled in by later tickets.
+/// linked account 近期消耗 holds the sign-in (136j–136l); with one, the
+/// figures, the curve and the filter menu (134). 展开详情 adds the four
+/// details cards (135).
 struct ModernPanelView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -95,6 +96,10 @@ struct ModernPanelView: View {
             ModernFooterBar()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
+        .coordinateSpace(.named(UsageFilterMenuState.space))
+        // 近期消耗's filter menu, drawn over the whole panel.
+        .overlay { UsageFilterMenuOverlay() }
+        .environment(appState.modernPanel.filterMenu)
         .frame(width: ModernTheme.panelWidth)
         // The window, sized by `MenuBarController` from `preferredHeight`,
         // decides the height; the content stays pinned to the top and never
@@ -133,10 +138,10 @@ struct ModernPanelView: View {
             }
 
             ModernCard(title: "近期消耗") {
-                EmptyView()
+                if appState.isConfigured { RecentUsageControls() }
             } content: {
                 if appState.isConfigured {
-                    Color.clear.frame(height: ModernTheme.recentUsageBodyHeight)
+                    ModernRecentUsageBody()
                 } else {
                     // Not linked: the same card walks through the sign-in.
                     ModernSignInBody()
@@ -144,7 +149,7 @@ struct ModernPanelView: View {
             }
 
             if appState.isConfigured && appState.modernPanel.detailsExpanded {
-                ModernDetailsPlaceholder()
+                ModernDetailsSection()
             }
         }
         .padding(.horizontal, ModernTheme.cardInset)
@@ -205,33 +210,5 @@ struct ModernRefreshQuotasButton: View {
         .disabled(isRefreshing)
         .help("刷新额度")
         .accessibilityLabel("刷新额度")
-    }
-}
-
-/// The four cards 展开详情 adds (135): 模型分布 and Token 构成, then 终端分布
-/// and 工具分布, 244 × 252 each. Frames only; their contents come with the
-/// usage cards.
-private struct ModernDetailsPlaceholder: View {
-    var body: some View {
-        VStack(spacing: ModernTheme.cardSpacing) {
-            row("模型分布", "Token 构成")
-            row("终端分布", "工具分布")
-        }
-    }
-
-    private func row(_ first: String, _ second: String) -> some View {
-        HStack(spacing: ModernTheme.cardSpacing) {
-            card(first)
-            card(second)
-        }
-    }
-
-    private func card(_ title: String) -> some View {
-        ModernCard(title: title) {
-            EmptyView()
-        } content: {
-            // 252 minus the padding, the title row and its gap.
-            Color.clear.frame(height: 252 - 2 * ModernTheme.cardPadding - 20 - 8)
-        }
     }
 }

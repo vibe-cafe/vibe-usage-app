@@ -708,9 +708,14 @@ final class MenuBarController: NSObject {
         }
 
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            // ESC = 53
+            // ESC = 53. An open filter menu in the new panel takes the first
+            // one; the next closes the panel.
             if event.keyCode == 53 {
-                Task { @MainActor in self?.closePanel() }
+                Task { @MainActor in
+                    guard let self else { return }
+                    let menu = self.appState.modernPanel.filterMenu
+                    if menu.isOpen { menu.close() } else { self.closePanel() }
+                }
                 return nil
             }
             return event

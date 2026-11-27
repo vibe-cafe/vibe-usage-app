@@ -48,8 +48,9 @@ struct UsageDisplayRulesTests {
         #expect(first.input == 240 && first.output == 50 && first.cached == 80)
         #expect(result.total.input == 270 && result.total.output == 50 && result.total.cached == 80)
         #expect(result.total.totalTokens == 400 && result.total.cost == 3.25)
-        #expect(result.tokenComposition.top.map(\.name) == ["输入", "缓存", "输出"])
-        #expect(result.tokenComposition.top.map(\.value) == [270, 80, 50])
+        #expect(result.tokenComposition.top.map(\.name) == ["缓存", "输入", "输出"])
+        #expect(result.tokenComposition.top.map(\.value) == [80, 270, 50])
+        #expect(result.tokenComposition.top.map(\.color) == [.blue, .teal, .magenta])
         #expect(result.tokenComposition.total == 400)
         #expect(result.peakTokens == 370 && result.peakCost == 2)
         #expect(first.value(for: .cost) == 1.25)
@@ -254,7 +255,7 @@ struct UsageDisplayRulesTests {
     func tappingTheHeroSwitchesOnlyItsOwnDisplayUnit() {
         var state = UsagePanelState()
         #expect(state.formatCost(10.25) == "$10.25")
-        #expect(state.formatTokens(12_000_000) == "12.0M")
+        #expect(state.formatTokens(12_000_000) == "12M")
         state.toggleHeroUnit()
         #expect(state.formatCost(10.25) == "￥71.75")
         state.hero = .token

@@ -20,7 +20,7 @@ struct ClassicSummaryRenderTests {
             usageFetcher: { _, _, _ in
                 UsageResponse(buckets: [sample], sessions: nil, hasAnyData: true, names: nil)
             },
-            activityFetcher: { _, _, _, _ in
+            activityFetcher: { _, _, _, _, _ in
                 guard !shouldFail else { throw URLError(.timedOut) }
                 return UsageActivity(activeSeconds: 8_400, workSeconds: 21_000, parallel: 2.5, series: [
                     .init(periodStart: "2026-11-23T00:00:00Z", activeSeconds: 1_800, workSeconds: 3_000),
