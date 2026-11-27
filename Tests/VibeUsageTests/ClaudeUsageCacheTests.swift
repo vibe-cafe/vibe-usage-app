@@ -40,6 +40,50 @@ struct ClaudeUsageCacheTests {
     }
 
     @Test
+    func cacheAndLiveReadTheSameWeeklyModelRows() throws {
+        let reset = now.addingTimeInterval(86_400)
+        let usage: [String: Any] = [
+            "seven_day": ["utilization": 16],
+            "limits": [
+                ["kind": "weekly_scoped", "group": "weekly", "percent": 25.5,
+                 "scope": ["model": ["display_name": "Fable"]], "resets_at": "2026-07-29T04:00:00Z"],
+                ["kind": "weekly_scoped", "group": "weekly", "percent": 0,
+                 "scope": ["model": ["display_name": "Other"]], "resets_at": reset.timeIntervalSince1970],
+                ["kind": "weekly_scoped", "group": "weekly", "percent": 12,
+                 "scope": ["model": ["display_name": "Undated"]], "resets_at": NSNull()],
+                ["kind": "weekly_scoped", "group": "weekly", "percent": 40,
+                 "scope": ["surface": ["display_name": "Code"]]],
+                ["kind": "daily_scoped", "group": "daily", "percent": 15,
+                 "scope": ["model": ["display_name": "Daily"]]],
+                ["kind": "weekly_scoped", "group": "weekly", "percent": NSNull(),
+                 "scope": ["model": ["display_name": "Unavailable"]]],
+            ],
+        ]
+        let url = try write([
+            "oauthAccount": ["accountUuid": "fixture"],
+            "cachedUsageUtilization": ["accountUuid": "fixture", "utilization": usage,
+                                       "fetchedAtMs": now.timeIntervalSince1970 * 1000],
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let snapshot = try #require(ClaudeUsageCache.configSnapshot(from: url, now: now))
+        let week: TimeInterval = 7 * 86_400
+        #expect(snapshot.modelScopedMeters == [
+            RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(
+                utilization: 25.5, resetsAt: reset, windowDuration: week)),
+            RateLimitMeter(id: "Other", label: "Other", window: RateLimitWindow(
+                utilization: 0, resetsAt: reset, windowDuration: week)),
+            RateLimitMeter(id: "Undated", label: "Undated", window: RateLimitWindow(
+                utilization: 12, windowDuration: week)),
+        ])
+        var live = usage
+        live["model_scoped"] = [["display_name": "Fable", "utilization": 25.5, "resets_at": "2026-07-29T04:00:00Z"]]
+        let probe = try #require(ClaudeUsageProbe.parse(["rate_limits": live], now: now))
+        #expect(probe.modelScopedMeters == snapshot.modelScopedMeters)
+        #expect(probe.hasClaudeLimits && snapshot.hasClaudeLimits)
+        #expect(probe.meters.isEmpty && snapshot.meters.isEmpty)
+    }
+
+    @Test
     func readsWindowsAndCarriesClaudesOwnFetchTime() throws {
         let fetchedAt = now.addingTimeInterval(-600)
         let url = try write(configFile(fetchedAt: fetchedAt))

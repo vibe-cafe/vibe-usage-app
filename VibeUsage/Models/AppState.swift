@@ -39,10 +39,6 @@ enum TimeRange: String, CaseIterable {
         }
     }
 
-    /// Trend chart bucket granularity. Hour-granularity for both today and the
-    /// rolling 24h; day-granularity for the longer ranges.
-    var isHourly: Bool { self == .today || self == .oneDay }
-
     /// Inclusive lower bound on bucket / session timestamps when this range is
     /// active. nil means "show all fetched data" (which already matches the
     /// requested window for the day-granularity ranges). Currently only
@@ -108,11 +104,14 @@ final class AppState {
 
     // MARK: - Dashboard Data
     var buckets: [UsageBucket] = []
-    var sessions: [UsageSession] = []
+    private(set) var activity: ActivityReport?
+    private var activityTask: Task<Void, Never>?
+    private var activityRange: UsageQueryRange?
     var hasAnyData: Bool = false
     var isLoadingData: Bool = false
     var hasLoadedUsageData: Bool = false
     private var usageFetchGeneration: UInt = 0
+    private var loadedUsageRange: UsageQueryRange?
 
     var isInitialDataLoad: Bool {
         isLoadingData && !hasLoadedUsageData && buckets.isEmpty
@@ -127,7 +126,21 @@ final class AppState {
     var customRangeFrom: Date = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date())) ?? Date()
     var customRangeTo: Date = Calendar.current.startOfDay(for: Date())
     var chartMode: ChartMode = .token
-    var filters: FilterState = .init()
+    var filters: FilterState = .init() {
+        didSet {
+            guard oldValue.activityQueryItems != filters.activityQueryItems,
+                  let range = activityRange else { return }
+            reloadConfig()
+            guard let key = config?.apiKey else { return }
+            if activityRange == nil {
+                // Disk configuration switched accounts; refresh both halves of the dashboard.
+                Task { await fetchUsageData() }
+            } else {
+                activity = nil
+                startActivityFetch(range: range, key: key)
+            }
+        }
+    }
 
     /// Display names and family rows the server sent with the current usage.
     /// `nil` until the first successful fetch, or when an older server answers —
@@ -211,9 +224,13 @@ final class AppState {
     }
 
     var currentQueryRange: UsageQueryRange {
+        queryRange(at: Date())
+    }
+
+    private func queryRange(at now: Date) -> UsageQueryRange {
         switch timeRange {
         case .today:
-            return .from(Calendar.current.startOfDay(for: Date()))
+            return .from(Calendar.current.startOfDay(for: now))
         case .oneDay:
             return .days(1)
         case .sevenDays:
@@ -226,6 +243,17 @@ final class AppState {
             let bounds = normalizedCustomRange
             return .custom(from: bounds.from, to: bounds.to)
         }
+    }
+
+    /// Apply at launch before the first fetch, and whenever the interface style changes.
+    func applyDefaultTimeRange(forModernInterface modern: Bool) {
+        timeRange = modern ? .today : .oneDay
+    }
+
+    func usageDisplaySnapshot(filters: UsagePanelFilters, now: Date) -> UsageDisplaySnapshot? {
+        guard let loadedUsageRange, loadedUsageRange == queryRange(at: now) else { return nil }
+        return UsageDisplaySnapshot(buckets: buckets, dataRange: loadedUsageRange, filters: filters,
+                                    modelName: modelName, toolName: toolName, now: now)
     }
 
     var visibleDayCount: Int {
@@ -243,18 +271,6 @@ final class AppState {
             return (customRangeFrom, customRangeTo)
         }
         return (customRangeTo, customRangeFrom)
-    }
-
-    var filteredSessions: [UsageSession] {
-        let cutoff = timeRange.startCutoff
-        return sessions.filter { session in
-            if let cutoff, let date = session.date, date < cutoff { return false }
-            let f = filters
-            if !f.sources.isEmpty && !f.sources.contains(session.source) { return false }
-            if !f.projects.isEmpty && !f.projects.contains(session.project) { return false }
-            if !f.hostnames.isEmpty && !f.hostnames.contains(session.hostname) { return false }
-            return true
-        }
     }
 
     // MARK: - Config
@@ -352,6 +368,7 @@ final class AppState {
     private let loadConfig: () -> VibeUsageConfig?
     var usageServer: UsageServer { UsageServer(config?.apiUrl) }
     private let usageFetcher: (UsageServer, String, UsageQueryRange) async throws -> UsageResponse
+    private let activityFetcher: (UsageServer, String, UsageQueryRange, FilterState) async throws -> UsageActivity
     private let quotaDefaults: UserDefaults
     private let zCodeAPIKeyStore: any ZCodeAPIKeyStoring
     private let quotaProductDiscoverer: () -> [QuotaProduct]
@@ -363,6 +380,9 @@ final class AppState {
         loadConfig: @escaping () -> VibeUsageConfig? = ConfigManager.load,
         usageFetcher: @escaping (UsageServer, String, UsageQueryRange) async throws -> UsageResponse = { server, apiKey, range in
             try await APIClient(server: server, apiKey: apiKey).fetchUsage(range: range)
+        },
+        activityFetcher: @escaping (UsageServer, String, UsageQueryRange, FilterState) async throws -> UsageActivity = { server, key, range, filters in
+            try await APIClient(server: server, apiKey: key).fetchActivity(range: range, filters: filters)
         },
         quotaDefaults: UserDefaults = .standard,
         zCodeAPIKeyStore: any ZCodeAPIKeyStoring = KeychainZCodeAPIKeyStore(),
@@ -377,6 +397,7 @@ final class AppState {
         self.loadConfig = loadConfig
         self.isConfigured = initialConfig?.apiKey != nil
         self.usageFetcher = usageFetcher
+        self.activityFetcher = activityFetcher
         self.quotaDefaults = quotaDefaults
         self.zCodeAPIKeyStore = zCodeAPIKeyStore
         self.quotaProductDiscoverer = quotaProductDiscoverer
@@ -418,6 +439,7 @@ final class AppState {
             // the Settings preview have figures to display.
             if ProcessInfo.processInfo.environment["VIBE_USAGE_SAMPLE_USAGE"] == "1" {
                 self.buckets = Self.sampleUsageBuckets()
+                self.loadedUsageRange = currentQueryRange
             }
             if !selectedQuotaProviders.isEmpty {
                 startRateLimitCoordinator()
@@ -516,12 +538,16 @@ final class AppState {
         if latest == nil || config?.apiKey != latest?.apiKey || usageServer != UsageServer(latest?.apiUrl) {
             // A pending response or cached dashboard belongs to the previous account/server.
             usageFetchGeneration &+= 1
+            activityTask?.cancel()
+            activityTask = nil
+            activityRange = nil
+            activity = nil
             lastFetchTime = nil
             hasLoadedUsageData = false
             isLoadingData = false
             hasAnyData = false
+            loadedUsageRange = nil
             buckets = []
-            sessions = []
             usageNames = nil
         }
         config = latest
@@ -628,6 +654,7 @@ final class AppState {
         usageFetchGeneration &+= 1
         let generation = usageFetchGeneration
         let queryRange = currentQueryRange
+        startActivityFetch(range: queryRange, key: apiKey)
         isLoadingData = true
         defer {
             // An older request may finish after the user selects a new range.
@@ -644,14 +671,27 @@ final class AppState {
             guard generation == usageFetchGeneration else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
                 buckets = response.buckets
-                sessions = response.sessions ?? []
                 hasAnyData = response.hasAnyData
+                loadedUsageRange = queryRange
                 usageNames = response.names
             }
         } catch {
             guard generation == usageFetchGeneration else { return }
             // Silently fail — dashboard shows stale data or empty state
             print("Failed to fetch usage data: \(error)")
+        }
+    }
+
+    private func startActivityFetch(range: UsageQueryRange, key: String) {
+        activityTask?.cancel()
+        if activityRange != range { activity = nil }
+        activityRange = range
+        let start = range.start(at: Date())
+        activityTask = Task { [weak self, activityFetcher, server = usageServer, filters] in
+            guard !Task.isCancelled else { return }
+            let result = try? await activityFetcher(server, key, range, filters)
+            guard !Task.isCancelled else { return }
+            self?.activity = result.map { ActivityReport($0, rangeStart: start, hourly: range.isHourly) }
         }
     }
 
@@ -1016,12 +1056,14 @@ final class AppState {
         return [
             UsageBucket(
                 source: "claude-code", model: "claude-opus-5-5", project: "vibe-usage-app", hostname: "preview",
-                bucketStart: start, inputTokens: 2_100_000, outputTokens: 900_000, cacheCreationInputTokens: nil,
+                bucketStart: start, inputTokens: 2_100_000, outputTokens: 900_000,
+                cacheCreation5mTokens: 0, cacheCreation1hTokens: 0,
                 cachedInputTokens: 260_000_000, reasoningOutputTokens: 0, totalTokens: 263_000_000, estimatedCost: 180.15
             ),
             UsageBucket(
                 source: "codex", model: "gpt-6.2-sol", project: "vibe-usage", hostname: "preview",
-                bucketStart: start, inputTokens: 1_500_000, outputTokens: 600_000, cacheCreationInputTokens: nil,
+                bucketStart: start, inputTokens: 1_500_000, outputTokens: 600_000,
+                cacheCreation5mTokens: 0, cacheCreation1hTokens: 0,
                 cachedInputTokens: 99_000_000, reasoningOutputTokens: 0, totalTokens: 101_100_000, estimatedCost: 50.05
             ),
         ]
