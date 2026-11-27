@@ -295,6 +295,8 @@ struct PanelScene {
             scene("134-active-hero-hover", "活跃当大数字，悬停大数字", .init(hero: .activeTime, preview: .init(heroHovered: true))),
             scene("134-90d", "90D：按周", .init(range: .ninetyDays)),
             scene("134-30d", "30D", .init(range: .thirtyDays, hero: .token)),
+            scene("134-30d-hover", "30D 费用：悬停第 3 天，小块不盖峰值标签",
+                  .init(range: .thirtyDays, preview: .init(hoveredSlot: 2))),
             scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
             scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
                                                                        singleCustomDay: true, preview: .init(hoveredSlot: 15))),

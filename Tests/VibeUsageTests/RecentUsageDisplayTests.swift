@@ -576,6 +576,31 @@ struct RecentUsageDisplayTests {
         }
     }
 
+    /// The one-line hover block (cost) steps under its point when above it
+    /// would cover the peak's label, and stays where it was everywhere else.
+    @Test func theCostHoverBlockStepsUnderThePointRatherThanCoverThePeakLabel() {
+        typealias Layout = RecentUsagePlotLayout
+        let label = CGRect(x: 0, y: Layout.labelTop, width: 24, height: Layout.labelHeight)  // 「$67」
+        let size = CGSize(width: 104, height: 22)  // 「10/31  $60.00」
+        let width: CGFloat = 304
+        func origin(_ x: CGFloat, _ y: CGFloat, label: CGRect = label) -> CGPoint {
+            Layout.lineTooltipOrigin(pointX: x, pointY: y, size: size, width: width, peakLabel: label)
+        }
+        // 30D: day 3 at $60 under a $67 peak, near the left edge. The top
+        // edge alone would keep the block above, over the label.
+        let day3 = Layout.y(60, peak: 67, height: Layout.curveHeight)
+        #expect(day3 - 10 - size.height > -6)
+        let near = origin(25, day3)
+        #expect(near.y == day3 + 10)
+        #expect(!CGRect(origin: near, size: size).intersects(label))
+        // The same height away from the label, or a lower point: above, as before.
+        #expect(origin(220, day3).y == day3 - 10 - size.height)
+        #expect(origin(25, 90).y == 90 - 10 - size.height)
+        // Near the top edge: below, as before; with no label drawn, only that rule.
+        #expect(origin(220, Layout.peakY).y == Layout.peakY + 10)
+        #expect(origin(25, day3, label: .null).y == day3 - 10 - size.height)
+    }
+
     @Test func rollingDayStartsAtItsFirstValueAndNamesYesterday() {
         let now = date("2026-11-27T07:42:00Z")
         var buckets = [bucket("2026-11-26T07:00:00Z", cost: 0.6), bucket("2026-11-26T13:00:00Z", cost: 2.9)]

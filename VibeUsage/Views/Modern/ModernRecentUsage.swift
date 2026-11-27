@@ -560,6 +560,18 @@ enum RecentUsagePlotLayout {
         guard peak > 0 else { return zero }
         return zero - CGFloat(value / peak) * (zero - peakY)
     }
+
+    /// Where the one-line hover block (134b, 134c) goes: centered 10 pt above
+    /// its point, inside the plot (12 pt may hang off the left); 10 pt below
+    /// the point instead when above would leave the top by more than 6 pt or
+    /// cover the peak's label (`peakLabel`, `.null` when none is drawn).
+    static func lineTooltipOrigin(pointX: CGFloat, pointY: CGFloat, size: CGSize, width: CGFloat,
+                                  peakLabel: CGRect) -> CGPoint {
+        let x = min(max(pointX - size.width / 2, -12), width - size.width)
+        let above = pointY - 10 - size.height
+        let coversLabel = CGRect(x: x, y: above, width: size.width, height: size.height).intersects(peakLabel)
+        return CGPoint(x: x, y: above < -6 || coversLabel ? pointY + 10 : above)
+    }
 }
 
 /// The curve (134a–134d): the peak's label at the top, the dashed peak line
@@ -573,7 +585,15 @@ private struct RecentUsagePlot: View {
     var initialHover: Int?
 
     @State private var hovered: Int?
+    @State private var peakLabelWidth: CGFloat = 0
     private let height = RecentUsagePlotLayout.curveHeight
+
+    /// The peak's label as drawn, for the hover block to keep clear of.
+    private var peakLabelFrame: CGRect {
+        guard chart.hasKnownPoints else { return .null }
+        return CGRect(x: 0, y: RecentUsagePlotLayout.labelTop,
+                      width: peakLabelWidth, height: RecentUsagePlotLayout.labelHeight)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: RecentUsagePlotLayout.spacing) {
@@ -632,6 +652,7 @@ private struct RecentUsagePlot: View {
                 .foregroundStyle(ModernTheme.secondaryText)
                 .frame(height: RecentUsagePlotLayout.labelHeight)
                 .fixedSize()
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { peakLabelWidth = $0 }
                 .offset(y: RecentUsagePlotLayout.labelTop)
             Line()
                 .stroke(ModernTheme.text.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
@@ -697,7 +718,8 @@ private struct RecentUsagePlot: View {
                 .offset(x: x - radius, y: y - radius)
         }
         if index < chart.tooltips.count {
-            RecentUsageTooltipView(tooltip: chart.tooltips[index], pointX: x, pointY: y, width: width)
+            RecentUsageTooltipView(tooltip: chart.tooltips[index], pointX: x, pointY: y, width: width,
+                                   peakLabel: peakLabelFrame)
         }
     }
 }
@@ -781,6 +803,7 @@ private struct RecentUsageTooltipView: View {
     let pointX: CGFloat
     let pointY: CGFloat
     let width: CGFloat
+    let peakLabel: CGRect
     @State private var size: CGSize = .zero
 
     var body: some View {
@@ -794,10 +817,9 @@ private struct RecentUsageTooltipView: View {
     private var origin: CGSize {
         switch tooltip {
         case .line:
-            let x = min(max(pointX - size.width / 2, -12), width - size.width)
-            var y = pointY - 10 - size.height
-            if y < -6 { y = pointY + 10 }
-            return CGSize(width: x, height: y)
+            let origin = RecentUsagePlotLayout.lineTooltipOrigin(pointX: pointX, pointY: pointY, size: size,
+                                                                 width: width, peakLabel: peakLabel)
+            return CGSize(width: origin.x, height: origin.y)
         case .table:
             let x = pointX > width / 2 ? pointX - 14 - size.width : pointX + 14
             return CGSize(width: x, height: -4)
