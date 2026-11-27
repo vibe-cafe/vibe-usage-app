@@ -146,16 +146,17 @@ struct QuotaSubscriptionDisplay {
         buttonRemaining = reportedExhausted ? 0 : tightest?.remaining
 
         // Only primary windows draw rings. An expired primary must never paint its old reading.
-        let rings = plan.prefix(2).filter { $0.remaining != nil }.sorted {
-            ($0.sortDuration ?? 0) > ($1.sortDuration ?? 0)
+        let rings = current.filter { $0.primarySortDuration != nil }.sorted {
+            ($0.primarySortDuration ?? 0) > ($1.primarySortDuration ?? 0)
         }
         outer = rings.first
         inner = rings.dropFirst().first
         let worstTone = current.map(\.tone).max { $0.rawValue < $1.rawValue } ?? .neutral
         tone = reportedExhausted ? .red : worstTone
-        // The two primary windows already have bars. Use the alert to name another
-        // equally urgent allowance, even when a primary window has a larger lag.
-        additionalAlert = worstTone == .neutral ? nil : plan.dropFirst(2).first { $0.tone == worstTone }
+        // Name the first equally urgent allowance that has no overview bar.
+        additionalAlert = worstTone == .neutral ? nil : current.first {
+            $0.primarySortDuration == nil && $0.tone == worstTone
+        }
         if let reason = reading.shortReason(for: provider) {
             comment = reason
         } else if buttonRemaining == 0 {
@@ -254,7 +255,7 @@ struct QuotaPanelMeter: Equatable {
     let elapsed: TimeInterval?
     let timeUntilReset: TimeInterval?
     let breakdown: [RateLimitMeter.Part]
-    fileprivate let sortDuration: TimeInterval?
+    fileprivate let primarySortDuration: TimeInterval?
     fileprivate let isExtra: Bool
     let remaining: Double?
     let usedPercent: Double?
@@ -276,19 +277,24 @@ struct QuotaPanelMeter: Equatable {
         let generic = QuotaMeterLayout.canonicalMeters(windows, inferWindowDurations: false)
         let primaryLabels = ["5h", "7d"]
         let plan = generic.filter { primaryLabels.contains($0.label) } + generic.filter { !primaryLabels.contains($0.label) }
+        // Generic periods precede feature meters. A feature can keep a leading
+        // detail row, but only a recognized period gets a ring and an overview bar.
+        let leading = plan.prefix(2).map {
+            Self($0, primarySortDuration: QuotaMeterLayout.genericSortDuration(of: $0), now: now)
+        }
         let other = plan.dropFirst(2)
-        var ordered = Array(plan.prefix(2)) + modelMeters + other.filter { $0.label != "Month" }
+        var ordered = modelMeters + other.filter { $0.label != "Month" }
         if let opus = snapshot.sevenDayOpus { ordered.append(.init(id: "opus", label: "Opus", window: opus)) }
         if let sonnet = snapshot.sevenDaySonnet { ordered.append(.init(id: "sonnet", label: "Sonnet", window: sonnet)) }
         ordered += other.filter { $0.label == "Month" }
-        return ordered.map { Self($0, isExtra: false, now: now) } + extra.map { Self($0, isExtra: true, now: now) }
+        return leading + ordered.map { Self($0, now: now) } + extra.map { Self($0, isExtra: true, now: now) }
     }
 
-    private init(_ meter: RateLimitMeter, isExtra: Bool, now: Date) {
+    private init(_ meter: RateLimitMeter, primarySortDuration: TimeInterval? = nil, isExtra: Bool = false, now: Date) {
         id = meter.id
         label = isExtra ? "额外" : (meter.label == "Month" ? "mo" : meter.label)
         self.isExtra = isExtra
-        sortDuration = QuotaMeterLayout.sortDuration(of: meter)
+        self.primarySortDuration = primarySortDuration
         resetsAt = meter.window.resetsAt
         breakdown = meter.breakdown
         let window = meter.window

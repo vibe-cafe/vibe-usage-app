@@ -97,8 +97,8 @@ enum QuotaMeterLayout {
     }
 
     /// Calendar months have a display order even when the provider supplies no duration for a forecast.
-    static func sortDuration(of meter: RateLimitMeter) -> TimeInterval? {
-        period(for: meter)?.seconds ?? meter.window.windowDuration
+    static func genericSortDuration(of meter: RateLimitMeter) -> TimeInterval? {
+        period(for: meter)?.seconds
     }
 
     private static func period(for meter: RateLimitMeter) -> Period? {

@@ -181,6 +181,52 @@ struct QuotaPanelDisplayTests {
         #expect(row.buttonRemaining == 3 && display.overview.nearlyEmpty == 1)
     }
 
+    @Test func claudeWeeklyWithFableHasOneRingAndAlertsOnFable() throws {
+        let quota = snapshot(.claudeCode, nil, window(60, 168 * hours, due: 50))
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(3, 168 * hours, due: 50))
+        let display = panel(quota, models: [fable])
+        let detail = try #require(display.detail)
+        #expect(detail.rows.map(\.label) == ["7d", "Fable"])
+        #expect(detail.outer?.label == "7d" && detail.inner == nil)
+        #expect(detail.tightest?.label == "Fable" && detail.buttonRemaining == 3)
+        let overview = try #require(display.overview.rows.first)
+        #expect(overview.outer?.label == "7d" && overview.inner == nil)
+        #expect(overview.additionalAlert?.label == "Fable" && overview.additionalAlert?.tone == .red)
+    }
+
+    @Test func claudeProWithoutModelAllowancesShowsOnlyItsTwoWindows() throws {
+        var quota = snapshot(.claudeCode, window(60, 5 * hours, due: 50), window(70, 168 * hours, due: 50))
+        quota.planLabel = "Pro"
+        let detail = try #require(panel(quota).detail)
+        #expect(detail.rows.map(\.label) == ["5h", "7d"])
+        #expect(detail.outer?.label == "7d" && detail.inner?.label == "5h")
+        #expect(detail.additionalAlert == nil)
+    }
+
+    @Test func claudeWeeklyAloneHasOneRingAndOneRow() throws {
+        let quota = snapshot(.claudeCode, nil, window(60, 168 * hours, due: 50))
+        let detail = try #require(panel(quota).detail)
+        #expect(detail.rows.map(\.label) == ["7d"])
+        #expect(detail.outer?.label == "7d" && detail.inner == nil)
+        #expect(detail.additionalAlert == nil)
+    }
+
+    @Test func codexFeatureQuotaNeverFillsAMissingRing() throws {
+        var quota = snapshot(.codex, nil, window(8, 168 * hours, due: 50))
+        quota.fiveHourNotEnforced = true
+        quota.meters = [.init(id: "review", label: "Code review", window: window(5, 168 * hours, due: 50))]
+        let weekly = try #require(panel(quota).detail)
+        #expect(weekly.rows.map(\.label) == ["7d", "Code review"])
+        #expect(weekly.outer?.label == "7d" && weekly.inner == nil)
+        #expect(weekly.additionalAlert?.label == "Code review" && weekly.additionalAlert?.tone == .red)
+
+        quota.sevenDay = nil
+        let featureOnly = try #require(panel(quota).detail)
+        #expect(featureOnly.rows.map(\.label) == ["Code review"])
+        #expect(featureOnly.outer == nil && featureOnly.inner == nil)
+        #expect(featureOnly.additionalAlert?.label == "Code review" && featureOnly.buttonRemaining == 5)
+    }
+
     @Test func multipleModelAllowancesUseTheirOwnTimingAndStaySeparateFromTheMainRings() throws {
         var quota = snapshot(.claudeCode, window(36, 5 * hours, due: 16), window(53, 168 * hours, due: 39))
         quota.sevenDayOpus = window(4, 168 * hours, due: 14)
