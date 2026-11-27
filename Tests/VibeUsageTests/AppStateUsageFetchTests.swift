@@ -32,6 +32,74 @@ private actor UsageFetchStub {
 
 struct AppStateUsageFetchTests {
     @Test @MainActor
+    func slowActivityDoesNotDelayUsageRefreshOrRestoreAnUnlinkedAccount() async throws {
+        var pending: CheckedContinuation<UsageActivity, Never>?
+        var finished = false
+        let state = AppState(
+            initialConfig: VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test"),
+            loadConfig: { nil },
+            usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: true, names: nil) },
+            activityFetcher: { _, _, _, _ in await withCheckedContinuation { pending = $0 } }
+        )
+        let refresh = Task {
+            await state.fetchUsageData()
+            finished = true
+        }
+        try await waitForDashboard { pending != nil && state.hasLoadedUsageData }
+        #expect(finished)
+        state.applyConfig(nil)
+        pending?.resume(returning: UsageActivity(activeSeconds: 60, workSeconds: 60, parallel: 1,
+                                                 series: [], firstBucketStart: "2026-01-01T00:00:00Z"))
+        await refresh.value
+        await Task.yield()
+        #expect(state.activity == nil)
+    }
+
+    @Test @MainActor
+    func activityFailureLeavesCostAndTokensVisibleAndOnlySupportedFiltersRefetch() async throws {
+        let sample = bucket(source: "fixture")
+        let activity = UsageActivity(activeSeconds: 60, workSeconds: 120, parallel: 2,
+                                     series: [], firstBucketStart: "2026-01-01T00:00:00Z")
+        var requests: [FilterState] = []
+        var usageReads = 0
+        let state = AppState(
+            initialConfig: VibeUsageConfig(apiKey: "test-key", apiUrl: "https://example.test"),
+            loadConfig: { nil },
+            usageFetcher: { _, _, _ in
+                usageReads += 1
+                return UsageResponse(buckets: [sample], sessions: nil, hasAnyData: true, names: nil)
+            },
+            activityFetcher: { _, _, _, filters in
+                requests.append(filters)
+                if requests.count == 2 || requests.count == 4 { throw URLError(.timedOut) }
+                return activity
+            }
+        )
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity != nil }
+        #expect(state.activity?.summary?.activeText == "1m")
+        state.filters.models = ["test-model"]
+        await Task.yield()
+        #expect(requests.count == 1)
+        state.filters.projects = ["test-project"]
+        try await waitForDashboard { requests.count == 2 }
+        #expect(state.activity == nil)
+        #expect(state.matchesFilters(sample))
+        #expect(state.buckets.first?.computedTotal == 10)
+        #expect(state.buckets.first?.estimatedCost == 0.01)
+
+        #expect(requests.last?.projects == ["test-project"])
+        #expect(usageReads == 1)
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity != nil }
+        #expect(requests.count == 3)
+        // A failed refresh of the same query must also replace an existing success.
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity == nil }
+        #expect(requests.count == 4)
+    }
+
+    @Test @MainActor
     func refreshReadsDiskAndRetainsTheLastReadableConfig() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }
@@ -43,7 +111,8 @@ struct AppStateUsageFetchTests {
                 servers.append(server.baseURL)
                 keys.append(key)
                 return UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil)
-            }
+            },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let old = Data(#"{"apiKey":"one","apiUrl":"https://WWW.VibeCafe.ai///","cliField":1}"#.utf8)
@@ -79,7 +148,8 @@ struct AppStateUsageFetchTests {
             loadConfig: { nil },
             usageFetcher: { _, _, range in
                 try await stub.fetch(range)
-            }
+            },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let launchRequest = Task { @MainActor in
@@ -105,7 +175,8 @@ struct AppStateUsageFetchTests {
             loadConfig: { nil },
             usageFetcher: { _, _, range in
                 try await stub.fetch(range)
-            }
+            },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let olderRequest = Task { @MainActor in
@@ -148,7 +219,8 @@ struct AppStateUsageFetchTests {
             loadConfig: { nil },
             usageFetcher: { _, _, range in
                 try await stub.fetch(range)
-            }
+            },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let olderRequest = Task { @MainActor in
@@ -191,7 +263,8 @@ struct AppStateUsageFetchTests {
             bucketStart: "2026-07-22T00:00:00Z",
             inputTokens: 1,
             outputTokens: 2,
-            cacheCreationInputTokens: nil,
+            cacheCreation5mTokens: 0,
+            cacheCreation1hTokens: 0,
             cachedInputTokens: 3,
             reasoningOutputTokens: 4,
             totalTokens: 10,

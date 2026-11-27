@@ -20,12 +20,17 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── ModernPanelState.swift # New panel navigation (概览 / one subscription, hero, expanded), reset on every open; 刷新额度 scope
 │   │   ├── AppConfig.swift        # Version string, API URL, debug/release config
 │   │   ├── UsageBucket.swift      # Codable data model (source, model, project, hostname, tokens, cost) + server-supplied `names`
+│   │   ├── QuotaPanelDisplay.swift # New quota panel values for the overview, buttons, rings and rows
+│   │   ├── QuotaStatusText.swift  # Shared copy for quota read outcomes and sources
+│   │   ├── UsagePanelState.swift  # New panel controls, effective filters and subscription-to-tool mapping
+│   │   ├── UsageDisplaySnapshot.swift # New panel totals, series and Token composition at a supplied instant
+│   │   ├── UsageRanking.swift     # Top three, full remainder and rank colors for a single metric
 │   │   ├── Config.swift           # Shared ~/.vibe-usage config; app-owned fields + unknown CLI-field-preserving writes
 │   │   └── SyncHistory.swift      # Last 10 sync summaries (typed fields only) in the app's preferences
 │   ├── Views/
 │   │   ├── PopoverView.swift      # Classic dashboard container (520 × 620 popover)
 │   │   ├── Modern/                # New panel (interface style .modern): PanelRootView (style switch), ModernPanelView (header, 概览 row, cards, footer; height follows content), ModernPanelChrome (header, footer, 同步用量, spinner), ModernTheme (palette, fonts, card surface)
-│   │   ├── SummaryCardsView.swift # 5 stat cards (cost, total tokens, cached tokens, active duration, total duration)
+│   │   ├── SummaryCardsView.swift # 4 stat cards (cost, total tokens, cached tokens, active time)
 │   │   ├── BarChartView.swift     # Custom-drawn bar chart (hourly/daily trend)
 │   │   ├── DistributionChartsView.swift  # 4 donut pie charts (terminal, tool, model, project)
 │   │   ├── FilterTagsView.swift   # Filter pills for source/model/project/hostname
@@ -230,7 +235,7 @@ VibeUsageApp → AppDelegate → MenuBarController (NSStatusItem + PopoverPanel)
             ├── ScrollView
             │   ├── RateLimitCardView # Codex / Claude subscription quota cards
             │   ├── FilterTagsView    # Source/model/project/hostname filter pills
-            │   ├── SummaryCardsView  # 5 stat cards
+            │   ├── SummaryCardsView  # 4 stat cards
             │   ├── BarChartView      # Trend chart (hourly or daily)
             │   └── DistributionChartsView  # 4 donut charts (2x2 grid)
             └── footerBar             # Sync status, refresh, quit
@@ -251,13 +256,15 @@ The new panel is a separate view layer over the same `AppState`; the classic pan
 3. Views compute filtered data locally: `appState.buckets.filter { ... appState.filters ... }`
 4. Charts aggregate filtered buckets by time key or dimension
 
+Active time uses the approved 2026-11-25 model-time contract. Alongside each usage read, the same authenticated `APIClient` and system-routed URL session read `/api/usage/activity` with the dashboard range, timezone, granularity and repeated source/project/hostname filters. `AppState.activity` supplies the server's deduplicated total and actual hourly/daily periods to both cards and charts. AI work time adds up concurrent sessions. Dividing it by active time gives average concurrency. The classic card keeps its original look: only the value changes. AI work time (when positive), average concurrency (when available) and, for partial totals, the first recorded local date appear only in its tooltip; the maintainer ruled out a second line on the card (2026-11-27). Before the first recorded period, or after a failed read, active time is unknown. A recorded idle period is zero. Usage buckets load independently.
+
 ### Time Range (today / 24H / 7D / 30D / 90D / custom)
 `TimeRange` (`AppState.swift`) has two hourly-granularity cases that look similar but mean different things — the split mirrors `vibe-cafe@f5f022b`, where the single rolling "1D" pill confused users who read it as "today" but watched the number shrink as the earliest hour rolled off.
 
 - `.today` (UI: 「今天」) — local-midnight → now, fixed start. Only grows through the day.
 - `.oneDay` (UI: 「24H」, raw value still `"1D"` for state stability) — rolling last 24 hours.
 - `.sevenDays`, `.thirtyDays`, `.ninetyDays` — fixed day-count ranges.
-- `.custom` — user-selected local date bounds, sent as `from` / `to` query params.
+- `.custom` — usage and activity share the selected local calendar days and timezone. Both routes parse explicit bounds as instants and include `to`, so the app sends UTC ISO-8601 timestamps from the first day's local midnight through the last millisecond before the next local day. The activity coverage hint uses the same start.
 
 Today requests `from=localMidnight` while rolling 24h requests `days=1`. The today-cutoff is also applied client-side via `TimeRange.startCutoff` so all filtered views and the menu-bar display share the same local-midnight semantics. `BarChartView`'s hourly fill loop keys off `appState.timeRange == .today` to start at midnight (slot count grows from 1 → 24) instead of "23 hours ago" for the rolling-24h case. Every `/api/usage` request includes `tz=TimeZone.current.identifier`.
 Multi-day API buckets carry UTC instants for the viewer's local midnight. Daily bucket/session keys must convert those instants through the current timezone; taking the raw ISO prefix shifts UTC+ users back one day and leaves today's 7D bar empty.
@@ -267,7 +274,14 @@ Multi-day API buckets carry UTC instants for the viewer's local midnight. Daily 
 - `isInitialDataLoad` / `!hasLoadedUsageData` → show layout-matched skeleton blocks under a loading pill.
 - `isRefreshingData` → keep the current dashboard visible, dim it, and overlay a small loading pill.
 
-Time-range changes and custom-date Apply trigger a server fetch. Filter changes are local only and animate the existing summary cards, trend bars, and distribution charts without refetching.
+Time-range changes and custom-date Apply refresh both reads. Tool, project and hostname changes refetch only activity, whose union depends on the selected rows. Model changes and all filtering of cost and tokens remain local.
+
+### New panel usage rules (#105, model only)
+`AppState.timeRange` drives the query, panel and menu bar. In #107 call `appState.applyDefaultTimeRange(forModernInterface: appState.interfaceStyle.current == .modern)` before the launch fetch and on an actual style change (modern Today, classic rolling 24H). After a change of period, including a style change that changes it, call `fetchUsageData()` as the classic selector does. Each presentation calls `UsagePanelState.panelDidOpen()` to restore overview, cost and collapsed details. Keep that state for the app session so units and individual card metrics survive reopening.
+
+Use `effectiveFilters` for the terminal, tool and model inputs. Selecting one of several enabled subscriptions replaces the manual tools with its usage source (OpenCode Go maps to `opencode`). Clearing filters preserves the classic project selection and the period. Rebuild on a new response, period or changed effective filters. Hero, unit, disclosure and card metric changes reuse the snapshot.
+
+Build through `AppState.usageDisplaySnapshot(filters:now:)`. It returns nil until the loaded query matches the selected period and custom dates. Today begins at the first matching usage hour. The rolling day includes the first partial UTC hour. 90D and custom ranges over 60 local days group backward from the last included day, leaving any short group at the start. For #103/#115 pass hourly or daily seconds keyed by their start instant to `snapshot.grid.sums(_:)` for the same slots as cost and Tokens. Each ranking row carries its fraction of the metric total. The modern Chinese Token formatter uses 万 and 亿.
 
 ### Chart Hover & Scroll
 `BarChartView` is split into a parent that computes the O(n) `chartData`
@@ -334,6 +348,16 @@ The workspace `AGENTS.md` rule 1: follow the user's proxy settings, in the proce
 
 Coverage: `Tests/VibeUsageTests/SystemProxyTests.swift` (resolution from injected settings dictionaries — HTTPS proxy and bypass list, SOCKS, PAC by the system including the first-answer rule and an unevaluable PAC; the variables handed to the CLI and Claude Code, the user's own variables, Node's bypass precedence, fail-closed children; the launcher's registry rules; pinned sessions against a stand-in proxy on 127.0.0.1 that records an HTTP `CONNECT` and a SOCKS5 greeting; login-launch detection and the wait for the proxy), `Tests/VibeUsageTests/ClaudeSOCKSRelayTests.swift` (the relay against a stand-in SOCKS5 that forwards to a local echo server: host name handed over, credential, allowed hosts and port, unresolved route, stop; what Claude Code's environment gets). The tests never read or change the machine's settings.
 
+### New Panel Quota Display
+
+`QuotaPanelDisplay` (#102) projects snapshots, enabled providers in Settings order, the optional selection and an explicit clock instant into values for the new panel. The overview counts subscriptions. The button and ring center use the lowest current plan remainder, the alert uses the worst pace, and the comment uses the greatest signed lag. Expired readings and pay-as-you-go spend stay in the detail list and are excluded from comparisons. Model-scoped allowances enter through `modelMeters` in source order, independently of the classic card's meter list.
+
+A forecast starts at 15% elapsed and requires a reported duration and a future reset. A current plan window at zero makes the subscription red and gives the overview and button the label “已用完”, including windows without timing. Below 10% remaining, an unavailable forecast is red. With a forecast, both low-remainder and one-hour alerts require exhaustion at least 15 minutes before reset. The detail still gives the actual ETA inside that margin. Red pace comments round positive lag to at least 1%. Other rows begin commenting at 15% elapsed and turn amber only beyond five points of lag. Each ring and its overview bar use the same window, timing and color. Only recognized generic periods (5h, 7d, 1d, monthly and the like) draw rings and overview bars, at most two, the longer outside. Model-scoped or feature allowances and pay-as-you-go spend never fill a missing slot: an account without 5h (Claude is removing it for some accounts) draws only the outer ring, and Fable stays a detail row. When several windows share the worst alert level, the additional label names the first one in detail order that has no overview bar.
+
+Views use `readState` for read outcomes and `commentTone` for overview text. A paused read keeps the severity of its retained meters while its “已暂停读取” comment stays neutral. The overview uses short state labels. Details carry the provider-specific reason, source and applicable action.
+
+Overview rows put red first, then amber, preserving Settings order within each group. The folded summary counts red and amber separately and uses their highest tone. “都正常” requires readable, healthy subscriptions throughout the folded group. Both panels annotate retained readings only on a live failure, including Claude Desktop records kept under organization policy. See `QuotaPanelDisplayTests` for the 132c and 132d layouts, threshold cases and read states.
+
 ### Rate-Limit Refresh
 No background timer. `RateLimitCoordinator` is driven entirely by user-visible events:
 - **Approved 2026-09-19 — quota meter layout:** generic time windows render first from shortest to longest, so every provider that has both windows shows `5h` above `7d`. Exact generic aliases normalize to compact labels (`Daily` → `1d`, `Weekly` / `1w` → `7d`); provider-specific/model/feature meters retain their relative order afterward. The CLI canonicalizes schema-v1 live/cache results and both desktop apps repeat the rule defensively for older snapshots. Providers without a 5h window start with their first real window; the UI never invents an empty slot.
@@ -366,7 +390,9 @@ No background timer. `RateLimitCoordinator` is driven entirely by user-visible e
 - An `.ok` result with a failure reason keeps its meters and names their source (缓存 / 本地日志 / Claude 桌面端记录 / 上次实时读取) and the specific reason below them. A cached CLI answer without a known code keeps 「实时读取失败」. A network `pauseReason`, including `proxyUnsupported`, shows the pause with no retry button. A pause can accompany local meters (#189), retaining the source line, amber tab dot and 「已暂停」 in Settings. Only the three egress pauses are retried at every panel open; `proxyUnsupported` and every other reason keep the normal interval.
 - CLI `missing_credentials` prompts for login or the selected regional ZCode key. `unauthorized` and `expired_credentials` prompt to log in again or replace the invalid key. Antigravity's `programNotFound` (also a legacy CLI's `missing_credentials` without a known code) shows 「请安装 agy 或 Antigravity」. Rejected Antigravity credentials show 「请在 Antigravity 中登录」. Keep card and Settings wording aligned with the Windows app.
 - Terminology: code stays on `RateLimit` (matches the `rate_limits` field both providers return); user-facing copy uses 「订阅配额」. Selector items use the product display name plus local status. Settings no longer shows where each product's data comes from — the 「数据来源」 column, including the 「Claude Desktop」 note for machines with Desktop but no CLI, was removed by the maintainer on 2026-11-20 (「订阅配额里去掉数据来源那一列。」). The launch-time `AppState.claudeUsesDesktopBundledCLI` flag that fed it went with it; `ClaudeUsageProbe.primarySourceKind()` itself is unchanged.
-- `RateLimit.swift`'s `sevenDayOpus`/`sevenDaySonnet`/`extraUsage` are populated by the Claude probe (Max plans expose the per-model weekly windows); the card does not render them yet. `.unauthorized` is real again: `CodexUsageAPI` maps a post-reload 401 to it, and the card renders a re-login hint with a retry button.
+- Claude's `modelScopedMeters` uses the same raw rows from live `rate_limits.limits` and cached `utilization.limits`. Read `scope.model.display_name` and `percent` for `group == "weekly"`. The group defines a seven-day window. The optional `resets_at` accepts Unix seconds or an ISO 8601 string. Claude Code filters its live `model_scoped` projection by name. Keep model meters separate from the classic card's typed 5h, 7d, Opus, Sonnet and extra rows.
+- A present `limits` field supplies the complete list, including an empty one. Only an absent field permits carrying a previous live value with a future reset for the same account. Match the existing `initialize` reply to the config cache using a process-local hash of email and organization (empty organization means absent). The cache also requires matching cached and active account UUIDs for this comparison. Desktop history provides no account proof. No additional request, profile read, app-owned disk cache or diagnostic field is involved.
+- `CodexUsageAPI` maps a post-reload 401 to `.unauthorized`, and the card renders a re-login hint with a retry button.
 - **Codex JSONL staleness policy (stricter than Claude's).** Codex's `rate_limits.primary/secondary.resets_at` is anchored to a true rolling window, so a `resets_at` already in the past proves that window has rolled over and the snapshot's `used_percent` is from the *previous* window. `CodexRateLimitReader.parseWindow` drops any such slot (per-window — 5h and 7d expire independently), and `read()` returns `.noData` if both slots are expired so the card shows its neutral "nothing read yet" line instead. Without this filter the reader would display a stale percentage indefinitely (e.g. an 8% reading hanging around 12 days after that window's `resets_at`). The Claude reader is intentionally more lenient — it keeps `used_percentage` and only suppresses the elapsed-time bar when stale — because Claude's payload has no equivalent "this window has provably rolled" signal; staleness there just means Claude Code is idle (and the 「数据截至」 footer note communicates the age).
 - **The rollout walk is memory-bounded (2026-10-09, user feedback: 420 MB in Force Quit).** `CodexRateLimitReader.scan` walks a rollout backwards in 256 KiB `pread` chunks and returns the first (newest) `rate_limits` event, instead of `String(contentsOf:)` + `split` over the whole file. A long Codex session appends for hours — the biggest rollout on this machine is 469 MB — and the whole-file read cost ~2× the file size *in live memory* that stayed resident in the malloc arena after the call (measured: 943 MB footprint for 469 MB, and `FileHandle.read(upToCount:)` alone reproduces it because its footprint tracks the bytes read). The chunked walk measures 2 MB on that same file, in a full walk and in the shipped read path, and returns identical values for all 405 real rollouts on this machine. End-to-end A/B with one 400 MB rollout in the shipped bundle (popover opened, isolated `CODEX_HOME`): 0.7.2 peaks at **863 MB**, 0.7.3 at **38 MB** — the empty-fixture control is 37 MB, so the path now costs nothing measurable. Keep the POSIX read — an equivalent loop over `FileHandle` reintroduces the file-sized footprint. Peak memory is one chunk plus the longest single line (real tool-output lines top out near 9 MB), and `Tests/VibeUsageTests/CodexRateLimitReaderTests.swift` pins the chunk-boundary cases (event behind the tail chunk, line straddling a boundary, line longer than a chunk, decoy line with the key but no `token_count`).
 
@@ -417,21 +443,24 @@ struct UsageBucket: Codable, Identifiable, Equatable {
     let bucketStart: String         // ISO8601 UTC timestamp
     let inputTokens: Int
     let outputTokens: Int
+    let cacheCreation5mTokens: Int?
+    let cacheCreation1hTokens: Int?
     let cachedInputTokens: Int
     let reasoningOutputTokens: Int
     let totalTokens: Int
     let estimatedCost: Double?      // Server-calculated cost (nil if model unmatched)
 
-    var computedTotal: Int           // inputTokens + outputTokens + reasoningOutputTokens + cachedInputTokens (matches web "总 Token")
+    var inputIncludingCacheWrites: Int  // inputTokens + both cache-write counts (missing counts contribute zero)
+    var computedTotal: Int           // inputIncludingCacheWrites + outputTokens + reasoningOutputTokens + cachedInputTokens
     var dayKey: String               // "yyyy-MM-dd" from bucketStart
     var hourKey: String              // "yyyy-MM-ddTHH" from bucketStart
 }
 ```
 
 Token aggregation conventions (aligned with the web Vibe Usage page):
-- Popup summary "总 Token" card → `computedTotal` (includes cache reads, matching web "总 Token")
+- Popup summary "总 Token" card → `computedTotal` (includes cache reads and both cache-write durations)
 - Popup summary "缓存 Token" card → `cachedInputTokens` (cache reads only)
-- Trend chart token mode → stacked output, input, and cached segments; reasoning tokens are folded into output.
+- Trend chart token mode → input includes 5-minute and 1-hour cache writes, output includes reasoning, and cached counts reads only.
 - Distribution charts token mode → `computedTotal`
 - Menu-bar token line → `computedTotal`
 - `estimatedCost` already accounts for cache reads (server-side, at `cacheReadMtok` rate)

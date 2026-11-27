@@ -24,6 +24,7 @@ final class RateLimitCoordinator {
     private weak var appState: AppState?
     private var lastCodexFetchAt: Date?
     private var lastClaudeFetchAt: Date?
+    private var lastClaudeLiveModels: (account: ClaudeQuotaAccountScope, meters: [RateLimitMeter], observedAt: Date)?
     private var lastOpenCodeGoFetchAt: Date?
     private var isPanelVisible = false
     private var codexRefreshTask: Task<Void, Never>?
@@ -268,6 +269,7 @@ final class RateLimitCoordinator {
         // change takes effect on the next one.
         if await claudeNonessentialTrafficDisabled() {
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+            lastClaudeLiveModels = nil
             debugLog("[rate-limit] claude nonessential traffic forced off by policy — not starting Claude Code")
             if let record = await loadClaudeDesktopRecord(),
                !Task.isCancelled, appState.claudeRateLimitEnabled {
@@ -291,18 +293,21 @@ final class RateLimitCoordinator {
         // reading costs a ~2.5s subprocess round trip. Re-read on every refresh:
         // Claude may update its disk cache even when our live probe fails.
         // Only newer data may replace an already populated card.
-        if let cached = await loadClaudeCache(),
-           !Task.isCancelled,
-           appState.claudeRateLimitEnabled {
-            upsertIfNewer(carryingLiveFailure(cached))
-        }
+        let cached = await loadClaudeCache()
+        guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
+        paintClaudeCache(cached)
 
         await appState.waitForLaunchNetwork()
         guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
         do {
             let live = try await fetchClaudeLive()
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
-            upsert(live)
+            if live.hasClaudeLimits, let account = live.claudeAccountScope {
+                lastClaudeLiveModels = (account, live.modelScopedMeters, live.dataAsOf ?? Date())
+            } else if live.claudeAccountScope != lastClaudeLiveModels?.account {
+                lastClaudeLiveModels = nil
+            }
+            upsert(includingLastClaudeLiveModels(in: live))
         } catch is CancellationError {
             #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaCancelled([.claudeCode])
@@ -318,6 +323,7 @@ final class RateLimitCoordinator {
             if case ClaudeUsageProbe.ProbeError.nonessentialTrafficDisabled = error {
                 // The policy changed between the check above and the probe's
                 // own check. Same answer as above.
+                lastClaudeLiveModels = nil
                 upsertClaudeNonessentialTrafficDisabled()
             } else if failure == .notApplicable {
                 // API key / Bedrock / Vertex session: this account has no plan
@@ -325,6 +331,7 @@ final class RateLimitCoordinator {
                 // Carry that as a reason — otherwise the card is indistinguishable
                 // from "Claude isn't installed", which is what issue #39 saw.
                 debugLog("[rate-limit] claude plan limits not applicable for this account")
+                lastClaudeLiveModels = nil
                 upsert(ProviderRateLimit(provider: .claudeCode, status: .noData,
                     fetchedAt: Date(), emptyReason: .sessionWithoutPlanLimits))
             } else {
@@ -351,6 +358,47 @@ final class RateLimitCoordinator {
         }
         #endif
         lastClaudeFetchAt = Date()
+    }
+
+    private func includingLastClaudeLiveModels(in snapshot: ProviderRateLimit) -> ProviderRateLimit {
+        guard !snapshot.hasClaudeLimits, let last = lastClaudeLiveModels,
+              last.account == snapshot.claudeAccountScope else { return snapshot }
+        let now = Date()
+        var result = snapshot
+        result.modelScopedMeters = last.meters.filter { meter in
+            meter.window.resetsAt.map { $0 > now } == true
+        }
+        return result
+    }
+
+    private func paintClaudeCache(_ cached: ProviderRateLimit?) {
+        if let cached, let account = cached.claudeAccountScope, let last = lastClaudeLiveModels {
+            if account != last.account {
+                lastClaudeLiveModels = nil
+            } else if cached.hasClaudeLimits, let asOf = cached.dataAsOf, asOf >= last.observedAt {
+                // A subsequent cache can withdraw a model. Only a live read
+                // can supply a percentage for a future reply missing limits.
+                let reported = Set(cached.modelScopedMeters.map(\.id))
+                lastClaudeLiveModels?.meters.removeAll { !reported.contains($0.id) }
+            }
+        }
+        let painted = cached.map(includingLastClaudeLiveModels)
+        if let painted, upsertIfNewer(carryingLiveFailure(painted)) { return }
+
+        // Keep the newer classic windows. The cache can still answer for the
+        // models on this account, or confirm its own sample on a repeated read.
+        guard var current = currentSnapshot(.claudeCode), current.status == .ok else { return }
+        let original = current
+        if let painted, painted.claudeAccountScope == current.claudeAccountScope,
+           painted.claudeAccountScope != nil ||
+            (painted.source == .cache && current.source == .cache && painted.dataAsOf == current.dataAsOf) {
+            current.modelScopedMeters = painted.modelScopedMeters
+            current.hasClaudeLimits = painted.hasClaudeLimits
+        } else {
+            current.modelScopedMeters = []
+            current.hasClaudeLimits = false
+        }
+        if current != original { upsert(current) }
     }
 
     /// Replaces whatever the Claude card showed — including numbers read
@@ -749,6 +797,7 @@ final class RateLimitCoordinator {
         case .codex:
             cancelCodexRefresh()
         case .claudeCode:
+            lastClaudeLiveModels = nil
             cancelClaudeRefresh()
         case .kimiCode, .zCode, .grok, .cursor, .antigravity:
             cancelCLIRefresh()

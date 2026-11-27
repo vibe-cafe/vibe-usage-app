@@ -64,13 +64,13 @@ enum QuotaMeterLayout {
         var originalIndex: Int
     }
 
-    static func canonicalMeters(_ meters: [RateLimitMeter]) -> [RateLimitMeter] {
+    static func canonicalMeters(_ meters: [RateLimitMeter], inferWindowDurations: Bool = true) -> [RateLimitMeter] {
         meters.enumerated().map { index, original in
             var meter = original
             let period = period(for: meter)
             if let period {
                 meter.label = period.label
-                if meter.window.windowDuration == nil,
+                if inferWindowDurations, meter.window.windowDuration == nil,
                    let duration = period.inferredWindowDuration {
                     meter.window.windowDuration = duration
                 }
@@ -94,6 +94,11 @@ enum QuotaMeterLayout {
             }
         }
         .map(\.meter)
+    }
+
+    /// Calendar months have a display order even when the provider supplies no duration for a forecast.
+    static func genericSortDuration(of meter: RateLimitMeter) -> TimeInterval? {
+        period(for: meter)?.seconds
     }
 
     private static func period(for meter: RateLimitMeter) -> Period? {
@@ -190,6 +195,12 @@ struct ProviderRateLimit: Equatable, Identifiable {
     /// Claude readers continue filling their typed fields below; CLI-backed
     /// providers can populate this collection directly.
     var meters: [RateLimitMeter] = []
+    /// Claude's named allowances, separate from the generic meters that
+    /// select the classic card's row layout.
+    var modelScopedMeters: [RateLimitMeter] = []
+    /// An explicit limits list is authoritative even when it has no model rows.
+    var hasClaudeLimits = false
+    var claudeAccountScope: ClaudeQuotaAccountScope?
     var fiveHour: RateLimitWindow?
     var sevenDay: RateLimitWindow?
     var sevenDayOpus: RateLimitWindow?     // Claude Max plan only
