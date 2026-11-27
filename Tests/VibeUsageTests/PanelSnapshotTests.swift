@@ -34,7 +34,8 @@ struct PanelSnapshotTests {
             let fixture = PanelFixture(scene)
             defer { fixture.tearDown() }
             try await fixture.prepare()
-            let png = try await PanelSnapshot.render(fixture: fixture, maxHeight: scene.maxHeight)
+            let png = try await PanelSnapshot.render(fixture: fixture, maxHeight: scene.maxHeight,
+                                                     scrolledToEnd: scene.scrolledToEnd)
             let url = directory.appendingPathComponent("\(scene.id).png")
             try png.write(to: url)
             print("[panel-snapshot] \(scene.id) \(scene.title) → \(url.path)")
@@ -63,6 +64,47 @@ struct PanelSnapshotTests {
         #expect(modern != classic)
         try modern.write(to: directory.appendingPathComponent("switch-modern.png"))
         try classic.write(to: directory.appendingPathComponent("switch-classic.png"))
+    }
+
+    /// Crops of the details cards (135d, the faded figures of 134r): states
+    /// held inside the view, which a whole-panel scene cannot set.
+    @Test(.enabled(if: PanelSnapshot.isEnabled))
+    @MainActor func renderDetailCrops() async throws {
+        let bundle = try #require(PanelTestResources.bundle)
+        AppFonts.register(from: bundle)
+        let directory = PanelSnapshot.outputDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        struct Crop {
+            let id: String
+            let usage: PanelUsage
+            var open: UsageRanking.Dimension?
+            var faded = false
+        }
+        let crops = [
+            Crop(id: "135d", usage: .today, open: .model),
+            Crop(id: "135d-up", usage: .many, open: .tool),
+            Crop(id: "135d-scroll", usage: .many, open: .model),
+            Crop(id: "135-faded", usage: .today, faded: true),
+        ]
+        let wanted = ProcessInfo.processInfo.environment["VIBE_USAGE_RENDER_SCENES"]
+            .map { Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }) }
+        for crop in crops where wanted?.contains(crop.id) ?? true {
+            let fixture = PanelFixture(PanelScene(id: crop.id, title: crop.id, usage: crop.usage))
+            defer { fixture.tearDown() }
+            try await fixture.prepare()
+            // A new period whose response has not come back yet.
+            var fade: (@MainActor (AppState) -> Void)?
+            if crop.faded {
+                fade = { state in
+                    state.timeRange = .sevenDays
+                    state.isLoadingData = true
+                }
+            }
+            let png = try await PanelSnapshot.renderDetails(fixture: fixture, openRemainder: crop.open, change: fade)
+            let url = directory.appendingPathComponent("\(crop.id).png")
+            try png.write(to: url)
+            print("[panel-snapshot] \(crop.id) → \(url.path)")
+        }
     }
 
     /// The classic panel without a linked account, at its 520 × 620 size,
@@ -108,6 +150,16 @@ struct PanelScene {
     var maxHeight: CGFloat = .infinity
     /// The device sign-in's step (unlinked scenes).
     var signIn: SignIn = .idle
+    /// Usage the fixture server answers with; nil = never asked (no figures).
+    var usage: PanelUsage?
+    var timeRange: TimeRange = .today
+    var filters: FilterState = .init()
+    /// Token / 费用 of the details cards; unset ones are Token.
+    var metrics: [UsageRanking.Dimension: MetricMode] = [:]
+    /// The first usage read is still on its way.
+    var loading = false
+    /// Drawn with the scrolling middle at its end (`maxHeight` scenes).
+    var scrolledToEnd = false
 
     enum SignIn: String {
         /// 「登录并链接数据」.
@@ -133,12 +185,35 @@ struct PanelScene {
             "同步失败: 本地同步工具读取历史记录时崩溃（RangeError: Invalid string length）。请更新 @vibe-cafe/vibe-usage 后重试"
         )),
         PanelScene(id: "136g", title: "底栏：还没同步过", lastSyncMinutesAgo: nil),
-        PanelScene(id: "136i", title: "展开以后：收起详情", expanded: true),
+        PanelScene(id: "136i", title: "展开以后：收起详情", expanded: true, usage: .today),
         PanelScene(id: "136j", title: "没登录：近期消耗换成登录，底栏只剩关闭", linked: false, lastSyncMinutesAgo: nil),
         PanelScene(id: "136k", title: "登录：等浏览器里确认", linked: false, lastSyncMinutesAgo: nil, signIn: .waiting),
         PanelScene(id: "136k-asking", title: "登录：验证码还没拿到", linked: false, lastSyncMinutesAgo: nil, signIn: .asking),
         PanelScene(id: "136l", title: "登录没成功：原因和重新登录", linked: false, lastSyncMinutesAgo: nil, signIn: .failed),
-        PanelScene(id: "overflow", title: "展开后超过屏幕：顶栏底栏固定、中间滚动", expanded: true, maxHeight: 640),
+        PanelScene(id: "overflow", title: "展开后超过屏幕：顶栏底栏固定、中间滚动", expanded: true, maxHeight: 640,
+                   usage: .today),
+        PanelScene(id: "overflow-end", title: "展开后超过屏幕：中间滚到底，底栏仍在", expanded: true, maxHeight: 640,
+                   usage: .today, scrolledToEnd: true),
+        // 135: 展开详情.
+        PanelScene(id: "135a", title: "展开详情：今天，四张卡，都按 Token", expanded: true, usage: .today),
+        PanelScene(id: "135b", title: "周期 7D、工具 Codex，再展开：只算 Codex 这 7 天", expanded: true,
+                   usage: .week, timeRange: .sevenDays, filters: FilterState(sources: ["codex"])),
+        PanelScene(id: "135c", title: "模型分布换成费用：按钱排名次", expanded: true, usage: .today,
+                   metrics: [.model: .cost]),
+        PanelScene(id: "135c-all", title: "三个分布都按费用", expanded: true, usage: .today,
+                   metrics: [.model: .cost, .terminal: .cost, .tool: .cost]),
+        PanelScene(id: "135e", title: "名字太长：中间省略", expanded: true, usage: .longNames),
+        PanelScene(id: "135-selected", title: "点进 Claude：四张卡只算 Claude Code", selected: .claudeCode,
+                   expanded: true, usage: .today),
+        PanelScene(id: "135-single", title: "只有一个订阅：四张卡仍是全部用量", subscriptions: [.claudeCode],
+                   expanded: true, usage: .today),
+        PanelScene(id: "135-filter", title: "终端筛选 Mac-Studio", expanded: true, usage: .today,
+                   filters: FilterState(hostnames: ["Mac-Studio"])),
+        PanelScene(id: "135-filter-empty", title: "筛选后没有用量", expanded: true, usage: .today,
+                   filters: FilterState(hostnames: ["Mac-mini"])),
+        PanelScene(id: "135-empty", title: "这段时间没有用量", expanded: true, usage: PanelUsage.none),
+        PanelScene(id: "135-loading", title: "第一次打开，用量还没读出来", expanded: true, loading: true),
+        PanelScene(id: "135-many", title: "模型、工具很多：前三名加其余", expanded: true, usage: .many),
     ]
 }
 
@@ -161,10 +236,15 @@ final class PanelFixture {
             defaults.set(now.addingTimeInterval(-minutes * 60), forKey: AppState.lastSuccessfulSyncKey)
         }
         let config = scene.linked ? VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test") : nil
+        let usage = scene.usage
         state = AppState(
             initialConfig: config,
             loadConfig: { config },
-            usageFetcher: { _, _, _ in throw URLError(.notConnectedToInternet) },
+            usageFetcher: { _, _, range in
+                guard let usage else { throw URLError(.notConnectedToInternet) }
+                return usage.response(for: range, now: now)
+            },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults,
             zCodeAPIKeyStore: FixtureZCodeKeys(),
             quotaProductDiscoverer: {
@@ -179,6 +259,9 @@ final class PanelFixture {
         state.syncStatus = scene.syncStatus
         state.modernPanel.selectedSubscription = scene.selected
         state.modernPanel.detailsExpanded = scene.expanded
+        state.timeRange = scene.timeRange
+        state.filters = scene.filters
+        for (dimension, metric) in scene.metrics { state.modernPanel[metricFor: dimension] = metric }
         for provider in scene.refreshing {
             switch provider {
             case .codex: state.isCodexRateLimitRefreshing = true
@@ -190,8 +273,11 @@ final class PanelFixture {
         if scene.hasUpdate { updater.availableUpdate = SUAppcastItem.empty() }
     }
 
-    /// Walks the sign-in to the scene's step against the fixture server.
+    /// Loads the scene's usage from the fixture server, or walks the sign-in
+    /// to the scene's step against it.
     func prepare() async throws {
+        if scene.linked, scene.usage != nil { await state.fetchUsageData() }
+        if scene.loading { state.isLoadingData = true }
         guard !scene.linked, scene.signIn != .idle else { return }
         state.deviceLink.start()
         for _ in 0..<200 {
@@ -261,7 +347,8 @@ enum PanelSnapshot {
     /// Lays the panel out once to learn the height it asks for (the same
     /// number `MenuBarController` would size the window to), then draws it at
     /// that height with the window's 16 pt corners and shadow.
-    static func render(fixture: PanelFixture, maxHeight: CGFloat, scale: CGFloat = 2) async throws -> Data {
+    static func render(fixture: PanelFixture, maxHeight: CGFloat, scrolledToEnd: Bool = false,
+                       scale: CGFloat = 2) async throws -> Data {
         let reported = HeightBox()
         let measuring = ModernPanelView(maxHeight: maxHeight) { reported.value = $0 }
             .environment(fixture.state)
@@ -289,7 +376,37 @@ enum PanelSnapshot {
         let host = OffscreenHost(framed, size: size)
         try await host.settle()
         try await host.settle()
+        if scrolledToEnd {
+            host.scrollToEnd()
+            try await host.settle()
+        }
         return try host.png(scale: scale)
+    }
+
+    /// The details cards alone (135c–135e crops): the grid at the panel's
+    /// width on the panel's background. `change` runs after a first pass,
+    /// for states that need a previous one (the faded figures of 134r).
+    static func renderDetails(fixture: PanelFixture, openRemainder: UsageRanking.Dimension? = nil,
+                              change: (@MainActor (AppState) -> Void)? = nil) async throws -> Data {
+        let details = ModernDetailsSection(openRemainder: openRemainder)
+            .padding(.horizontal, ModernTheme.cardInset)
+            .padding(.vertical, 12)
+            .frame(width: ModernTheme.panelWidth, alignment: .top)
+            .background(ModernTheme.panel)
+            .environment(\.colorScheme, .dark)
+            .environment(fixture.state)
+            .padding(margin)
+            .background(board)
+        let size = CGSize(width: ModernTheme.panelWidth + 2 * margin, height: 2 * 252 + 8 + 24 + 2 * margin)
+        let host = OffscreenHost(details, size: size)
+        try await host.settle()
+        try await host.settle()
+        if let change {
+            change(fixture.state)
+            try await host.settle()
+            try await host.settle()
+        }
+        return try host.png(scale: 2)
     }
 }
 
@@ -328,6 +445,19 @@ private final class OffscreenHost<Content: View> {
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(30))
         host.layoutSubtreeIfNeeded()
+    }
+
+    /// Scrolls the panel's middle (the one `NSScrollView`) to its end.
+    func scrollToEnd() {
+        func find(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        guard let scroll = find(host), let document = scroll.documentView else { return }
+        let clip = scroll.contentView
+        let y = document.isFlipped ? document.bounds.height - clip.bounds.height : 0
+        clip.scroll(to: CGPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(clip)
     }
 
     func png(scale: CGFloat) throws -> Data {

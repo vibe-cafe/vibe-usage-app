@@ -26,6 +26,23 @@ final class ModernPanelState {
     var hero: ChartMode = .cost
     /// 展开详情 / 收起详情.
     var detailsExpanded = false
+    /// Token / 费用 of each 展开详情 distribution card. Unlike the rest, it
+    /// is not reset on open: it lasts for the app session (#105).
+    private var distributionMetrics: [UsageRanking.Dimension: MetricMode] = [:]
+
+    subscript(metricFor dimension: UsageRanking.Dimension) -> MetricMode {
+        get { distributionMetrics[dimension, default: .tokens] }
+        set { distributionMetrics[dimension] = newValue }
+    }
+
+    /// What every usage number of the new panel counts (近期消耗 and the
+    /// details cards): the manual terminal, tool and model filters, with the
+    /// tool replaced by the selected subscription's (#105 rule).
+    func usageFilters(_ manual: FilterState, enabled: [ProviderRateLimit.Provider]) -> UsagePanelFilters {
+        var rules = UsagePanelState()
+        rules.selectedSubscription = selectedSubscription
+        return rules.effectiveFilters(manual, enabledSubscriptions: enabled)
+    }
 
     func panelDidOpen() {
         selectedSubscription = nil
