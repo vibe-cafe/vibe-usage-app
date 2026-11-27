@@ -79,7 +79,8 @@ enum RecentUsageNumber {
 
 /// The figures of the card's three metrics, in the panel's current units.
 struct RecentUsageFigures {
-    let total: UsageAmount
+    /// Nil when the period's usage could not be read (「—」, never zero).
+    let total: UsageAmount?
     /// Deduplicated active time; nil until the server has recorded any (「—」).
     let activity: ActivityTime?
     let units: UsagePanelState
@@ -87,14 +88,15 @@ struct RecentUsageFigures {
     /// The big number or a small row's value.
     func text(_ metric: ChartMode) -> String {
         switch metric {
-        case .cost: RecentUsageNumber.cost(total.cost, units: units)
-        case .token: units.formatTokens(total.totalTokens)
+        case .cost: total.map { RecentUsageNumber.cost($0.cost, units: units) } ?? "—"
+        case .token: total.map { units.formatTokens($0.totalTokens) } ?? "—"
         case .activeTime: activity.map { RecentUsageNumber.duration($0.activeSeconds) } ?? "—"
         }
     }
 
     /// The exact value shown when the pointer rests on the big number (134p).
     func exactText(_ metric: ChartMode) -> String? {
+        guard let total else { return nil }
         switch metric {
         case .cost:
             let value = units.usesCNY ? total.cost * 7 : total.cost

@@ -202,6 +202,132 @@ struct RecentUsageDisplayTests {
     }
 
     @Test @MainActor
+    func aStyleSwitchThatKeepsThePeriodReadsOnlyActiveTimeWhenTheProjectsDiffer() async throws {
+        let suite = "RecentUsageDisplayTests.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var asked: [FilterState] = []
+        var usageReads = 0
+        let state = modernState(suite, activity: { _, filters, _ in
+            asked.append(filters)
+            return UsageActivity(activeSeconds: 60, workSeconds: 60, parallel: 1, series: [],
+                                 firstBucketStart: "2026-01-01T00:00:00Z")
+        }, usageReads: { usageReads += 1 })
+        // Classic, 今天 and project A, read.
+        state.interfaceStyle.select(.classic)
+        state.timeRange = .today
+        state.filters = FilterState(projects: ["A"])
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity != nil }
+        #expect(usageReads == 1 && asked == [FilterState(projects: ["A"])])
+
+        // The new panel also opens on 今天 but counts every project: the old
+        // active time goes, and only it is read again. Nobody calls fetchUsageData().
+        state.selectInterfaceStyle(.modern)
+        #expect(state.timeRange == .today)
+        #expect(state.activity == nil)
+        try await waitForDashboard { asked.count == 2 && state.activity != nil }
+        #expect(asked.last == FilterState())
+        #expect(usageReads == 1)
+
+        // Same period and the same conditions both ways: nothing is read.
+        state.filters = FilterState()
+        state.interfaceStyle.select(.classic)
+        state.timeRange = .today
+        state.selectInterfaceStyle(.modern)
+        await Task.yield()
+        #expect(asked.count == 2 && usageReads == 1)
+    }
+
+    @Test @MainActor
+    func aModelUsedOnlyInTheAfternoonDoesNotCutTheMorningsActiveTime() async throws {
+        let morning = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date())!
+        let afternoon = Calendar.current.date(bySettingHour: 15, minute: 0, second: 0, of: Date())!
+        let now = Calendar.current.date(bySettingHour: 16, minute: 30, second: 0, of: Date())!
+        func row(_ start: Date, model: String) -> UsageBucket {
+            UsageBucket(source: "codex", model: model, project: "p", hostname: "mac", bucketStart: start.formatted(.iso8601),
+                        inputTokens: 10, outputTokens: 0, cacheCreation5mTokens: nil, cacheCreation1hTokens: nil,
+                        cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 10, estimatedCost: 1)
+        }
+        let config = VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test")
+        let state = AppState(
+            initialConfig: config, loadConfig: { config },
+            usageFetcher: { _, _, _ in
+                UsageResponse(buckets: [row(morning, model: "A"), row(afternoon, model: "B")], sessions: nil,
+                              hasAnyData: true, names: nil)
+            },
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
+        )
+        state.timeRange = .today
+        await state.fetchUsageData()
+        let onlyB = UsagePanelFilters(models: ["B"])
+        // Cost and Tokens of B start at 15:00 …
+        #expect(state.usageDisplaySnapshot(filters: onlyB, now: now)?.grid.slots.first?.start == afternoon)
+        // … but active time, which no model filter narrows, starts in the morning.
+        let grid = try #require(state.activityPlotGrid(filters: onlyB, now: now))
+        #expect(grid.slots.first?.start == morning)
+        #expect(grid.slots.count == 8)
+        // A tool filter does narrow it.
+        #expect(state.activityPlotGrid(filters: UsagePanelFilters(sources: ["codex"], models: ["B"]), now: now)?
+            .slots.first?.start == morning)
+        let other = try #require(state.activityPlotGrid(filters: UsagePanelFilters(sources: ["cursor"]), now: now))
+        #expect(other.slots.first?.start == Calendar.current.startOfDay(for: now))
+    }
+
+    @Test @MainActor
+    func relinkingDropsThePreviousAccountsFiguresBeforeTheNewOnesArrive() async throws {
+        let day = Calendar.current.startOfDay(for: Date()).formatted(.iso8601)
+        func response(cost: Double) -> UsageResponse {
+            UsageResponse(buckets: [UsageBucket(source: "codex", model: "m", project: "p", hostname: "mac", bucketStart: day,
+                                                inputTokens: 10, outputTokens: 0, cacheCreation5mTokens: nil,
+                                                cacheCreation1hTokens: nil, cachedInputTokens: 0,
+                                                reasoningOutputTokens: 0, totalTokens: 10, estimatedCost: cost)],
+                          sessions: nil, hasAnyData: true, names: nil)
+        }
+        var current = VibeUsageConfig(apiKey: "A", apiUrl: "https://example.test")
+        var waitingForB: CheckedContinuation<Void, Never>?
+        let state = AppState(
+            initialConfig: current, loadConfig: { current },
+            usageFetcher: { _, key, _ in
+                if key == "B" { await withCheckedContinuation { waitingForB = $0 } }
+                return response(cost: key == "A" ? 5 : 9)
+            },
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
+        )
+        state.timeRange = .sevenDays
+        let keeper = UsageFiguresKeeper()
+        func shown() -> (cost: Double?, faded: Bool, loading: Bool) {
+            switch keeper.figures(state, filters: .init()) {
+            case .figures(let snapshot, let faded): (snapshot.total.cost, faded, false)
+            case .loading: (nil, false, true)
+            case .unavailable: (nil, false, false)
+            }
+        }
+        await state.fetchUsageData()
+        #expect(shown().cost == 5)
+
+        // Relinked to B; B's answer comes later. A's figures are gone at once.
+        current = VibeUsageConfig(apiKey: "B", apiUrl: "https://example.test")
+        let read = Task { await state.fetchUsageData() }
+        try await waitForDashboard { waitingForB != nil }
+        let meanwhile = shown()
+        #expect(meanwhile.loading && meanwhile.cost == nil)
+        waitingForB?.resume()
+        await read.value
+        let after = shown()
+        #expect(after.cost == 9 && !after.faded)
+
+        // A new period before its read has even started (it follows in a
+        // task): the previous figures fade, no 「—」 flash.
+        state.timeRange = .thirtyDays
+        let pending = shown()
+        #expect(pending.cost == 9 && pending.faded)
+
+        // A read that brought nothing reads 「—」, not zero.
+        let unread = RecentUsageFigures(total: nil, activity: nil, units: UsagePanelState())
+        #expect(unread.text(.cost) == "—" && unread.text(.token) == "—" && unread.exactText(.cost) == nil)
+    }
+
+    @Test @MainActor
     func openingThePanelClosesTheFilterMenu() {
         let state = ModernPanelState()
         state.filterMenu.open(.tool)

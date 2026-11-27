@@ -40,7 +40,9 @@ final class UsageFiguresKeeper {
         }
         let current = appState.usageDisplaySnapshot(filters: filters, now: now)
         if let current { retained = current }
-        let figures = UsageFigures.resolve(current: current, retained: retained, isLoading: appState.isLoadingData,
+        // A read about to start for a just-changed period counts as running.
+        let figures = UsageFigures.resolve(current: current, retained: retained,
+                                           isLoading: appState.isLoadingData || appState.isUsageReadPending,
                                            hasFinishedRead: appState.hasLoadedUsageData)
         // The new period's read ended without figures: the faded ones are
         // done, and a retry shows loading blocks until its answer.

@@ -262,6 +262,7 @@ struct PanelScene {
             scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
             scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
                                                                        singleCustomDay: true, preview: .init(hoveredSlot: 15))),
+            scene("134-unavailable", "读取失败：数字写「—」，不画曲线", .init(loading: .failed)),
             scene("134-chips", "条件很多时标题那一行；所选模型没用量时活跃照画", .init(
                 range: .custom, hero: .activeTime,
                 filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
@@ -290,6 +291,8 @@ struct RecentUsageScene {
         case initial
         /// Loaded, then switched to another period that has not answered (134r).
         case switching(TimeRange)
+        /// The first read failed.
+        case failed
     }
 }
 
@@ -328,6 +331,7 @@ final class PanelFixture {
             usageFetcher: { _, _, range in
                 if recent != nil {
                     try await reads.waitIfHanging()
+                    if await reads.fails { throw URLError(.timedOut) }
                     return RecentUsageFixtures.response(for: range, empty: reads.empty)
                 }
                 guard let usage else { throw URLError(.notConnectedToInternet) }
@@ -422,6 +426,11 @@ final class PanelFixture {
                 pending.append(Task { await self.state.fetchUsageData() })
                 try await waitFor { self.state.isLoadingData }
             }
+        case .failed:
+            state.timeRange = usage.range
+            reads.fails = true
+            await state.fetchUsageData()
+            try await waitFor { self.state.activity != nil }
         }
     }
 
@@ -446,6 +455,8 @@ final class PanelFixture {
 private final class FixtureReads: Sendable {
     let empty: Bool
     var hangs = false
+    /// Usage reads fail (active time still answers).
+    var fails = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(empty: Bool) { self.empty = empty }

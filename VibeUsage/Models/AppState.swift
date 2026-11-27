@@ -121,6 +121,16 @@ final class AppState {
     /// Changes whenever the account or server changes (link, relink, reset):
     /// figures a view kept from before belong to someone else.
     private(set) var usageAccount: UInt = 0
+    /// The range the newest usage read asked for (nil after an account change).
+    private var attemptedUsageRange: UsageQueryRange?
+
+    /// The selected period has not been asked for yet: it just changed and
+    /// its read follows in a task, or the day rolled over. Cards treat this
+    /// like a running read, so a period change fades the previous figures
+    /// instead of flashing 「—」 before the read starts.
+    var isUsageReadPending: Bool {
+        isConfigured && attemptedUsageRange != currentQueryRange
+    }
 
     var isInitialDataLoad: Bool {
         isLoadingData && !hasLoadedUsageData && buckets.isEmpty
@@ -139,15 +149,20 @@ final class AppState {
         didSet {
             guard activityFilters(oldValue).activityQueryItems != activityFilters(filters).activityQueryItems,
                   let range = activityRange else { return }
-            reloadConfig()
-            guard let key = config?.apiKey else { return }
-            if activityRange == nil {
-                // Disk configuration switched accounts; refresh both halves of the dashboard.
-                Task { await fetchUsageData() }
-            } else {
-                activity = nil
-                startActivityFetch(range: range, key: key)
-            }
+            reloadActivity(range: range)
+        }
+    }
+
+    /// Reads active time again for the loaded range, dropping the old report.
+    private func reloadActivity(range: UsageQueryRange) {
+        reloadConfig()
+        guard let key = config?.apiKey else { return }
+        if activityRange == nil {
+            // Disk configuration switched accounts; refresh both halves of the dashboard.
+            Task { await fetchUsageData() }
+        } else {
+            activity = nil
+            startActivityFetch(range: range, key: key)
         }
     }
 
@@ -267,13 +282,35 @@ final class AppState {
 
     /// 「界面样式」: switch the style, then put the period on its default.
     /// A changed period is read again, the same read a period change makes.
+    /// When the period stays but the two styles count different projects
+    /// (classic keeps its project selection, the new panel has none), the
+    /// active time already read is for the wrong projects: only it is read
+    /// again, the same request a filter change makes.
     func selectInterfaceStyle(_ style: InterfaceStyle) {
         let previous = interfaceStyle.current
+        let previousActivityQuery = activityFilters(filters).activityQueryItems
         interfaceStyle.select(style)
         guard interfaceStyle.current != previous else { return }
         let range = timeRange
         applyDefaultTimeRangeForInterfaceStyle()
-        if timeRange != range { Task { await fetchUsageData() } }
+        if timeRange != range {
+            Task { await fetchUsageData() }
+        } else if activityFilters(filters).activityQueryItems != previousActivityQuery, let range = activityRange {
+            reloadActivity(range: range)
+        }
+    }
+
+    /// The slots of the new panel's activity curve. Active time is filtered
+    /// by period, terminal and tool, never by model, so a model filter does
+    /// not cut its start: the slots of the usage without the model filter,
+    /// or the period's whole grid when there is none. Nil like the snapshot.
+    func activityPlotGrid(filters: UsagePanelFilters, now: Date) -> UsagePlotGrid? {
+        guard let loadedUsageRange, loadedUsageRange == queryRange(at: now) else { return nil }
+        var activityFilters = filters
+        activityFilters.models = []
+        let usage = UsageDisplaySnapshot(buckets: buckets, dataRange: loadedUsageRange, filters: activityFilters,
+                                         modelName: modelName, toolName: toolName, now: now)
+        return usage.series.isEmpty ? UsagePlotGrid(dataRange: loadedUsageRange, now: now, calendar: .current) : usage.grid
     }
 
     func usageDisplaySnapshot(filters: UsagePanelFilters, now: Date) -> UsageDisplaySnapshot? {
@@ -579,6 +616,7 @@ final class AppState {
             isLoadingData = false
             hasAnyData = false
             loadedUsageRange = nil
+            attemptedUsageRange = nil
             buckets = []
             usageNames = nil
         }
@@ -686,6 +724,7 @@ final class AppState {
         usageFetchGeneration &+= 1
         let generation = usageFetchGeneration
         let queryRange = currentQueryRange
+        attemptedUsageRange = queryRange
         startActivityFetch(range: queryRange, key: apiKey)
         isLoadingData = true
         defer {

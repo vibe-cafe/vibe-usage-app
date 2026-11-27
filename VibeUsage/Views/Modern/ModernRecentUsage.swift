@@ -29,26 +29,29 @@ enum RecentUsageStyle {
 /// small rows on the left, the curve on the right. Every figure comes from
 /// `AppState.usageDisplaySnapshot` (#105) and `AppState.activity`.
 ///
-/// The snapshot is kept here and rebuilt only when the data, the period or
-/// the effective filters change, or the panel opens again: hero, unit and
-/// hover changes reuse it. While a new period loads the snapshot of the old
-/// one stays, faded (134r).
+/// What it shows follows the rule shared with the details cards
+/// (`UsageFigures`, kept by `UsageFiguresKeeper`): the selected period's
+/// successful read draws figures; while a new period loads, the previous
+/// figures stay faded until that read ends (134r); a read that ended without
+/// figures shows 「—」, never 0; an account or server change drops the kept
+/// figures at once. The figures are worked out again only when the data,
+/// the period, the effective filters, the read state or the account change,
+/// or the panel opens again: hero, unit and hover changes reuse them.
 struct ModernRecentUsageBody: View {
     @Environment(AppState.self) private var appState
     @Environment(\.recentUsagePreview) private var preview
 
-    @State private var snapshot: UsageDisplaySnapshot?
+    @State private var keeper = UsageFiguresKeeper()
+    @State private var figures = UsageFigures.loading
     @State private var builtAt = Date()
     @State private var builtRange = TimeRange.today
-    @State private var builtQueryRange = UsageQueryRange.days(1)
-    @State private var isStale = false
-    /// The activity that goes with the snapshot on screen.
+    /// The slots of the activity curve (period, terminal and tool; never the model).
+    @State private var activityGrid: UsagePlotGrid?
+    /// The activity that goes with the figures on screen.
     @State private var activity: ActivityReport?
 
     private var filters: UsagePanelFilters {
-        appState.modernPanel.usage.effectiveFilters(
-            appState.filters, enabledSubscriptions: appState.quotaCardProviders
-        )
+        appState.modernPanel.usageFilters(appState.filters, enabled: appState.quotaCardProviders)
     }
 
     private struct RebuildKey: Equatable {
@@ -58,6 +61,7 @@ struct ModernRecentUsageBody: View {
         let to: Date
         let isLoading: Bool
         let hasLoaded: Bool
+        let account: UInt
         let bucketCount: Int
         let presentation: Int
     }
@@ -67,8 +71,14 @@ struct ModernRecentUsageBody: View {
             filters: filters, range: appState.timeRange,
             from: appState.customRangeFrom, to: appState.customRangeTo,
             isLoading: appState.isLoadingData, hasLoaded: appState.hasLoadedUsageData,
-            bucketCount: appState.buckets.count, presentation: appState.modernPanel.presentation
+            account: appState.usageAccount, bucketCount: appState.buckets.count,
+            presentation: appState.modernPanel.presentation
         )
+    }
+
+    private var isFaded: Bool {
+        if case .figures(_, faded: true) = figures { return true }
+        return false
     }
 
     var body: some View {
@@ -77,21 +87,26 @@ struct ModernRecentUsageBody: View {
             .frame(height: ModernTheme.recentUsageBodyHeight, alignment: .top)
             .onChange(of: rebuildKey, initial: true) { rebuild() }
             .onChange(of: appState.activity) { _, latest in
-                if !isStale { activity = latest }
+                if !isFaded { activity = latest }
             }
     }
 
     private func rebuild() {
         let now = preview.now ?? Date()
-        if let fresh = appState.usageDisplaySnapshot(filters: filters, now: now) {
-            snapshot = fresh
+        figures = keeper.figures(appState, filters: filters, now: now)
+        switch figures {
+        case .figures(let snapshot, faded: false):
             builtAt = now
             builtRange = appState.timeRange
-            builtQueryRange = appState.currentQueryRange
-            isStale = false
+            activityGrid = filters.models.isEmpty && !snapshot.series.isEmpty
+                ? snapshot.grid
+                : appState.activityPlotGrid(filters: filters, now: now)
             activity = appState.activity
-        } else {
-            isStale = snapshot != nil
+        case .figures(_, faded: true):
+            break  // the previous period's activity and slots stay with its figures
+        case .loading, .unavailable:
+            activityGrid = nil
+            activity = appState.activity
         }
     }
 
@@ -99,51 +114,56 @@ struct ModernRecentUsageBody: View {
     private var content: some View {
         let hero = appState.modernPanel.hero
         let units = appState.modernPanel.usage
-        if let snapshot,
-           case let isEmpty = RecentUsageChart.isEmpty(hero, snapshot: snapshot, activity: activity),
-           !(isEmpty && isStale) {
+        switch figures {
+        case .loading:
+            loading(hero)
+        case .unavailable:
+            // Nothing read for this period: 「—」, never zeros, and no curve.
+            HStack(alignment: .top, spacing: 0) {
+                RecentUsageNumbers(figures: RecentUsageFigures(total: nil, activity: activity?.summary, units: units),
+                                   hero: hero, activity: activity, isEmpty: true)
+                RecentUsageLoadingPlot(showsLabel: false)
+            }
+        case .figures(let snapshot, let faded):
+            let isEmpty = RecentUsageChart.isEmpty(hero, snapshot: snapshot, activity: activity)
             let figures = RecentUsageFigures(total: snapshot.total, activity: activity?.summary, units: units)
-            if isEmpty {
+            if isEmpty && faded {
+                loading(hero)
+            } else if isEmpty {
                 // 134s
                 HStack(alignment: .top, spacing: 0) {
                     RecentUsageNumbers(figures: figures, hero: hero, activity: activity, isEmpty: true)
                     emptyMessage
                 }
             } else {
-                let isLoading = isStale && appState.isLoadingData
-                let chart = makeChart(snapshot, hero: hero, units: units)
                 HStack(alignment: .top, spacing: 0) {
                     // 134r: the old figures fade while the new period loads.
                     RecentUsageNumbers(figures: figures, hero: hero, activity: activity, isEmpty: false,
-                                       isInteractive: !isStale)
-                        .opacity(isStale ? 0.38 : 1)
+                                       isInteractive: !faded)
+                        .opacity(faded ? 0.38 : 1)
                         .zIndex(1)
-                    RecentUsagePlot(chart: chart, isFaded: isStale, isLoading: isLoading,
-                                    initialHover: preview.hoveredSlot)
+                    RecentUsagePlot(chart: makeChart(snapshot, hero: hero, units: units), isFaded: faded,
+                                    isLoading: faded, initialHover: preview.hoveredSlot)
                         .id(hero)
                 }
-            }
-        } else if appState.isLoadingData || !appState.hasLoadedUsageData {
-            // 134q
-            HStack(alignment: .top, spacing: 0) {
-                RecentUsageLoadingNumbers(hero: hero)
-                RecentUsageLoadingPlot()
-            }
-        } else {
-            let figures = RecentUsageFigures(total: UsageAmount(), activity: nil, units: units)
-            HStack(alignment: .top, spacing: 0) {
-                RecentUsageNumbers(figures: figures, hero: hero, activity: nil, isEmpty: true)
-                emptyMessage
             }
         }
     }
 
-    /// The curve of the big number's metric. Active time over a period
-    /// without usage (left by a model filter, which does not narrow active
-    /// time) uses the period's whole grid.
+    /// 134q: gray blocks while the first figures are on their way.
+    private func loading(_ hero: ChartMode) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            RecentUsageLoadingNumbers(hero: hero)
+            RecentUsageLoadingPlot(showsLabel: true)
+        }
+    }
+
+    /// The curve of the big number's metric. Active time is drawn over the
+    /// slots of the usage it is filtered like (period, terminal and tool),
+    /// so a model filter neither cuts its start nor hides it.
     private func makeChart(_ snapshot: UsageDisplaySnapshot, hero: ChartMode, units: UsagePanelState) -> RecentUsageChart {
-        if hero == .activeTime, snapshot.series.isEmpty {
-            let grid = UsagePlotGrid(dataRange: builtQueryRange, now: builtAt, calendar: .current)
+        if hero == .activeTime {
+            let grid = activityGrid ?? snapshot.grid
             return RecentUsageChart(activityGrid: grid, activity: RecentUsageChart.activity(activity, grid: grid),
                                     units: units, rolling: builtRange == .oneDay, now: builtAt)
         }
@@ -757,18 +777,24 @@ private struct RecentUsageLoadingNumbers: View {
     }
 }
 
-/// 134q: the baseline and 「加载中」 where the curve will be.
+/// 134q: the baseline and 「加载中」 where the curve will be; after a read
+/// that brought nothing, only the baseline.
 private struct RecentUsageLoadingPlot: View {
+    let showsLabel: Bool
+
     var body: some View {
         VStack(spacing: 2) {
             ZStack(alignment: .bottom) {
                 Rectangle()
                     .fill(ModernTheme.text.opacity(0.08))
                     .frame(height: 1)
-                RecentUsageLoadingLabel()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showsLabel {
+                    RecentUsageLoadingLabel()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
-            .frame(height: 96)
+            .frame(maxWidth: .infinity)
+            .frame(height: 96, alignment: .bottom)
             Color.clear.frame(height: 18)
         }
         .frame(maxWidth: .infinity)
