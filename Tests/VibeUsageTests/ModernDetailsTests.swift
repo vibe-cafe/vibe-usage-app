@@ -78,8 +78,57 @@ struct ModernDetailsTests {
         #expect(DetailsFormat.share(1) == "100%")
         #expect(DetailsFormat.share(0.004) == "<1%")
         #expect(DetailsFormat.share(0) == "0%")
-        #expect(DetailsFormat.value(41.2, .cost) == "$41.20")
-        #expect(DetailsFormat.value(65_500_000, .tokens) == "65.5M")
+    }
+
+    @Test
+    func tokenFiguresTakeTheUnitOfTheCardsTotal() {
+        func tokens(_ value: Double, of total: Double) -> String {
+            DetailsFormat.value(value, .tokens, cardTotal: total)
+        }
+        // 135a: one card, one unit, one decimal.
+        #expect(tokens(65_500_000, of: 65_500_000) == "65.5M")
+        #expect(tokens(62_200_000, of: 65_500_000) == "62.2M")
+        #expect(tokens(700_000, of: 65_500_000) == "0.7M")
+        #expect(tokens(7_000_000, of: 65_500_000) == "7.0M")
+        // 135b: no decimal from 100 up.
+        #expect(tokens(104_000_000, of: 104_000_000) == "104M")
+        #expect(tokens(1_000_000, of: 104_000_000) == "1.0M")
+        // A sliver of a large card still reads as present.
+        #expect(tokens(20_000, of: 65_500_000) == "<0.1M")
+        // Other totals pick their own unit; under a thousand is a plain count.
+        #expect(tokens(1_500_000_000, of: 2_100_000_000) == "1.5B")
+        #expect(tokens(999_600, of: 999_600) == "1.0M")
+        #expect(tokens(48_000, of: 120_000) == "48.0K")
+        #expect(tokens(850, of: 850) == "850")
+        #expect(tokens(0, of: 0) == "0")
+        // Cost keeps the app's format.
+        #expect(DetailsFormat.value(41.2, .cost, cardTotal: 41.2) == "$41.20")
+        // The app's general formatter is unchanged.
+        #expect(Formatters.formatNumber(700_000) == "700.0K")
+    }
+
+    @Test
+    func aLoneFourthRowIsListedAndTwoOrMoreCollapse() {
+        let four = UsageRanking(values: ["A": 4, "B": 3, "C": 2, "D": 1])
+        #expect(four.listed.map(\.name) == ["A", "B", "C", "D"])
+        #expect(four.listed.map(\.color) == [.blue, .teal, .magenta, .gray])
+        #expect(four.collapsed.isEmpty)
+
+        let five = UsageRanking(values: ["A": 5, "B": 4, "C": 3, "D": 2, "E": 1])
+        #expect(five.listed.map(\.name) == ["A", "B", "C"])
+        #expect(five.collapsed.map(\.name) == ["D", "E"])
+        #expect(five.remainderValue == 3)
+
+        let three = UsageRanking(values: ["A": 3, "B": 2, "C": 1])
+        #expect(three.listed.count == 3 && three.collapsed.isEmpty)
+    }
+
+    @Test
+    func tokenCompositionKeepsCacheInputOutputWhicheverIsLargest() {
+        let ordered = UsageRanking(ordered: [("缓存", 10), ("输入", 300), ("输出", 50)])
+        #expect(ordered.listed.map(\.name) == ["缓存", "输入", "输出"])
+        #expect(ordered.listed.map(\.color) == [.blue, .teal, .magenta])
+        #expect(ordered.total == 360)
     }
 
     // MARK: State

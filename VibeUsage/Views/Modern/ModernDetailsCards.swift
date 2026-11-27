@@ -87,9 +87,10 @@ private struct ModernDetailsGrid: View {
         .overlayPreferenceValue(RemainderAnchorKey.self) { anchors in
             GeometryReader { proxy in
                 if let open = openRemainder, let anchor = anchors[open], let snapshot {
-                    let rows = Array(snapshot.ranking(open, by: appState.modernPanel[metricFor: open]).remainder)
-                    if !rows.isEmpty {
-                        remainderList(rows, metric: appState.modernPanel[metricFor: open],
+                    let metric = appState.modernPanel[metricFor: open]
+                    let ranking = snapshot.ranking(open, by: metric)
+                    if !ranking.collapsed.isEmpty {
+                        remainderList(Array(ranking.collapsed), metric: metric, cardTotal: ranking.total,
                                       trigger: proxy[anchor], in: proxy)
                     }
                 }
@@ -127,14 +128,14 @@ private struct ModernDetailsGrid: View {
     /// the card's own rows (same columns), under 「其余 N 个」. A list that
     /// would leave the grid opens above the row instead (the bottom cards);
     /// a long one scrolls.
-    private func remainderList(_ rows: [UsageRanking.Row], metric: MetricMode,
+    private func remainderList(_ rows: [UsageRanking.Row], metric: MetricMode, cardTotal: Double,
                                trigger: CGRect, in proxy: GeometryProxy) -> some View {
         let frame = RemainderListPlacement.frame(trigger: trigger, rows: rows.count, container: proxy.size)
         let origin = proxy.frame(in: .global).origin
         dismissal.list = frame.offsetBy(dx: origin.x, dy: origin.y)
         dismissal.trigger = trigger.offsetBy(dx: origin.x, dy: origin.y)
         let scrolls = frame.height < RemainderListPlacement.height(rows: rows.count)
-        return ModernRemainderList(rows: rows, metric: metric, scrolls: scrolls)
+        return ModernRemainderList(rows: rows, metric: metric, cardTotal: cardTotal, scrolls: scrolls)
             .frame(width: frame.width, height: frame.height)
             .offset(x: frame.minX, y: frame.minY)
     }
@@ -257,14 +258,14 @@ private struct ModernDetailCard: View {
             VStack(spacing: 0) {
                 switch phase {
                 case .figures:
-                    centerValue(DetailsFormat.value(ranking?.total ?? 0, metric))
+                    centerValue(DetailsFormat.value(ranking?.total ?? 0, metric, cardTotal: ranking?.total ?? 0))
                 case .loading:
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(ModernTheme.placeholder)
                         .frame(width: 44, height: 10)
                         .frame(height: 16)
                 case .empty:
-                    centerValue(DetailsFormat.value(0, metric)).opacity(0.3)
+                    centerValue(DetailsFormat.value(0, metric, cardTotal: 0)).opacity(0.3)
                 }
                 Text(metric.label)
                     .font(metric == .tokens ? ModernTheme.mono(11) : ModernTheme.text(11))
@@ -299,10 +300,11 @@ private struct ModernDetailCard: View {
     private var rows: some View {
         VStack(spacing: 0) {
             if let figures {
-                ForEach(Array(figures.top.enumerated()), id: \.offset) { _, row in
-                    ModernDetailRow(row: row, metric: metric, namesAreDynamic: namesAreDynamic)
+                ForEach(Array(figures.listed.enumerated()), id: \.offset) { _, row in
+                    ModernDetailRow(row: row, metric: metric, cardTotal: figures.total,
+                                    namesAreDynamic: namesAreDynamic)
                 }
-                if let remainder, !figures.remainder.isEmpty {
+                if let remainder, !figures.collapsed.isEmpty {
                     remainderRow(figures, remainder)
                 }
             }
@@ -316,15 +318,15 @@ private struct ModernDetailCard: View {
         Button(action: remainder.toggle) {
             ModernDetailRowLayout(
                 swatch: UsageRanking.RankColor.gray.swatch,
-                name: Text("其余 ") + Text("\(figures.remainder.count)").font(ModernTheme.mono(13, .medium)) + Text(" 个"),
-                value: DetailsFormat.value(figures.remainderValue, metric),
+                name: Text("其余 ") + Text("\(figures.collapsed.count)").font(ModernTheme.mono(13, .medium)) + Text(" 个"),
+                value: DetailsFormat.value(figures.remainderValue, metric, cardTotal: figures.total),
                 share: figures.total > 0 ? figures.remainderValue / figures.total : 0
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(ModernTextButtonStyle(color: ModernTheme.secondaryText))
         .anchorPreference(key: RemainderAnchorKey.self, value: .bounds) { [remainder.dimension: $0] }
-        .accessibilityLabel("其余 \(figures.remainder.count) 个")
+        .accessibilityLabel("其余 \(figures.collapsed.count) 个")
     }
 }
 
@@ -367,6 +369,8 @@ private struct ModernMetricSwitch: View {
 private struct ModernDetailRow: View {
     let row: UsageRanking.Row
     let metric: MetricMode
+    /// The card's total, whose unit every Token figure of the card takes.
+    let cardTotal: Double
     let namesAreDynamic: Bool
     /// The remainder list's rows: gray swatches, full-strength names.
     var swatch: Color?
@@ -375,7 +379,7 @@ private struct ModernDetailRow: View {
         ModernDetailRowLayout(
             swatch: swatch ?? row.color.swatch,
             name: Text(row.name),
-            value: DetailsFormat.value(row.value, metric),
+            value: DetailsFormat.value(row.value, metric, cardTotal: cardTotal),
             share: row.share,
             truncatesInMiddle: namesAreDynamic
         )
@@ -427,6 +431,7 @@ private struct ModernDetailRowLayout: View {
 private struct ModernRemainderList: View {
     let rows: [UsageRanking.Row]
     let metric: MetricMode
+    let cardTotal: Double
     let scrolls: Bool
 
     var body: some View {
@@ -470,7 +475,7 @@ private struct ModernRemainderList: View {
     private var list: some View {
         VStack(spacing: 0) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                ModernDetailRow(row: row, metric: metric, namesAreDynamic: true,
+                ModernDetailRow(row: row, metric: metric, cardTotal: cardTotal, namesAreDynamic: true,
                                 swatch: UsageRanking.RankColor.gray.swatch)
             }
         }
@@ -593,12 +598,39 @@ private extension UsageRanking.RankColor {
 }
 
 enum DetailsFormat {
-    /// The card's metric, in the app's existing formats.
-    static func value(_ value: Double, _ metric: MetricMode) -> String {
+    /// A figure of the card's metric. Token figures all take the unit of the
+    /// card's total, so one card reads in one unit (135a: 0.7M under 62.2M);
+    /// cost keeps the app's format.
+    static func value(_ value: Double, _ metric: MetricMode, cardTotal: Double) -> String {
         switch metric {
-        case .tokens: Formatters.formatNumber(Int(value.rounded()))
+        case .tokens: tokens(value, unit: TokenUnit(total: cardTotal))
         case .cost: Formatters.formatCost(value)
         }
+    }
+
+    struct TokenUnit {
+        let divisor: Double
+        let suffix: String
+
+        /// K, M or B by the total; nil below a thousand. A total that would
+        /// read 1000 of a unit takes the next one.
+        init?(total: Double) {
+            switch total {
+            case 999_500_000...: (divisor, suffix) = (1e9, "B")
+            case 999_500...: (divisor, suffix) = (1e6, "M")
+            case 999.5...: (divisor, suffix) = (1e3, "K")
+            default: return nil
+            }
+        }
+    }
+
+    /// One decimal, none from 100 up (135b: 104M, 98.8M, 1.0M). A value too
+    /// small for the card's unit reads as present rather than as zero.
+    static func tokens(_ value: Double, unit: TokenUnit?) -> String {
+        guard let unit else { return "\(Int(value.rounded()))" }
+        let scaled = value / unit.divisor
+        if value > 0 && scaled < 0.05 { return "<0.1" + unit.suffix }
+        return String(format: scaled >= 99.95 ? "%.0f" : "%.1f", scaled) + unit.suffix
     }
 
     /// Whole percent; a share too small to round to 1% still reads as present.
