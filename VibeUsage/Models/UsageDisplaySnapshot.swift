@@ -63,8 +63,9 @@ struct UsageDisplaySnapshot {
         grid.trim(toFirstUsage: amounts.keys.min(), dataRange: dataRange)
         self.grid = grid
         guard !grid.slots.isEmpty else { return }
-        tokenComposition = UsageRanking(values: ["缓存": Double(total.cached), "输入": Double(total.input),
-                                                 "输出": Double(total.output)])
+        // Always 缓存, 输入, 输出, whichever is largest.
+        tokenComposition = UsageRanking(ordered: [("缓存", Double(total.cached)), ("输入", Double(total.input)),
+                                                  ("输出", Double(total.output))])
         rankings = groups.mapValues { names in
             (tokens: UsageRanking(values: names.mapValues { Double($0.totalTokens) }),
              cost: UsageRanking(values: names.mapValues(\.cost)))
