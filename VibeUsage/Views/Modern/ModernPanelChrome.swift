@@ -69,9 +69,9 @@ struct ModernHeaderBar: View {
 
 // MARK: - 概览 row (133)
 
-/// 「概览」 with its lamp, the round buttons (filled in by the subscription
-/// card ticket) and the gear that opens Settings → 订阅配额. Shown only with
-/// two or more enabled subscriptions.
+/// 「概览」 with its lamp, the round buttons (`ModernSubscriptionButtons`)
+/// and the gear that opens Settings → 订阅配额. Shown only with two or more
+/// enabled subscriptions.
 struct ModernSubscriptionRow: View {
     @Environment(AppState.self) private var appState
     let openQuotaSettings: () -> Void
@@ -97,8 +97,8 @@ struct ModernSubscriptionRow: View {
                 .frame(width: 1, height: 16)
                 .padding(.horizontal, 12)
 
-            // Round buttons, one per enabled subscription, go here.
-            Spacer(minLength: 0)
+            // Takes the free width, so a drop past the last button lands last.
+            ModernSubscriptionButtons()
 
             Button(action: openQuotaSettings) {
                 Image(systemName: "gearshape")

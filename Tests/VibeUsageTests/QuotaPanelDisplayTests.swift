@@ -192,6 +192,54 @@ struct QuotaPanelDisplayTests {
         let overview = try #require(display.overview.rows.first)
         #expect(overview.outer?.label == "7d" && overview.inner == nil)
         #expect(overview.additionalAlert?.label == "Fable" && overview.additionalAlert?.tone == .red)
+        // Fable never takes the middle of the rings, even when tightest.
+        #expect(detail.ringCenter?.label == "7d" && detail.ringCenter?.remaining == 60)
+    }
+
+    @Test func ringCenterIsTheTighterRingWindowAndNeverAModelAllowanceOrExtra() throws {
+        var quota = snapshot(.claudeCode, window(36, 5 * hours, due: 16), window(31, 168 * hours, due: 39))
+        quota.sevenDayOpus = window(4, 168 * hours, due: 14)
+        quota.extraUsage = .init(isEnabled: true, spend: 99, limit: 100)
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(9, 168 * hours, due: 61))
+        let detail = try #require(panel(quota, models: [fable]).detail)
+        #expect(detail.tightest?.label == "Opus" && detail.buttonRemaining == 4)
+        #expect(detail.ringCenter?.label == "7d" && detail.ringCenter?.remaining == 31)
+
+        let shortTighter = snapshot(.claudeCode, window(12, 5 * hours, due: 29), window(79, 168 * hours, due: 53))
+        #expect(try #require(panel(shortTighter, models: [fable]).detail).ringCenter?.label == "5h")
+
+        // No ring window at all (Cursor's team pool alone): the tightest.
+        let team = ProviderRateLimit(provider: .cursor, meters: [
+            .init(id: "team", label: "Team", window: window(5, 720 * hours, due: 33)),
+        ], status: .ok)
+        let pool = try #require(panel(team).detail)
+        #expect(pool.outer == nil && pool.inner == nil)
+        #expect(pool.ringCenter?.label == "Team" && pool.ringCenter == pool.tightest)
+    }
+
+    @Test func expiredRingWindowsLeaveTheMiddleEmptyRatherThanShowFable() throws {
+        let past = now.addingTimeInterval(-60)
+        let quota = snapshot(.claudeCode, .init(utilization: 40, resetsAt: past, windowDuration: 5 * hours),
+                             .init(utilization: 50, resetsAt: past, windowDuration: 168 * hours))
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(9, 168 * hours, due: 61))
+        let detail = try #require(panel(quota, models: [fable]).detail)
+        #expect(detail.outer == nil && detail.inner == nil)
+        #expect(detail.tightest?.label == "Fable" && detail.buttonRemaining == 9)
+        #expect(detail.ringCenter == nil)
+
+        // No generic window reported at all, only model allowances and extra
+        // spend: the fallback skips them too.
+        var modelsOnly = ProviderRateLimit(provider: .claudeCode, status: .ok, fetchedAt: now)
+        modelsOnly.sevenDayOpus = window(30, 168 * hours, due: 50)
+        modelsOnly.extraUsage = .init(isEnabled: true, spend: 90, limit: 100)
+        let onlyModels = try #require(panel(modelsOnly, models: [fable]).detail)
+        #expect(onlyModels.tightest?.label == "Fable" && onlyModels.ringCenter == nil)
+
+        // A feature allowance beside them is still a fallback.
+        let feature = ProviderRateLimit(provider: .codex, meters: [
+            .init(id: "review", label: "Code review", window: window(40, 168 * hours, due: 50)),
+        ], status: .ok)
+        #expect(try #require(panel(feature).detail).ringCenter?.label == "Code review")
     }
 
     @Test func claudeProWithoutModelAllowancesShowsOnlyItsTwoWindows() throws {

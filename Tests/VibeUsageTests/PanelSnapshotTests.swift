@@ -66,6 +66,38 @@ struct PanelSnapshotTests {
         try classic.write(to: directory.appendingPathComponent("switch-classic.png"))
     }
 
+    /// The round buttons alone, enlarged, to judge the provider marks next to
+    /// the design (133a): every product unselected, then selected, at 2× and
+    /// 3× (`buttons-2x.png`, `buttons-3x.png`).
+    @Test(.enabled(if: PanelSnapshot.isEnabled))
+    @MainActor func renderRoundButtons() async throws {
+        let bundle = try #require(PanelTestResources.bundle)
+        AppFonts.register(from: bundle)
+        let directory = PanelSnapshot.outputDirectory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let order: [(ProviderRateLimit.Provider, Double)] = [
+            (.claudeCode, 31), (.codex, 12), (.cursor, 41), (.grok, 88),
+            (.antigravity, 9), (.kimiCode, 40), (.opencodeGo, 22), (.zCode, 72),
+        ]
+        let rows = VStack(alignment: .leading, spacing: 10) {
+            ForEach([false, true], id: \.self) { selected in
+                HStack(spacing: 6) {
+                    ForEach(order, id: \.0) { provider, remaining in
+                        ModernRoundButtonFace(provider: provider, remaining: remaining, isSelected: selected, showsDot: false)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(ModernTheme.panel)
+        let size = CGSize(width: 24 + 8 * ModernRoundButtonFace.size + 7 * 6, height: 24 + 2 * ModernRoundButtonFace.size + 10)
+        let host = OffscreenHost(rows, size: size)
+        try await host.settle()
+        for scale in [2, 3] {
+            try host.png(scale: CGFloat(scale)).write(to: directory.appendingPathComponent("buttons-\(scale)x.png"))
+        }
+    }
+
     /// Crops of the details cards (135d, the faded figures of 134r): states
     /// held inside the view, which a whole-panel scene cannot set.
     @Test(.enabled(if: PanelSnapshot.isEnabled))
@@ -141,7 +173,8 @@ struct PanelSnapshotTests {
 struct PanelScene {
     let id: String
     let title: String
-    var subscriptions: [ProviderRateLimit.Provider] = [.codex, .claudeCode, .cursor, .grok]
+    /// Enabled subscriptions, in Settings order (131a: Claude, Codex, Cursor, Grok).
+    var subscriptions: [ProviderRateLimit.Provider] = [.claudeCode, .codex, .cursor, .grok]
     var linked = true
     var syncStatus: SyncStatus = .idle
     /// Minutes since the last successful sync; nil = never synced.
@@ -169,6 +202,10 @@ struct PanelScene {
     /// 近期消耗's data, period, filters, units and forced hover (134 scenes,
     /// `RecentUsageFixtures`); nil for the other scenes.
     var recent: RecentUsageScene?
+    /// The quota readings on screen.
+    var quotas: PanelQuotas = .design
+    /// 订阅配额 hover and fold states the renderer cannot reach with a pointer.
+    var quotaPreview = ModernQuotaPreview()
 
     enum SignIn: String {
         /// 「登录并链接数据」.
@@ -181,12 +218,11 @@ struct PanelScene {
         case failed
     }
 
-    static let scenes: [PanelScene] = [
-        PanelScene(id: "131a", title: "概览：4 个订阅"),
-        PanelScene(id: "131b", title: "点进 Codex", selected: .codex),
-        PanelScene(id: "132f", title: "还没有订阅", subscriptions: []),
-        PanelScene(id: "132g", title: "只有一个订阅，没有概览那一排", subscriptions: [.claudeCode]),
-        PanelScene(id: "132t", title: "刷新额度：读取中转圈", refreshing: [.claudeCode]),
+    static let scenes: [PanelScene] = shell + quota + quotaStates
+
+    /// The shell (#122): header, footer, sign-in, overflow; 展开详情 (135)
+    /// and 近期消耗 (134).
+    static let shell: [PanelScene] = [
         PanelScene(id: "136b", title: "顶栏：发现更新", hasUpdate: true),
         PanelScene(id: "136e", title: "底栏：同步中", syncStatus: .syncing),
         PanelScene(id: "136f", title: "底栏：同步出错", syncStatus: .error("同步失败: 连不上服务器")),
@@ -270,6 +306,106 @@ struct PanelScene {
             )),
         ]
     }()
+
+    private static let eight: [ProviderRateLimit.Provider] = [
+        .claudeCode, .codex, .antigravity, .kimiCode, .cursor, .grok, .opencodeGo, .zCode,
+    ]
+
+    /// Quota scenes show the whole panel: a linked scene without usage of
+    /// its own gets 近期消耗's fixed day (134a), as in the design.
+    private static func withRecentUsage(_ scenes: [PanelScene]) -> [PanelScene] {
+        scenes.map { scene in
+            var scene = scene
+            if scene.linked, scene.usage == nil, scene.recent == nil { scene.recent = RecentUsageScene() }
+            return scene
+        }
+    }
+
+    /// 订阅配额 (#109), one scene per drawing of 131–133. Pointer-only states
+    /// (native tooltips, dragging) render as their resting state.
+    static let quota: [PanelScene] = withRecentUsage([
+        PanelScene(id: "131a", title: "概览：4 个订阅，两家要留意"),
+        PanelScene(id: "131b", title: "点 Codex 的圆钮", selected: .codex),
+        PanelScene(id: "131c", title: "点 Claude：第三行是 Fable", selected: .claudeCode),
+        PanelScene(id: "131d", title: "点 Cursor：只有一个额度", selected: .cursor),
+        PanelScene(id: "131e", title: "概览：都正常", quotas: .normal),
+        PanelScene(id: "131f", title: "概览里鼠标停在 Claude 那一行",
+                   quotaPreview: ModernQuotaPreview(hoveredOverviewRow: .claudeCode)),
+        PanelScene(id: "132a", title: "概览：2 个订阅", subscriptions: [.codex, .claudeCode],
+                   quotas: .codexRedClaudeNormal),
+        PanelScene(id: "132b", title: "概览：3 个订阅", subscriptions: [.claudeCode, .codex, .cursor],
+                   quotas: .claudeFastCodexNormal),
+        PanelScene(id: "132c", title: "概览：5 个订阅，其余收成一行",
+                   subscriptions: [.claudeCode, .codex, .cursor, .kimiCode, .grok], quotas: .fiveCalm),
+        PanelScene(id: "132d", title: "概览：8 个订阅", subscriptions: eight),
+        PanelScene(id: "132e", title: "概览：用完了、要登录、读不到、不走订阅",
+                   subscriptions: [.codex, .claudeCode, .cursor, .kimiCode], quotas: .special),
+        PanelScene(id: "132f", title: "还没有订阅", subscriptions: []),
+        PanelScene(id: "132g", title: "只有一个订阅：没有概览那一排", subscriptions: [.claudeCode]),
+        PanelScene(id: "132h", title: "Fable 快用完：概览里多一个红色的 Fable", quotas: .fableAlert),
+        PanelScene(id: "132i", title: "点进 Claude：中间是最紧的 Fable", selected: .claudeCode, quotas: .fableAlert),
+        PanelScene(id: "132j", title: "三个额度：OpenCode Go", subscriptions: [.claudeCode, .codex, .cursor, .opencodeGo],
+                   selected: .opencodeGo),
+        PanelScene(id: "132k", title: "四个额度：另有 1 项", selected: .claudeCode, quotas: .claudeExtra),
+        PanelScene(id: "132l", title: "点另有 1 项：全部列出", selected: .claudeCode, quotas: .claudeExtra,
+                   quotaPreview: ModernQuotaPreview(expanded: true)),
+        PanelScene(id: "132m", title: "点进一家：还在读", selected: .cursor, refreshing: [.cursor],
+                   quotas: .cursorLoading),
+        PanelScene(id: "132n", title: "点进一家：读取失败，可以重试", selected: .cursor, quotas: .cursorReadFailed),
+        PanelScene(id: "132o", title: "点进一家：要重新登录", selected: .claudeCode, quotas: .claudeLoginExpired),
+        PanelScene(id: "132p", title: "点进一家：未订阅", selected: .cursor, quotas: .cursorNotEntitled),
+        PanelScene(id: "132q", title: "读到的是旧数据：来源和原因", selected: .claudeCode, quotas: .claudeStale),
+        PanelScene(id: "132r", title: "鼠标停在 7d 那一行", selected: .codex,
+                   quotaPreview: ModernQuotaPreview(hoveredDetailRow: "7d")),
+        PanelScene(id: "132s", title: "刷新额度（悬停是系统提示）"),
+        PanelScene(id: "132t", title: "刷新额度：读取中转圈，数字留着", refreshing: [.claudeCode]),
+        PanelScene(id: "132u", title: "只看一家时刷新：只读这一家", selected: .codex, refreshing: [.codex]),
+        PanelScene(id: "133a", title: "概览和圆钮：平时"),
+        PanelScene(id: "133b", title: "点了 Codex：圆钮亮起来，概览灯灭", selected: .codex),
+        PanelScene(id: "133c", title: "圆钮悬停（系统提示：名字、套餐、状态）"),
+        PanelScene(id: "133d", title: "读不到数据：圆钮右上角白点", quotas: .dots),
+        PanelScene(id: "133e", title: "拖动圆钮（实际窗口验收）"),
+        PanelScene(id: "133f", title: "8 个订阅：一排放得下", subscriptions: eight, selected: .antigravity),
+        PanelScene(id: "133g", title: "齿轮（系统提示：打开订阅配额设置）"),
+    ])
+
+    /// Every row of #98's special-state table, plus Claude without 5h and
+    /// Claude Pro.
+    static let quotaStates: [PanelScene] = withRecentUsage([
+        PanelScene(id: "state-loading-overview", title: "读取中：概览行灰块、圆钮无圈", refreshing: [.cursor],
+                   quotas: .cursorLoading),
+        PanelScene(id: "state-cursor-signin-overview", title: "Cursor 需要登录：概览写原因、白点", quotas: .cursorSignIn),
+        PanelScene(id: "state-cursor-signin-detail", title: "Cursor 需要登录：点了到设置的登录行", selected: .cursor,
+                   quotas: .cursorSignIn),
+        PanelScene(id: "state-cursor-expired-detail", title: "Cursor 登录已失效", selected: .cursor,
+                   quotas: .cursorSignInExpired),
+        PanelScene(id: "state-readfailed-overview", title: "读取失败：概览写原因、白点", quotas: .cursorReadFailed),
+        PanelScene(id: "state-paused-kept-overview", title: "已暂停读取（有旧数字）：照常画、白点", quotas: .codexPausedKept),
+        PanelScene(id: "state-paused-kept-detail", title: "已暂停读取（有旧数字）：底下写原因和来源", selected: .codex,
+                   quotas: .codexPausedKept),
+        PanelScene(id: "state-paused-empty-overview", title: "已暂停读取（没有数字）", quotas: .codexPausedEmpty),
+        PanelScene(id: "state-paused-empty-detail", title: "已暂停读取（没有数字）：一句原因", selected: .codex,
+                   quotas: .codexPausedEmpty),
+        PanelScene(id: "state-policy-overview", title: "组织策略：概览写原因、白点", quotas: .claudePolicy),
+        PanelScene(id: "state-policy-detail", title: "组织策略：一句原因", selected: .claudeCode, quotas: .claudePolicy),
+        PanelScene(id: "state-policy-kept-detail", title: "组织策略：桌面端记录照常画", selected: .claudeCode,
+                   quotas: .claudePolicyKept),
+        PanelScene(id: "state-nonsub-overview", title: "未使用订阅登录：概览、无圈", quotas: .claudeNonSubscription),
+        PanelScene(id: "state-nonsub-detail", title: "未使用订阅登录：一句原因", selected: .claudeCode,
+                   quotas: .claudeNonSubscription),
+        PanelScene(id: "state-exhausted-detail", title: "已用完：照常画", subscriptions: [.codex, .claudeCode, .cursor, .kimiCode],
+                   selected: .codex, quotas: .special),
+        PanelScene(id: "state-exhausted-nowindow-overview", title: "已用完（没有窗口）：红色已用完", quotas: .codexExhaustedNoWindow),
+        PanelScene(id: "state-exhausted-nowindow-detail", title: "已用完（没有窗口）", selected: .codex,
+                   quotas: .codexExhaustedNoWindow),
+        PanelScene(id: "state-expired-overview", title: "已过重置时间：不算要留意", quotas: .grokExpired),
+        PanelScene(id: "state-expired-detail", title: "已过重置时间：写已重置、等下次读取", selected: .grok, quotas: .grokExpired),
+        PanelScene(id: "claude-no5h-fable-overview", title: "Claude 没有 5h、有 Fable：概览", quotas: .claudeWeeklyFable),
+        PanelScene(id: "claude-no5h-fable-detail", title: "Claude 没有 5h、有 Fable：只画外圈", selected: .claudeCode,
+                   quotas: .claudeWeeklyFable),
+        PanelScene(id: "claude-pro-detail", title: "Claude Pro：没有 Fable", selected: .claudeCode, quotas: .claudePro),
+        PanelScene(id: "claude-pro-single", title: "只开 Claude Pro 一家", subscriptions: [.claudeCode], quotas: .claudePro),
+    ])
 }
 
 /// What 近期消耗 shows in a scene.
@@ -320,6 +456,7 @@ final class PanelFixture {
         defaults = UserDefaults(suiteName: suite)!
         defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
         defaults.set(scene.subscriptions.map(\.rawValue), forKey: QuotaSelectionPreferences.selectedIDsKey)
+        defaults.set(scene.subscriptions.map(\.rawValue), forKey: QuotaSelectionPreferences.orderKey)
         if let minutes = scene.lastSyncMinutesAgo {
             defaults.set(now.addingTimeInterval(-minutes * 60), forKey: AppState.lastSuccessfulSyncKey)
         }
@@ -358,6 +495,7 @@ final class PanelFixture {
             deviceLinkService: .fixture(scene.signIn)
         )
         state.initializeQuotaProducts()
+        state.rateLimits = scene.quotas.snapshots(now: now)
         state.syncStatus = scene.syncStatus
         state.modernPanel.selectedSubscription = scene.selected
         state.modernPanel.detailsExpanded = scene.expanded
@@ -542,6 +680,7 @@ enum PanelSnapshot {
             .environment(fixture.state)
             .environment(\.recentUsagePreview, preview)
             .environmentObject(fixture.updater)
+            .environment(\.modernQuotaPreview, fixture.scene.quotaPreview)
         let probe = OffscreenHost(measuring, size: CGSize(width: ModernTheme.panelWidth, height: 2_000))
         for _ in 0..<40 where reported.value == nil {
             try await probe.settle()
@@ -553,6 +692,7 @@ enum PanelSnapshot {
             .environment(fixture.state)
             .environment(\.recentUsagePreview, preview)
             .environmentObject(fixture.updater)
+            .environment(\.modernQuotaPreview, fixture.scene.quotaPreview)
             .frame(width: ModernTheme.panelWidth, height: height)
             .clipShape(RoundedRectangle(cornerRadius: ModernTheme.panelCornerRadius, style: .continuous))
             .overlay(
