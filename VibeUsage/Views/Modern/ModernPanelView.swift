@@ -43,9 +43,9 @@ struct PanelRootView: View {
 }
 
 /// The new panel (design 131, 136): header, 概览 row, 订阅配额 and 近期消耗
-/// cards, footer. Without a linked account 近期消耗 holds the sign-in
-/// (136j–136l). Card contents, the round buttons and the details cards are
-/// filled in by later tickets.
+/// cards, footer. 订阅配额 is `ModernQuotaCardBody` (131–133). Without a
+/// linked account 近期消耗 holds the sign-in (136j–136l). The contents of
+/// 近期消耗 and the details cards are filled in by later tickets.
 struct ModernPanelView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -100,6 +100,9 @@ struct ModernPanelView: View {
         // decides the height; the content stays pinned to the top and never
         // imposes a minimum the window would have to satisfy.
         .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+        // Above every card and the scroller, so a row's tooltip is never cut
+        // off by the card or the scrolling middle.
+        .overlayPreferenceValue(ModernQuotaTooltipKey.self) { ModernQuotaTooltipOverlay(value: $0) }
         .background(ModernTheme.panel)
         .environment(\.colorScheme, .dark)
         .onChange(of: preferredHeight, initial: true) { _, height in
@@ -126,9 +129,7 @@ struct ModernPanelView: View {
                     ModernRefreshQuotasButton(scope: scope)
                 }
             } content: {
-                // Overview and one subscription use the 148 pt ring height;
-                // the empty state is shorter (132f).
-                Color.clear.frame(height: enabled.isEmpty ? 112 : 148)
+                ModernQuotaCardBody()
             }
 
             ModernCard(title: "近期消耗") {
