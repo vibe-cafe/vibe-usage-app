@@ -223,11 +223,12 @@ struct ClaudeUsageProbeTests {
 
     /// Claude Code 2.1.259 adds extra windows and dollar fields. The card still
     /// only needs `five_hour` / `seven_day`; unknown keys must not drop those.
-    @Test
+    @Test @MainActor
     func extraLivePayloadFieldsDoNotDropKnownWindows() throws {
         var live = payload()
         var limits = live["rate_limits"] as? [String: Any] ?? [:]
-        limits["limits"] = [["kind": "weekly_scoped"]]
+        limits["limits"] = [["kind": "weekly_scoped", "group": "weekly", "percent": 1,
+                             "scope": ["model": ["display_name": "Fable"]]]]
         limits["model_scoped"] = [["display_name": "Fable", "utilization": 1]]
         limits["cinder_cove"] = ["utilization": 0, "resets_at": "2026-08-01T20:00:00Z"]
         limits["five_hour"] = [
@@ -242,6 +243,14 @@ struct ClaudeUsageProbeTests {
         live["behaviors"] = ["day": ["request_count": 1], "week": ["request_count": 2]]
 
         let snapshot = try #require(ClaudeUsageProbe.parse(live, now: now))
+        #expect(snapshot.modelScopedMeters == [
+            RateLimitMeter(id: "Fable", label: "Fable", window: RateLimitWindow(
+                utilization: 1, windowDuration: 7 * 86_400))
+        ])
+        #expect(snapshot.meters.isEmpty)
+        let classicRows = ProviderCard(snapshot: snapshot).allRows
+        #expect(classicRows.map(\.hoverLabel) == ["5h", "7d", "额外"])
+        #expect(classicRows.map { $0.liveWindow?.utilization } == [9, 16, 1.25])
         #expect(snapshot.fiveHour?.utilization == 9)
         #expect(snapshot.sevenDay?.utilization == 16)
         #expect(snapshot.status == .ok)
