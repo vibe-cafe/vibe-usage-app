@@ -6,14 +6,14 @@ import SwiftUI
 struct SettingsAboutPage: View {
     @Environment(SettingsModel.self) private var model
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
         SettingsPageScroll {
             SettingsPageHeader(title: SettingsPage.about.title)
             identityCard
 
-            SettingsSectionTitle(title: "更新")
-            SettingsCard {
+            SettingsSection(title: "更新") {
                 SettingsRow {
                     SettingsRowLabel(title: "版本 \(SettingsVersion.full)")
                     Spacer(minLength: 8)
@@ -23,8 +23,7 @@ struct SettingsAboutPage: View {
                 }
             }
 
-            SettingsSectionTitle(title: "诊断")
-            SettingsCard {
+            SettingsSection(title: "诊断") {
                 diagnosticSummaryRow
                 #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                 SettingsSeparator()
@@ -32,14 +31,14 @@ struct SettingsAboutPage: View {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 8) {
                             Text("导出诊断日志")
-                                .font(SettingsTheme.label)
-                                .foregroundStyle(SettingsTheme.text)
+                                .font(theme.label)
+                                .foregroundStyle(theme.text)
                             SettingsTestBuildTag()
                         }
                         if let message = model.diagnosticExportMessage {
                             Text(message)
-                                .font(SettingsTheme.caption)
-                                .foregroundStyle(SettingsTheme.secondaryText)
+                                .font(theme.caption)
+                                .foregroundStyle(theme.secondaryText)
                         }
                     }
                     Spacer(minLength: 8)
@@ -49,8 +48,7 @@ struct SettingsAboutPage: View {
                 #endif
             }
 
-            SettingsSectionTitle(title: "链接")
-            SettingsCard {
+            SettingsSection(title: "链接") {
                 SettingsLinkRow(title: "vibe-usage", url: SettingsLinks.cliRepository) {
                     GitHubMark().fill(style: FillStyle(eoFill: true))
                 }
@@ -66,11 +64,10 @@ struct SettingsAboutPage: View {
                 }
             }
 
-            Text("© 2026 VibeCafé · MIT 许可证")
-                .font(SettingsTheme.caption)
-                .foregroundStyle(SettingsTheme.tertiaryText)
+            SettingsNumberText("© 2026 VibeCafé · MIT 许可证", font: theme.caption)
+                .foregroundStyle(theme.isModern ? theme.secondaryText : theme.tertiaryText)
                 .frame(maxWidth: .infinity)
-                .padding(.top, 18)
+                .padding(.top, theme.isModern ? 14 : 18)
         }
     }
 
@@ -84,16 +81,17 @@ struct SettingsAboutPage: View {
                     .frame(width: 68, height: 68)
                     .accessibilityHidden(true)
                 Text(AppConfig.displayName)
-                    .font(SettingsTheme.pageTitle)
-                    .foregroundStyle(SettingsTheme.text)
+                    .font(theme.pageTitle)
+                    .tracking(theme.pageTitleTracking)
+                    .foregroundStyle(theme.text)
                     .padding(.top, 8)
-                Text("版本 \(SettingsVersion.full)")
-                    .font(SettingsTheme.caption)
-                    .foregroundStyle(SettingsTheme.secondaryText)
-                    .padding(.top, 3)
+                SettingsNumberText("版本 \(SettingsVersion.full)", font: theme.caption)
+                    .foregroundStyle(theme.secondaryText)
+                    .padding(.top, theme.isModern ? 2 : 3)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
+            .padding(.top, theme.isModern ? 12 : 18)
+            .padding(.bottom, theme.isModern ? 10 : 18)
         }
     }
 
@@ -101,7 +99,7 @@ struct SettingsAboutPage: View {
     /// account names); what was copied stays readable underneath.
     @ViewBuilder
     private var diagnosticSummaryRow: some View {
-        SettingsRow(tall: true) {
+        SettingsRow(tall: !theme.isModern) {
             SettingsRowLabel(title: "复制诊断信息")
             Spacer(minLength: 8)
             Button {
@@ -114,9 +112,7 @@ struct SettingsAboutPage: View {
                     }
                 } else if model.copiedDiagnosticSummary != nil {
                     HStack(spacing: 5) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(SettingsTheme.green)
+                        SettingsCheckMark()
                         Text("已复制")
                     }
                 } else {
@@ -129,23 +125,24 @@ struct SettingsAboutPage: View {
         if let summary = model.copiedDiagnosticSummary {
             ScrollView {
                 Text(summary)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(SettingsTheme.secondaryText)
-                    .lineSpacing(3)
+                    .font(theme.isModern ? SettingsFont.number(11) : .system(size: 11, design: .monospaced))
+                    .foregroundStyle(theme.secondaryText)
+                    .lineSpacing(theme.isModern ? 4 : 3)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, theme.isModern ? 8 : 9)
             }
-            .frame(maxHeight: 150)
-            .background(SettingsTheme.inset, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(SettingsTheme.line, lineWidth: 1)
-            )
-            .padding(.leading, 14)
-            .padding(.trailing, 12)
-            .padding(.bottom, 12)
+            .frame(maxHeight: theme.isModern ? 118 : 150)
+            .background(theme.inset, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay {
+                if !theme.isModern {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(theme.line, lineWidth: 1)
+                }
+            }
+            .padding(.leading, theme.isModern ? 0 : 14)
+            .padding(.trailing, theme.isModern ? 0 : 12)
+            .padding(.bottom, theme.isModern ? 10 : 12)
         }
     }
 }
@@ -164,31 +161,37 @@ struct SettingsLinkRow<Mark: View>: View {
     let url: URL?
     @ViewBuilder var mark: Mark
     @State private var isHovered = false
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
         Button {
             if let url { NSWorkspace.shared.open(url) }
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: theme.isModern ? 0 : 10) {
                 mark
-                    .foregroundStyle(SettingsTheme.text)
-                    .frame(width: 15, height: 15)
-                    .frame(width: 18, height: 18)
+                    .foregroundStyle(theme.isModern ? theme.ok : theme.text)
+                    .frame(width: theme.isModern ? 14 : 15, height: theme.isModern ? 14 : 15)
+                    .frame(width: theme.isModern ? 22 : 18, height: 18, alignment: theme.isModern ? .leading : .center)
                     .accessibilityHidden(true)
                 Text(title)
-                    .font(SettingsTheme.label)
-                    .foregroundStyle(SettingsTheme.text)
+                    .font(theme.label)
+                    .foregroundStyle(theme.text)
                 Spacer(minLength: 8)
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(SettingsTheme.tertiaryText)
+                    .font(.system(size: theme.isModern ? 10 : 11, weight: .medium))
+                    .foregroundStyle(theme.tertiaryText)
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 14)
-            .frame(minHeight: 44)
+            .padding(.leading, theme.isModern ? 0 : 14)
+            .padding(.trailing, theme.isModern ? 0 : 14)
+            .frame(minHeight: theme.rowHeight)
             .background {
-                Rectangle().fill(Color.white.opacity(isHovered ? 0.04 : 0))
+                // Classic: the whole row lightens. Modern: a rounded wash
+                // reaching 8 pt into the card's padding, like the panel's rows.
+                RoundedRectangle(cornerRadius: theme.isModern ? 6 : 0, style: .continuous)
+                    .fill(Color.white.opacity(isHovered ? (theme.isModern ? 0.05 : 0.04) : 0))
+                    .padding(.horizontal, theme.isModern ? -8 : 0)
             }
+            .padding(.top, theme.isModern ? 1 : 0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

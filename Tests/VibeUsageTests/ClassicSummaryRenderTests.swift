@@ -12,7 +12,7 @@ struct ClassicSummaryRenderTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let sample = UsageBucket(source: "demo", model: "demo", project: "demo", hostname: "demo",
                                  bucketStart: "2026-11-25T06:00:00Z", inputTokens: 2_000_000,
-                                 outputTokens: 400_000, cacheCreationInputTokens: nil, cachedInputTokens: 8_000_000,
+                                 outputTokens: 400_000, cacheCreation5mTokens: nil, cacheCreation1hTokens: nil, cachedInputTokens: 8_000_000,
                                  reasoningOutputTokens: 0, totalTokens: 10_400_000, estimatedCost: 12.34)
         var shouldFail = false
         let state = AppState(

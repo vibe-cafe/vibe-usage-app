@@ -4,15 +4,6 @@ import SwiftUI
 struct PopoverView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject var updaterViewModel: UpdaterViewModel
-    @State private var deviceFlowState: DeviceFlowUIState = .idle
-    @State private var pendingUserCode: String?
-    @State private var setupError: String?
-    @State private var deviceFlowTask: Task<Void, Never>?
-
-    enum DeviceFlowUIState {
-        case idle
-        case awaitingApproval
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,7 +42,9 @@ struct PopoverView: View {
     // MARK: - Unconfigured State
 
     private var unconfiguredView: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // The sign-in is shared with the new panel (`AppState.deviceLink`).
+        let link = appState.deviceLink
+        return VStack(alignment: .leading, spacing: 0) {
             // Quota monitoring is local and does not require a Vibe account.
             // Keep the normal header (including Settings) available so an
             // unlinked user can also configure ZCode or export diagnostics.
@@ -76,7 +69,7 @@ struct PopoverView: View {
                             .foregroundStyle(Color(white: 0.42))
                     }
 
-                    if let pendingUserCode {
+                    if let pendingUserCode = link.userCode {
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "info.circle")
                                 .font(.system(size: 12))
@@ -104,23 +97,22 @@ struct PopoverView: View {
                         }
                     }
 
-                    if let setupError {
+                    if let setupError = link.failureReason {
                         Text(setupError)
                             .font(.system(size: 12))
                             .foregroundStyle(.red)
                     }
 
                     Button {
-                        let task = Task { await runDeviceFlow() }
-                        deviceFlowTask = task
+                        link.start()
                     } label: {
                         HStack(spacing: 6) {
-                            if deviceFlowState == .awaitingApproval {
+                            if link.isRunning {
                                 ProgressView()
                                     .controlSize(.small)
                                     .tint(.black)
                             }
-                            Text(deviceFlowState == .awaitingApproval ? "等待浏览器确认…" : "登录并链接数据")
+                            Text(link.isRunning ? "等待浏览器确认…" : "登录并链接数据")
                                 .font(.system(size: 13, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
@@ -129,11 +121,11 @@ struct PopoverView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.white)
                     .foregroundStyle(.black)
-                    .disabled(deviceFlowState == .awaitingApproval)
+                    .disabled(link.isRunning)
 
-                    if deviceFlowState == .awaitingApproval {
+                    if link.isRunning {
                         Button {
-                            cancelDeviceFlow()
+                            link.cancel()
                         } label: {
                             Text("取消，重新开始")
                                 .font(.system(size: 12, weight: .medium))
@@ -148,81 +140,6 @@ struct PopoverView: View {
             }
             .padding(16)
         }
-    }
-
-
-    private func runDeviceFlow() async {
-        setupError = nil
-        deviceFlowState = .awaitingApproval
-        pendingUserCode = nil
-        defer { deviceFlowState = .idle }
-
-        appState.reloadConfig()
-        let server = appState.usageServer
-        let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
-        let device: DeviceCodeResponse
-        do {
-            device = try await requestDeviceCode(server: server, clientName: "\(AppConfig.displayName).app", hostname: hostname)
-        } catch {
-            setupError = "无法连接服务端：\(error.localizedDescription)"
-            return
-        }
-
-        pendingUserCode = device.userCode
-        if let url = server.verificationURL(device.verificationUriComplete) {
-            NSWorkspace.shared.open(url)
-        }
-
-        let intervalNs = UInt64(max(device.interval, 1)) * 1_000_000_000
-        let deadline = Date().addingTimeInterval(TimeInterval(device.expiresIn))
-
-        while Date() < deadline {
-            if Task.isCancelled { return }
-            try? await Task.sleep(nanoseconds: intervalNs)
-            if Task.isCancelled { return }
-            let res: DevicePollResponse
-            do {
-                res = try await pollDeviceCode(server: server, deviceCode: device.deviceCode)
-            } catch {
-                continue
-            }
-            if let apiKey = res.apiKey {
-                pendingUserCode = nil
-                appState.configure(apiKey: apiKey, server: res.linkedServer(fallingBackTo: server))
-                await appState.fetchUsageData()
-                return
-            }
-            switch res.error {
-            case "authorization_pending", nil:
-                continue
-            case "access_denied":
-                setupError = DeviceFlowError.denied.localizedDescription
-                pendingUserCode = nil
-                return
-            case "expired_token":
-                setupError = DeviceFlowError.expired.localizedDescription
-                pendingUserCode = nil
-                return
-            default:
-                setupError = "服务端返回未知错误：\(res.error ?? "unknown")"
-                pendingUserCode = nil
-                return
-            }
-        }
-        setupError = DeviceFlowError.expired.localizedDescription
-        pendingUserCode = nil
-    }
-
-    /// Abort an in-flight device flow so the user can re-link immediately
-    /// instead of waiting out the 15-minute timeout. Cancelling the task makes
-    /// runDeviceFlow() return at its next checkpoint; its `defer` resets the
-    /// UI state back to idle.
-    private func cancelDeviceFlow() {
-        deviceFlowTask?.cancel()
-        deviceFlowTask = nil
-        pendingUserCode = nil
-        setupError = nil
-        deviceFlowState = .idle
     }
 
     // MARK: - Dashboard

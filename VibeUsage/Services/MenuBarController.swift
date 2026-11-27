@@ -29,6 +29,53 @@ enum MenuBarPanelGeometry {
 
         return NSPoint(x: x, y: y)
     }
+
+    /// The tallest a panel can be without its top moving: from the top
+    /// `topLeftPoint` places it at down to `bottomInset` above the bottom of
+    /// the visible frame (Dock excluded).
+    static func maxHeight(
+        anchorFrame: NSRect,
+        visibleFrame: NSRect,
+        topGap: CGFloat,
+        bottomInset: CGFloat
+    ) -> CGFloat {
+        let top = min(anchorFrame.minY - topGap, visibleFrame.maxY)
+        return max(0, top - visibleFrame.minY - bottomInset)
+    }
+}
+
+/// Frame changes of the popover panel. Kept apart from `MenuBarController`
+/// so they can be checked on an off-screen panel.
+@MainActor
+enum PopoverPanelResize {
+    /// Sets the panel's height and keeps its top edge, so it grows and
+    /// shrinks downward. The open/close animation scales the content layer
+    /// around its top-right corner; AppKit lays a resized layer out for its
+    /// default anchor, so the resize happens with that anchor and ours is put
+    /// back afterwards.
+    static func setHeight(_ height: CGFloat, width: CGFloat, of panel: NSWindow) {
+        guard height > 0, abs(panel.frame.height - height) > 0.5 else { return }
+        let layer = panel.contentView?.layer
+        let anchor = layer?.anchorPoint ?? .zero
+        if let layer { setAnchorPoint(.zero, for: layer) }
+        let frame = panel.frame
+        panel.setFrame(NSRect(x: frame.minX, y: frame.maxY - height, width: width, height: height), display: true)
+        if let layer { setAnchorPoint(anchor, for: layer) }
+        panel.invalidateShadow()
+    }
+
+    /// Adjust a layer's anchor point without visually shifting it.
+    static func setAnchorPoint(_ anchor: CGPoint, for layer: CALayer) {
+        let oldAnchor = layer.anchorPoint
+        let bounds = layer.bounds
+
+        let newPoint = CGPoint(x: bounds.width * anchor.x, y: bounds.height * anchor.y)
+        let oldPoint = CGPoint(x: bounds.width * oldAnchor.x, y: bounds.height * oldAnchor.y)
+        let position = layer.position
+        layer.anchorPoint = anchor
+        layer.position = CGPoint(x: position.x - oldPoint.x + newPoint.x,
+                                  y: position.y - oldPoint.y + newPoint.y)
+    }
 }
 
 /// SwiftUI view rendered inside the NSStatusItem button.
@@ -150,8 +197,11 @@ final class MenuBarController: NSObject {
     }
 
     private static let panelWidth: CGFloat = 520
+    /// The classic panel's fixed height.
     private static let panelHeight: CGFloat = 620
     private static let panelTopGap: CGFloat = 6
+    private static let panelEdgeInset: CGFloat = 8
+    private static let classicCornerRadius: CGFloat = 12
     private static let openDuration: CFTimeInterval = 0.22
     private static let closeDuration: CFTimeInterval = 0.14
     private static let openScale: CGFloat = 0.9
@@ -159,6 +209,16 @@ final class MenuBarController: NSObject {
     /// Initial downward offset (in layer coords, positive = up in unflipped NSView).
     /// Creates a "falling out of the menu bar" feel when combined with scale.
     private static let openYOffset: CGFloat = 4
+
+    /// The new panel follows its content: the view reports the height it
+    /// wants (capped by `modernLayout.maxHeight`, set from the screen on every
+    /// open) and the controller resizes the window, keeping its top edge.
+    private let modernLayout = ModernPanelLayout()
+    private var modernPreferredHeight: CGFloat?
+    /// The panel's SwiftUI host, laid out synchronously before an open so
+    /// the new panel appears at its final height.
+    private var panelHost: NSView?
+    private var modernResizeScheduled = false
 
     init(appState: AppState, updaterViewModel: UpdaterViewModel) {
         self.appState = appState
@@ -168,6 +228,7 @@ final class MenuBarController: NSObject {
 
         configureStatusItem()
         observeStateChanges()
+        observeInterfaceStyle()
 
         // Popup sits at .popUpMenu level (above everything) normally. Lower to
         // .normal while Settings is visible so clicking/dragging Settings can
@@ -266,6 +327,33 @@ final class MenuBarController: NSObject {
         }
     }
 
+    /// The panel's root view swaps by itself when the interface style changes;
+    /// the window's corner radius and size follow here.
+    private func observeInterfaceStyle() {
+        withObservationTracking {
+            _ = appState.interfaceStyle.current
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.applyStyleChrome()
+                self?.observeInterfaceStyle()
+            }
+        }
+    }
+
+    private func applyStyleChrome() {
+        guard let panel else { return }
+        switch appState.interfaceStyle.current {
+        case .classic:
+            panel.contentView?.layer?.cornerRadius = Self.classicCornerRadius
+            resizePanel(to: Self.panelHeight)
+        case .modern:
+            panel.contentView?.layer?.cornerRadius = ModernTheme.panelCornerRadius
+            if let height = modernPreferredHeight {
+                resizePanel(to: min(height, modernLayout.maxHeight))
+            }
+        }
+    }
+
     private func refreshStatusItem() {
         guard hostingView != nil else { return }
         let lines = MenuBarLabel.lines(for: appState)
@@ -320,13 +408,12 @@ final class MenuBarController: NSObject {
         guard !isAnimating else { return }
 
         let panel = ensurePanel()
+        // A real open (not re-focusing a visible panel): the new panel goes
+        // back to 概览, usage is fetched unless fresh, and selected quota
+        // products are read on their usual per-provider interval. Before
+        // positioning, so the new panel is sized for the reset content.
+        appState.panelWillOpen()
         positionPanel(panel)
-
-        Task { await appState.fetchUsageDataIfNeeded() }
-        // Popover open refreshes selected quota products only. The coordinator
-        // applies a per-provider 60s cooldown so rapid open/close stays cheap.
-        Task { await appState.refreshSelectedRateLimitsIfNeeded() }
-        appState.rateLimitPanelVisibilityChanged(visible: true)
 
         // Keep activation policy reconciliation centralized. The app is
         // Dock-regular by default, and this call records popup visibility.
@@ -358,19 +445,30 @@ final class MenuBarController: NSObject {
         // and on Tahoe the same bridge feeds a reentrant layout loop that stack-overflows
         // SwiftUI's ViewGraph renderer. sizingOptions drops .intrinsicContentSize from
         // NSHostingView's default so it never probes SwiftUI with a 0×0 proposal either.
+        //
+        // The new panel's height is not read from SwiftUI's sizing either: the
+        // view reports the height it wants through `onModernHeightChange`, and
+        // `resizePanel` sets the window frame on the next run-loop turn. Its
+        // root never imposes a minimum height, so the pinning constraints can
+        // always follow the window.
         let rootView = AnyView(
-            PopoverView()
-                .environment(appState)
-                .environmentObject(updaterViewModel)
+            PanelRootView(layout: modernLayout) { [weak self] height in
+                self?.modernHeightDidChange(height)
+            }
+            .environment(appState)
+            .environmentObject(updaterViewModel)
         )
         let host = NSHostingView(rootView: rootView)
         host.translatesAutoresizingMaskIntoConstraints = false
         if #available(macOS 13, *) {
             host.sizingOptions = [.minSize, .maxSize]
         }
+        panelHost = host
 
+        let isModern = appState.interfaceStyle.current == .modern
+        let initialHeight = isModern ? (modernPreferredHeight ?? Self.panelHeight) : Self.panelHeight
         let panel = PopoverPanel(
-            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight),
+            contentRect: NSRect(x: 0, y: 0, width: Self.panelWidth, height: initialHeight),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -394,7 +492,7 @@ final class MenuBarController: NSObject {
                 host.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             ])
             contentView.wantsLayer = true
-            contentView.layer?.cornerRadius = 12
+            contentView.layer?.cornerRadius = isModern ? ModernTheme.panelCornerRadius : Self.classicCornerRadius
             contentView.layer?.masksToBounds = true
         }
 
@@ -415,14 +513,57 @@ final class MenuBarController: NSObject {
         // Use constants because the first SwiftUI layout pass can temporarily
         // report a zero or stale panel size. Clamp both axes to the selected
         // display's visible frame for notched menu bars and stacked displays.
-        let topLeft = MenuBarPanelGeometry.topLeftPoint(
+        // The new panel is never taller than this screen allows, so its top
+        // stays under the icon and anything taller scrolls inside it. The
+        // limit is kept in either style, so a switch while open is capped too.
+        modernLayout.maxHeight = MenuBarPanelGeometry.maxHeight(
             anchorFrame: buttonFrame,
-            panelSize: NSSize(width: Self.panelWidth, height: Self.panelHeight),
             visibleFrame: screen.visibleFrame,
             topGap: Self.panelTopGap,
-            edgeInset: 8
+            bottomInset: Self.panelEdgeInset
         )
+        var height = Self.panelHeight
+        if appState.interfaceStyle.current == .modern {
+            // A synchronous pass reports the current content's height (the
+            // report only records it; nothing resizes inside the layout).
+            panelHost?.layoutSubtreeIfNeeded()
+            height = min(modernPreferredHeight ?? panel.frame.height, modernLayout.maxHeight)
+        }
+        let topLeft = MenuBarPanelGeometry.topLeftPoint(
+            anchorFrame: buttonFrame,
+            panelSize: NSSize(width: Self.panelWidth, height: height),
+            visibleFrame: screen.visibleFrame,
+            topGap: Self.panelTopGap,
+            edgeInset: Self.panelEdgeInset
+        )
+        if abs(panel.frame.height - height) > 0.5 {
+            resizePanel(to: height)
+        }
         panel.setFrameTopLeftPoint(topLeft)
+    }
+
+    /// The new panel's view asked for another height (content changed, a
+    /// card expanded, the screen's limit moved). Applied on the next run-loop
+    /// turn: resizing the window from inside SwiftUI's update would re-enter
+    /// its layout — the loop the Popover Panel Sizing notes warn about.
+    private func modernHeightDidChange(_ height: CGFloat) {
+        modernPreferredHeight = height
+        guard !modernResizeScheduled else { return }
+        modernResizeScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.modernResizeScheduled = false
+            guard self.appState.interfaceStyle.current == .modern,
+                  let height = self.modernPreferredHeight else { return }
+            self.resizePanel(to: min(height, self.modernLayout.maxHeight))
+        }
+    }
+
+    /// Changes the panel's height and keeps its top edge where it is, so the
+    /// panel grows and shrinks downward.
+    private func resizePanel(to height: CGFloat) {
+        guard let panel else { return }
+        PopoverPanelResize.setHeight(height, width: Self.panelWidth, of: panel)
     }
 
     private func statusItemButtonScreenFrame() -> NSRect? {
@@ -543,17 +684,8 @@ final class MenuBarController: NSObject {
         }
     }
 
-    /// Adjust a layer's anchor point without visually shifting it.
     private func setAnchorPoint(_ anchor: CGPoint, for layer: CALayer) {
-        let oldAnchor = layer.anchorPoint
-        let bounds = layer.bounds
-
-        let newPoint = CGPoint(x: bounds.width * anchor.x, y: bounds.height * anchor.y)
-        let oldPoint = CGPoint(x: bounds.width * oldAnchor.x, y: bounds.height * oldAnchor.y)
-        let position = layer.position
-        layer.anchorPoint = anchor
-        layer.position = CGPoint(x: position.x - oldPoint.x + newPoint.x,
-                                  y: position.y - oldPoint.y + newPoint.y)
+        PopoverPanelResize.setAnchorPoint(anchor, for: layer)
     }
 
     // MARK: - Outside-click & ESC dismissal
