@@ -931,7 +931,7 @@ struct ProviderIcon: View {
 
     var body: some View {
         ProviderGlyph(provider: provider, size: size * 18 / 22)
-            .foregroundStyle(SettingsTheme.text)
+            .foregroundStyle(SettingsTheme.classic.text)
             .frame(width: size, height: size)
     }
 }
