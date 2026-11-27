@@ -540,10 +540,20 @@ if $NOTARIZE; then
     echo "==> Stapling notarization ticket..."
     xcrun stapler staple "$APP_BUNDLE"
 
-    # Create distribution ZIP (for Sparkle auto-updates)
-    echo "==> Creating Sparkle update zip..."
     rm -f "$ZIP_PATH"
-    ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+    if $EXTERNAL_TEST; then
+        # Testers get the stapled app plus the instructions, same as the ad-hoc zip.
+        echo "==> Creating external-test ZIP..."
+        ZIP_STAGING=$(mktemp -d)
+        cp -R "$APP_BUNDLE" "$ZIP_STAGING/"
+        cp "$PROJECT_DIR/docs/EXTERNAL_TESTING.zh-CN.md" "$ZIP_STAGING/外测说明.md"
+        ditto -c -k --sequesterRsrc "$ZIP_STAGING" "$ZIP_PATH"
+        rm -rf "$ZIP_STAGING"
+    else
+        # Create distribution ZIP (for Sparkle auto-updates)
+        echo "==> Creating Sparkle update zip..."
+        ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ZIP_PATH"
+    fi
 
     # Create distribution DMG (for initial download)
     echo "==> Creating distribution DMG..."
