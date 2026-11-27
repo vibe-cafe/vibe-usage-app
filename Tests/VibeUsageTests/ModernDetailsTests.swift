@@ -123,7 +123,7 @@ struct ModernDetailsTests {
                 if fails { throw URLError(.timedOut) }
                 return UsageResponse(buckets: empty ? [] : [used], sessions: nil, hasAnyData: true, names: nil)
             },
-            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
         state.timeRange = .today
         let keeper = UsageFiguresKeeper()
@@ -182,7 +182,7 @@ struct ModernDetailsTests {
             initialConfig: linked,
             loadConfig: { linked },
             usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
-            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) },
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults
         )
         let start = state.usageAccount

@@ -44,8 +44,9 @@ struct PanelRootView: View {
 
 /// The new panel (design 131, 136): header, 概览 row, 订阅配额 and 近期消耗
 /// cards, footer. Without a linked account 近期消耗 holds the sign-in
-/// (136j–136l). 展开详情 adds the four details cards (135). Card contents
-/// and the round buttons are filled in by later tickets.
+/// (136j–136l); with one, the figures, the curve and the filter menu (134).
+/// 展开详情 adds the four details cards (135). The quota card's contents
+/// and the round buttons are filled in by their own tickets.
 struct ModernPanelView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -95,6 +96,10 @@ struct ModernPanelView: View {
             ModernFooterBar()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
+        .coordinateSpace(.named(UsageFilterMenuState.space))
+        // 近期消耗's filter menu, drawn over the whole panel.
+        .overlay { UsageFilterMenuOverlay() }
+        .environment(appState.modernPanel.filterMenu)
         .frame(width: ModernTheme.panelWidth)
         // The window, sized by `MenuBarController` from `preferredHeight`,
         // decides the height; the content stays pinned to the top and never
@@ -132,10 +137,10 @@ struct ModernPanelView: View {
             }
 
             ModernCard(title: "近期消耗") {
-                EmptyView()
+                if appState.isConfigured { RecentUsageControls() }
             } content: {
                 if appState.isConfigured {
-                    Color.clear.frame(height: ModernTheme.recentUsageBodyHeight)
+                    ModernRecentUsageBody()
                 } else {
                     // Not linked: the same card walks through the sign-in.
                     ModernSignInBody()

@@ -39,7 +39,7 @@ struct AppStateUsageFetchTests {
             initialConfig: VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test"),
             loadConfig: { nil },
             usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: true, names: nil) },
-            activityFetcher: { _, _, _, _ in await withCheckedContinuation { pending = $0 } }
+            activityFetcher: { _, _, _, _, _ in await withCheckedContinuation { pending = $0 } }
         )
         let refresh = Task {
             await state.fetchUsageData()
@@ -69,7 +69,7 @@ struct AppStateUsageFetchTests {
                 usageReads += 1
                 return UsageResponse(buckets: [sample], sessions: nil, hasAnyData: true, names: nil)
             },
-            activityFetcher: { _, _, _, filters in
+            activityFetcher: { _, _, _, filters, _ in
                 requests.append(filters)
                 if requests.count == 2 || requests.count == 4 { throw URLError(.timedOut) }
                 return activity
@@ -112,7 +112,7 @@ struct AppStateUsageFetchTests {
                 keys.append(key)
                 return UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil)
             },
-            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let old = Data(#"{"apiKey":"one","apiUrl":"https://WWW.VibeCafe.ai///","cliField":1}"#.utf8)
@@ -149,7 +149,7 @@ struct AppStateUsageFetchTests {
             usageFetcher: { _, _, range in
                 try await stub.fetch(range)
             },
-            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let launchRequest = Task { @MainActor in
@@ -176,7 +176,7 @@ struct AppStateUsageFetchTests {
             usageFetcher: { _, _, range in
                 try await stub.fetch(range)
             },
-            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let olderRequest = Task { @MainActor in
@@ -220,7 +220,7 @@ struct AppStateUsageFetchTests {
             usageFetcher: { _, _, range in
                 try await stub.fetch(range)
             },
-            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
 
         let olderRequest = Task { @MainActor in

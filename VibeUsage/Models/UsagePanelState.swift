@@ -30,8 +30,8 @@ struct UsagePanelState {
     var selectedSubscription: ProviderRateLimit.Provider?
     var hero: ChartMode = .cost
     var detailsExpanded = false
-    private var usesCNY = false
-    private var usesChineseTokens = false
+    private(set) var usesCNY = false
+    private(set) var usesChineseTokens = false
     private var distributionMetrics: [UsageRanking.Dimension: MetricMode] = [:]
 
     subscript(metricFor dimension: UsageRanking.Dimension) -> MetricMode {
@@ -60,7 +60,7 @@ struct UsagePanelState {
     }
 
     func formatTokens(_ tokens: Int) -> String {
-        usesChineseTokens ? Formatters.formatPanelChineseTokens(tokens) : Formatters.formatNumber(tokens)
+        usesChineseTokens ? Formatters.formatPanelChineseTokens(tokens) : Formatters.formatPanelTokens(tokens)
     }
 
     /// Called on presentation, including when the panel reuses its hosting view.
