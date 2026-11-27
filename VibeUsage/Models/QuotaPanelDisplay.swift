@@ -94,11 +94,16 @@ struct QuotaSubscriptionDisplay {
     /// least left. Model allowances (Fable, Opus, Sonnet) and pay-as-you-go
     /// spend never take the middle, even when tightest (maintainer
     /// 2026-11-27); they keep driving the button, the counts and the
-    /// overview's extra label. Without any ring window, the tightest.
+    /// overview's extra label. When every ring window is past its reset the
+    /// middle stays empty. Only a subscription that reports no generic window
+    /// at all (Cursor's team pool alone) falls back, to its lowest remaining
+    /// allowance that is neither a model allowance nor extra spend.
     var ringCenter: QuotaPanelMeter? {
         let rings = [outer, inner].compactMap { $0 }
-        guard !rings.isEmpty else { return tightest }
-        return rings.min { ($0.remaining ?? 100) < ($1.remaining ?? 100) }
+        if !rings.isEmpty { return rings.min { ($0.remaining ?? 100) < ($1.remaining ?? 100) } }
+        guard !rows.contains(where: { $0.primarySortDuration != nil }) else { return nil }
+        return rows.filter { $0.remaining != nil && !$0.isExtra && !$0.isModel }
+            .min { ($0.remaining ?? 100) < ($1.remaining ?? 100) }
     }
     let tone: QuotaPaceTone
     let comment: String?
@@ -267,6 +272,8 @@ struct QuotaPanelMeter: Equatable {
     let breakdown: [RateLimitMeter.Part]
     fileprivate let primarySortDuration: TimeInterval?
     fileprivate let isExtra: Bool
+    /// A per-model allowance (Claude's Fable, Opus, Sonnet).
+    fileprivate let isModel: Bool
     let remaining: Double?
     let usedPercent: Double?
     let expectedRemaining: Double?
@@ -293,17 +300,19 @@ struct QuotaPanelMeter: Equatable {
             Self($0, primarySortDuration: QuotaMeterLayout.genericSortDuration(of: $0), now: now)
         }
         let other = plan.dropFirst(2)
-        var ordered = modelMeters + other.filter { $0.label != "Month" }
-        if let opus = snapshot.sevenDayOpus { ordered.append(.init(id: "opus", label: "Opus", window: opus)) }
-        if let sonnet = snapshot.sevenDaySonnet { ordered.append(.init(id: "sonnet", label: "Sonnet", window: sonnet)) }
-        ordered += other.filter { $0.label == "Month" }
-        return leading + ordered.map { Self($0, now: now) } + extra.map { Self($0, isExtra: true, now: now) }
+        var ordered = modelMeters.map { ($0, true) } + other.filter { $0.label != "Month" }.map { ($0, false) }
+        if let opus = snapshot.sevenDayOpus { ordered.append((.init(id: "opus", label: "Opus", window: opus), true)) }
+        if let sonnet = snapshot.sevenDaySonnet { ordered.append((.init(id: "sonnet", label: "Sonnet", window: sonnet), true)) }
+        ordered += other.filter { $0.label == "Month" }.map { ($0, false) }
+        return leading + ordered.map { Self($0.0, isModel: $0.1, now: now) } + extra.map { Self($0, isExtra: true, now: now) }
     }
 
-    private init(_ meter: RateLimitMeter, primarySortDuration: TimeInterval? = nil, isExtra: Bool = false, now: Date) {
+    private init(_ meter: RateLimitMeter, primarySortDuration: TimeInterval? = nil, isExtra: Bool = false,
+                 isModel: Bool = false, now: Date) {
         id = meter.id
         label = isExtra ? "额外" : (meter.label == "Month" ? "mo" : meter.label)
         self.isExtra = isExtra
+        self.isModel = isModel
         self.primarySortDuration = primarySortDuration
         resetsAt = meter.window.resetsAt
         breakdown = meter.breakdown

@@ -217,6 +217,31 @@ struct QuotaPanelDisplayTests {
         #expect(pool.ringCenter?.label == "Team" && pool.ringCenter == pool.tightest)
     }
 
+    @Test func expiredRingWindowsLeaveTheMiddleEmptyRatherThanShowFable() throws {
+        let past = now.addingTimeInterval(-60)
+        let quota = snapshot(.claudeCode, .init(utilization: 40, resetsAt: past, windowDuration: 5 * hours),
+                             .init(utilization: 50, resetsAt: past, windowDuration: 168 * hours))
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(9, 168 * hours, due: 61))
+        let detail = try #require(panel(quota, models: [fable]).detail)
+        #expect(detail.outer == nil && detail.inner == nil)
+        #expect(detail.tightest?.label == "Fable" && detail.buttonRemaining == 9)
+        #expect(detail.ringCenter == nil)
+
+        // No generic window reported at all, only model allowances and extra
+        // spend: the fallback skips them too.
+        var modelsOnly = ProviderRateLimit(provider: .claudeCode, status: .ok, fetchedAt: now)
+        modelsOnly.sevenDayOpus = window(30, 168 * hours, due: 50)
+        modelsOnly.extraUsage = .init(isEnabled: true, spend: 90, limit: 100)
+        let onlyModels = try #require(panel(modelsOnly, models: [fable]).detail)
+        #expect(onlyModels.tightest?.label == "Fable" && onlyModels.ringCenter == nil)
+
+        // A feature allowance beside them is still a fallback.
+        let feature = ProviderRateLimit(provider: .codex, meters: [
+            .init(id: "review", label: "Code review", window: window(40, 168 * hours, due: 50)),
+        ], status: .ok)
+        #expect(try #require(panel(feature).detail).ringCenter?.label == "Code review")
+    }
+
     @Test func claudeProWithoutModelAllowancesShowsOnlyItsTwoWindows() throws {
         var quota = snapshot(.claudeCode, window(60, 5 * hours, due: 50), window(70, 168 * hours, due: 50))
         quota.planLabel = "Pro"

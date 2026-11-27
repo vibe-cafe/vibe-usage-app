@@ -238,8 +238,7 @@ struct ModernRoundButtonFace: View {
         if isSelected { return .white }
         // A subscription with nothing to show and a problem to look at dims
         // its mark (132e); hovering brings it up like other icon buttons.
-        if isHovered { return ModernTheme.text }
-        return showsDot && remaining == nil ? Color(settingsHex: 0x5E6369) : ModernButtonGlyph.restingColor
+        return showsDot && remaining == nil && !isHovered ? Color(settingsHex: 0x5E6369) : ModernButtonGlyph.restingColor
     }
 
     private var well: some View {
@@ -294,10 +293,13 @@ struct ModernRoundButtonFace: View {
     }
 
     private var face: some View {
+        // Unselected faces sit a step darker than the design's `#2E3339 →
+        // #212529`, so the full-brightness marks stand out (maintainer
+        // 2026-11-27, variant D); the pointer lifts the face a little.
         let colors: [Color] = isSelected
             ? [Color(settingsHex: 0x7C858E), Color(settingsHex: 0x4F565E)]
-            : (isHovered ? [Color(settingsHex: 0x363C43), Color(settingsHex: 0x272B30)]
-                         : [Color(settingsHex: 0x2E3339), Color(settingsHex: 0x212529)])
+            : (isHovered ? [Color(settingsHex: 0x31363C), Color(settingsHex: 0x25292D)]
+                         : [Color(settingsHex: 0x272B30), Color(settingsHex: 0x1C1F23)])
         let top = isSelected ? 0.34 : 0.12
         let bottom = isSelected ? 0.3 : 0.35
         return Circle()
@@ -320,17 +322,16 @@ struct ModernRoundButtonFace: View {
 }
 
 /// A provider's mark inside a round button. The real marks are finer than
-/// the design's stand-in symbols (thin strands, many points), so at this size
-/// they are drawn a step brighter than the design's `#8B9096` to read as
-/// bright as its solid symbols, each in a box sized to its own visual weight
-/// so the row looks even, and placed on whole points (crisp straight edges
-/// at 2×). The classic panel and Settings keep `ProviderGlyph` unchanged.
+/// the design's stand-in symbols (thin strands, many points), so they are
+/// drawn in the full text color on a darker face (maintainer 2026-11-27,
+/// variant D; the design's `#8B9096` read grey), each in a box sized to its
+/// own visual weight so the row looks even, and placed on whole points
+/// (crisp straight edges at 2×). The classic panel and Settings keep
+/// `ProviderGlyph` unchanged.
 struct ModernButtonGlyph: View {
     let provider: ProviderRateLimit.Provider
 
-    /// Resting mark color: the design's stand-ins measured against these
-    /// marks, about 78 % of the text color.
-    static let restingColor = ModernTheme.text.opacity(0.78)
+    static let restingColor = ModernTheme.text
 
     var body: some View {
         let side = Self.side(for: provider)
@@ -339,14 +340,16 @@ struct ModernButtonGlyph: View {
             .frame(width: side, height: side)
     }
 
-    /// Side of the box the 24-unit mark is drawn in, in whole points.
+    /// Side of the box the 24-unit mark is drawn in, in whole points: fine
+    /// strands get more room, solid shapes less. Each mark's farthest point
+    /// stays at least 0.8 pt inside the 21 pt face (Grok's slash reaches its
+    /// corners, so it stops at 14).
     static func side(for provider: ProviderRateLimit.Provider) -> CGFloat {
         switch provider {
-        // Fine strands get more room, solid shapes less.
-        case .claudeCode, .grok: 13
-        case .codex, .kimiCode: 12
-        case .cursor, .antigravity, .opencodeGo: 11
-        case .zCode: 10
+        case .claudeCode: 15
+        case .grok, .codex, .kimiCode: 14
+        case .cursor, .antigravity, .opencodeGo: 13
+        case .zCode: 12
         }
     }
 }
