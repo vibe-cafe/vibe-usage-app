@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // The open-application event is current only while launching.
         launchedAsLoginItem = LoginLaunch.isLoginItemLaunch()
+        // Before any view: the new panel's typefaces.
+        AppFonts.registerAppFonts()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
