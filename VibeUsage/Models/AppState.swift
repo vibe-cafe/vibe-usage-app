@@ -113,6 +113,8 @@ final class AppState {
     private(set) var activity: ActivityReport?
     private var activityTask: Task<Void, Never>?
     private var activityRange: UsageQueryRange?
+    private var lastActivityFilterItems: [URLQueryItem]?
+    var isLoadingActivity: Bool { activityTask != nil || (activityRange != nil && lastActivityFilterItems == nil) }
     var hasAnyData: Bool = false
     var isLoadingData: Bool = false
     var hasLoadedUsageData: Bool = false
@@ -150,22 +152,31 @@ final class AppState {
     var customRangeTo: Date = Calendar.current.startOfDay(for: Date())
     var chartMode: ChartMode = .token
     var filters: FilterState = .init() {
-        didSet {
-            guard activityFilters(oldValue).activityQueryItems != activityFilters(filters).activityQueryItems,
-                  let range = activityRange else { return }
-            reloadActivity(range: range)
-        }
+        didSet { reloadActivityIfFiltersChanged() }
     }
 
-    /// Reads active time again for the loaded range, dropping the old report.
-    private func reloadActivity(range: UsageQueryRange) {
+    /// Compare the actual server parameters, including those of a pending read.
+    private var activityFiltersChanged: Bool {
+        activityRange != nil && activityFilters.activityQueryItems != lastActivityFilterItems
+    }
+
+    /// Hide the previous selection immediately when the read is scheduled in a task.
+    private func discardActivityIfFiltersChanged() {
+        guard activityFiltersChanged else { return }
+        activityTask?.cancel()
+        activityTask = nil
+        lastActivityFilterItems = nil
+        activity = nil
+    }
+
+    private func reloadActivityIfFiltersChanged() {
+        guard let range = activityRange, activityFiltersChanged else { return }
         reloadConfig()
         guard let key = config?.apiKey else { return }
         if activityRange == nil {
             // Disk configuration switched accounts; refresh both halves of the dashboard.
             Task { await fetchUsageData() }
         } else {
-            activity = nil
             startActivityFetch(range: range, key: key)
         }
     }
@@ -286,21 +297,18 @@ final class AppState {
 
     /// 「界面样式」: switch the style, then put the period on its default.
     /// A changed period is read again, the same read a period change makes.
-    /// When the period stays but the two styles count different projects
-    /// (classic keeps its project selection, the new panel has none), the
-    /// active time already read is for the wrong projects: only it is read
-    /// again, the same request a filter change makes.
+    /// If just the effective tool or project changes, only active time is read again.
     func selectInterfaceStyle(_ style: InterfaceStyle) {
         let previous = interfaceStyle.current
-        let previousActivityQuery = activityFilters(filters).activityQueryItems
         interfaceStyle.select(style)
         guard interfaceStyle.current != previous else { return }
         let range = timeRange
         applyDefaultTimeRangeForInterfaceStyle()
         if timeRange != range {
+            discardActivityIfFiltersChanged()
             Task { await fetchUsageData() }
-        } else if activityFilters(filters).activityQueryItems != previousActivityQuery, let range = activityRange {
-            reloadActivity(range: range)
+        } else {
+            reloadActivityIfFiltersChanged()
         }
     }
 
@@ -351,7 +359,11 @@ final class AppState {
     private(set) var quotaProducts: [QuotaProduct] = QuotaProductRegistry.catalog.map {
         QuotaProduct(provider: $0.0, availability: $0.1, isDetected: false)
     }
-    private(set) var selectedQuotaProviders: [ProviderRateLimit.Provider] = [.codex, .claudeCode]
+    private(set) var selectedQuotaProviders: [ProviderRateLimit.Provider] = [.codex, .claudeCode] {
+        didSet {
+            if interfaceStyle.current == .modern { reloadActivityIfFiltersChanged() }
+        }
+    }
     /// Persisted display order of every catalog product, enabled or not. The
     /// strip renders enabled products first, so this order decides the sequence
     /// *within* each of those two groups.
@@ -472,6 +484,10 @@ final class AppState {
         self.zCodeAPIKeyStore = zCodeAPIKeyStore
         self.quotaProductDiscoverer = quotaProductDiscoverer
         self.cursorLogin = cursorLogin ?? .shared
+        modernPanel.onSubscriptionSelection = { [weak self] in
+            guard let self, self.interfaceStyle.current == .modern else { return }
+            self.reloadActivityIfFiltersChanged()
+        }
         if let saved = quotaDefaults.object(forKey: Self.lastSuccessfulSyncKey) as? Date {
             self.lastSuccessfulSyncAt = saved
         } else if let migrated = SyncHistoryStore(defaults: quotaDefaults).records()
@@ -614,6 +630,7 @@ final class AppState {
             activityTask?.cancel()
             activityTask = nil
             activityRange = nil
+            lastActivityFilterItems = nil
             activity = nil
             lastFetchTime = nil
             hasLoadedUsageData = false
@@ -758,15 +775,12 @@ final class AppState {
         }
     }
 
-    /// What the activity request filters by. The new panel has no project
-    /// dimension (its cost and Tokens ignore projects), so the classic
-    /// project selection stays out of its request; the classic request and
-    /// selection are unchanged.
-    private func activityFilters(_ filters: FilterState) -> FilterState {
+    /// The modern panel counts the same tools and terminals for every metric.
+    /// The server computes the union and accepts no model parameter.
+    private var activityFilters: FilterState {
         guard interfaceStyle.current == .modern else { return filters }
-        var result = filters
-        result.projects.removeAll()
-        return result
+        let effective = modernPanel.usageFilters(filters, enabled: quotaCardProviders)
+        return FilterState(sources: effective.sources, hostnames: effective.hostnames)
     }
 
     /// Hour periods for today and the rolling day; in the new panel also for
@@ -778,15 +792,19 @@ final class AppState {
 
     private func startActivityFetch(range: UsageQueryRange, key: String) {
         activityTask?.cancel()
-        if activityRange != range { activity = nil }
+        let filters = activityFilters
+        let items = filters.activityQueryItems
+        if activityRange != range || lastActivityFilterItems != items { activity = nil }
         activityRange = range
+        lastActivityFilterItems = items
         let start = range.start(at: Date())
         let hourly = activityIsHourly(range)
-        activityTask = Task { [weak self, activityFetcher, server = usageServer, filters = activityFilters(filters)] in
+        activityTask = Task { [weak self, activityFetcher, server = usageServer] in
             guard !Task.isCancelled else { return }
             let result = try? await activityFetcher(server, key, range, filters, hourly)
             guard !Task.isCancelled else { return }
             self?.activity = result.map { ActivityReport($0, rangeStart: start, hourly: hourly) }
+            self?.activityTask = nil
         }
     }
 
@@ -796,11 +814,12 @@ final class AppState {
         // Opening the panel during the eager launch fetch must not start the
         // same request again. Explicit range changes call fetchUsageData()
         // directly and are still allowed to supersede the in-flight request.
-        guard !isLoadingData else { return }
-        if let last = lastFetchTime, Date().timeIntervalSince(last) < 60 {
-            return
+        let recentlyFetched = lastFetchTime.map { Date().timeIntervalSince($0) < 60 } ?? false
+        if !isLoadingData && !recentlyFetched {
+            await fetchUsageData()
+        } else if interfaceStyle.current == .modern {
+            reloadActivityIfFiltersChanged()
         }
-        await fetchUsageData()
     }
 
     /// Legacy provider-specific entry point retained for Settings bindings and
@@ -1121,6 +1140,9 @@ final class AppState {
     @discardableResult
     func panelWillOpen() -> Task<Void, Never> {
         modernPanel.panelDidOpen()
+        if interfaceStyle.current == .modern {
+            discardActivityIfFiltersChanged()
+        }
         let usage = Task { await fetchUsageDataIfNeeded() }
         // The coordinator applies a per-provider interval, so rapid
         // open/close stays cheap.

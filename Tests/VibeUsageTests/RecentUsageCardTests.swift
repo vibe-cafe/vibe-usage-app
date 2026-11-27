@@ -20,10 +20,11 @@ struct RecentUsageCardTests {
         private let host: NSHostingView<AnyView>
         private let box: Box
 
-        init(_ state: AppState) {
+        init(_ state: AppState, onActivityNumber: (@MainActor (String?) -> Void)? = nil) {
             var preview = RecentUsagePreview()
             let box = Box()
             preview.onShow = { box.value = $0 }
+            preview.onActivityNumber = onActivityNumber
             self.box = box
             host = NSHostingView(rootView: AnyView(
                 ModernRecentUsageBody()
@@ -48,6 +49,7 @@ struct RecentUsageCardTests {
             host.layoutSubtreeIfNeeded()
             return box.value
         }
+
     }
 
     private func makeState(_ reads: Reads) -> AppState {
@@ -100,5 +102,46 @@ struct RecentUsageCardTests {
         reads.cost = 9
         await state.fetchUsageData()
         #expect(try await card.update() == RecentUsageShown(kind: .figures, cost: 9))
+    }
+
+    @Test func subscriptionActivityHeroShowsTheSelectedToolsTimeAfterLoading() async throws {
+        _ = NSApplication.shared
+        let suite = "RecentUsageCard.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var codex: CheckedContinuation<Void, Never>?
+        let state = AppState(
+            initialConfig: VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test"),
+            loadConfig: { nil },
+            usageFetcher: { _, _, range in RecentUsageFixtures.response(for: range, empty: false) },
+            activityFetcher: { _, _, _, filters, _ in
+                let isCodex = filters.sources == ["codex"]
+                if isCodex { await withCheckedContinuation { codex = $0 } }
+                let seconds = (isCodex ? 17 : 9) * 60
+                return UsageActivity(activeSeconds: seconds, workSeconds: seconds, parallel: 1, series: [],
+                                     firstBucketStart: "2020-01-01T00:00:00Z")
+            },
+            quotaDefaults: UserDefaults(suiteName: suite)!,
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
+        )
+        state.modernPanel.hero = .activeTime
+        state.filters.sources = ["claude-code"]
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity != nil }
+        var displayed: [String?] = []
+        let card = Card(state) { displayed.append($0) }
+        _ = try await card.update()
+        #expect(displayed.last == "9m")
+        state.modernPanel.selectedSubscription = .codex
+        try await waitForDashboard { codex != nil }
+        _ = try await card.update()
+        #expect(displayed == ["9m", nil])
+        codex?.resume()
+        try await waitForDashboard { state.activity != nil }
+        _ = try await card.update()
+        #expect(displayed.last == "17m")
+        state.modernPanel.selectedSubscription = nil
+        try await waitForDashboard { state.activity != nil }
+        _ = try await card.update()
+        #expect(displayed.last == "9m")
     }
 }

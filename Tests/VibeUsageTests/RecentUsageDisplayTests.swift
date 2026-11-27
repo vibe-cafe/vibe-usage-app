@@ -104,7 +104,7 @@ struct RecentUsageDisplayTests {
     // MARK: Activity requests and the style
 
     @MainActor
-    private func modernState(_ suite: String, activity: @escaping (UsageQueryRange, FilterState, Bool) throws -> UsageActivity,
+    private func modernState(_ suite: String, activity: @escaping (UsageQueryRange, FilterState, Bool) async throws -> UsageActivity,
                              usageReads: @escaping () -> Void = {}) -> AppState {
         let config = VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test")
         return AppState(
@@ -113,9 +113,133 @@ struct RecentUsageDisplayTests {
                 usageReads()
                 return UsageResponse(buckets: [], sessions: nil, hasAnyData: true, names: nil)
             },
-            activityFetcher: { _, _, range, filters, hourly in try activity(range, filters, hourly) },
+            activityFetcher: { _, _, range, filters, hourly in try await activity(range, filters, hourly) },
+            quotaDefaults: UserDefaults(suiteName: suite)!,
             interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
         )
+    }
+
+    private func recordedMinutes(_ minutes: Int) -> UsageActivity {
+        UsageActivity(activeSeconds: minutes * 60, workSeconds: minutes * 60, parallel: 1, series: [],
+                      firstBucketStart: "2020-01-01T00:00:00Z")
+    }
+
+    @MainActor private func activeNumber(_ state: AppState) -> String {
+        RecentUsageFigures(total: nil, activity: state.activity?.summary, units: state.modernPanel.usage).text(.activeTime)
+    }
+
+    @Test @MainActor
+    func subscriptionActivityRestoresManualToolsAndReadsOnlyChangedConditions() async throws {
+        let suite = "SubscriptionActivity.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var queries: [[URLQueryItem]] = []
+        var usageReads = 0
+        let state = modernState(suite, activity: { _, filters, _ in
+            queries.append(filters.activityQueryItems)
+            return recordedMinutes(filters.sources == ["codex"] ? 17 : 9)
+        }, usageReads: { usageReads += 1 })
+        state.filters = FilterState(sources: ["claude-code"], projects: ["classic"], hostnames: ["mac"])
+        func query(_ source: String) -> [URLQueryItem] {
+            [URLQueryItem(name: "source", value: source), URLQueryItem(name: "hostname", value: "mac")]
+        }
+        await state.fetchUsageData()
+        try await waitForDashboard { activeNumber(state) == "9m" }
+        #expect(queries == [query("claude-code")])
+
+        state.modernPanel.selectedSubscription = .codex
+        #expect(state.activity == nil)
+        try await waitForDashboard { activeNumber(state) == "17m" }
+        state.modernPanel.selectedSubscription = .codex
+        state.filters.models = ["other"]
+        state.filters.sources = []
+        state.filters.sources = ["claude-code"]
+        #expect(activeNumber(state) == "17m")
+        await Task.yield()
+        #expect(queries == [query("claude-code"), query("codex")])
+
+        state.modernPanel.selectedSubscription = nil
+        #expect(state.activity == nil)
+        try await waitForDashboard { activeNumber(state) == "9m" }
+        state.modernPanel.selectedSubscription = .claudeCode
+        await state.panelWillOpen().value
+        #expect(activeNumber(state) == "9m")
+        #expect(queries == [query("claude-code"), query("codex"), query("claude-code")])
+        #expect(usageReads == 1)
+    }
+
+    @Test @MainActor
+    func subscriptionActivityUsesEffectiveToolsAcrossPeriodsReopensAndSingleSubscription() async throws {
+        let suite = "SubscriptionActivity.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var sources: [Set<String>] = []
+        var usageReads = 0
+        let state = modernState(suite, activity: { _, filters, _ in
+            sources.append(filters.sources)
+            return recordedMinutes(filters.sources.isEmpty ? 42 : 17)
+        }, usageReads: { usageReads += 1 })
+        state.modernPanel.selectedSubscription = .codex
+        await state.fetchUsageData()
+        try await waitForDashboard { activeNumber(state) == "17m" }
+        state.timeRange = .sevenDays
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity != nil && sources.count == 2 }
+        await state.panelWillOpen().value
+        try await waitForDashboard { activeNumber(state) == "42m" }
+        state.modernPanel.selectedSubscription = .codex
+        try await waitForDashboard { activeNumber(state) == "17m" }
+        await state.setQuotaProductSelected(.claudeCode, selected: false)
+        try await waitForDashboard { activeNumber(state) == "42m" }
+        #expect(sources == [["codex"], ["codex"], [], ["codex"], []])
+        #expect(usageReads == 2)
+    }
+
+    @Test @MainActor
+    func subscriptionActivityIgnoresLateDetailAfterReturningToOverview() async throws {
+        let suite = "SubscriptionActivity.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var detail: CheckedContinuation<Void, Never>?
+        var returned = false
+        let state = modernState(suite, activity: { _, filters, _ in
+            if filters.sources == ["codex"] {
+                await withCheckedContinuation { detail = $0 }
+                returned = true
+                return recordedMinutes(17)
+            }
+            return recordedMinutes(42)
+        })
+        await state.fetchUsageData()
+        try await waitForDashboard { activeNumber(state) == "42m" }
+        state.modernPanel.selectedSubscription = .codex
+        try await waitForDashboard { detail != nil }
+        state.modernPanel.selectedSubscription = nil
+        try await waitForDashboard { activeNumber(state) == "42m" }
+        detail?.resume()
+        try await waitForDashboard { returned }
+        await Task.yield()
+        #expect(activeNumber(state) == "42m")
+    }
+
+    @Test @MainActor
+    func subscriptionActivityInClassicReadsOnlyManualConditions() async throws {
+        let suite = "SubscriptionActivity.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var requests: [FilterState] = []
+        let state = modernState(suite, activity: { _, filters, _ in
+            requests.append(filters)
+            return recordedMinutes(9)
+        })
+        state.interfaceStyle.select(.classic)
+        let manual = FilterState(sources: ["claude-code"], projects: ["classic"], hostnames: ["mac"])
+        state.filters = manual
+        await state.fetchUsageData()
+        try await waitForDashboard { activeNumber(state) == "9m" }
+        state.selectQuotaTab(.codex)
+        state.modernPanel.selectedSubscription = .codex
+        await state.panelWillOpen().value
+        #expect(requests == [manual])
+        state.filters.sources = ["cursor"]
+        try await waitForDashboard { requests.count == 2 }
+        #expect(requests.last == FilterState(sources: ["cursor"], projects: ["classic"], hostnames: ["mac"]))
     }
 
     @Test @MainActor
