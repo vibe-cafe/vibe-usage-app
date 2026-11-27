@@ -75,6 +75,7 @@ enum RuntimeDetector {
         /// `PATH`, as before. The bundled Node stays off `PATH`: tools the CLI
         /// starts (for example `agy` while reading quotas) must keep finding the
         /// user's own Node, not ours.
+        @MainActor
         func environment(base: [String: String]) -> [String: String] {
             var env = base
             if kind != .bundledNode {
@@ -82,6 +83,8 @@ enum RuntimeDetector {
                 env["PATH"] = directory + (base["PATH"].map { ":\($0)" } ?? "")
             }
             env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
+            let style = InterfaceStylePreference.shared
+            env["VIBE_USAGE_INTERFACE_STYLE"] = style.canSelect ? style.current.rawValue : nil
             // The egress-check settings, for the reads the CLI makes itself
             // (Antigravity): `EgressCheck.cliEnvironment`.
             env.merge(EgressCheck.cliEnvironment()) { _, appValue in appValue }

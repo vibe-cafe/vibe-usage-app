@@ -49,6 +49,7 @@ final class RuntimeDetectorTests: XCTestCase {
 
     // MARK: - Environment
 
+    @MainActor
     func testMacAppIdentityUsesTheDisplayVersion() {
         XCTAssertEqual(AppConfig.cliIdentityEnvironment["VIBE_USAGE_SURFACE"], "mac-app")
         XCTAssertEqual(AppConfig.cliIdentityEnvironment["VIBE_USAGE_SURFACE_VERSION"], AppConfig.version)
@@ -56,18 +57,42 @@ final class RuntimeDetectorTests: XCTestCase {
 
     /// The launcher imports the CLI in-process, so the identity variables it
     /// inherits are the ones the CLI uploads with — on every runtime.
+    @MainActor
     func testIdentityReachesTheCLIOnEveryRuntime() {
-        let base = ["PATH": "/usr/bin:/bin", "VIBE_USAGE_SURFACE": "cli", "HOME": "/Users/test"]
+        let style = AppState().interfaceStyle
+        let base = ["PATH": "/usr/bin:/bin", "VIBE_USAGE_SURFACE": "cli",
+                    "VIBE_USAGE_INTERFACE_STYLE": "modern", "HOME": "/Users/test"]
         for kind in [RuntimeDetector.Kind.bundledNode, .systemNode, .bun, .npx] {
             let env = RuntimeDetector.Runtime(kind: kind, executablePath: "/opt/homebrew/bin/node",
                                               launcherPath: launcher).environment(base: base)
             XCTAssertEqual(env["VIBE_USAGE_SURFACE"], "mac-app", "\(kind)")
             XCTAssertEqual(env["VIBE_USAGE_SURFACE_VERSION"], AppConfig.version, "\(kind)")
+            if style.canSelect {
+                XCTAssertEqual(env["VIBE_USAGE_INTERFACE_STYLE"], style.current.rawValue, "\(kind)")
+            } else {
+                XCTAssertNil(env["VIBE_USAGE_INTERFACE_STYLE"], "\(kind)")
+            }
             XCTAssertEqual(env["HOME"], "/Users/test")
         }
     }
 
+    #if VIBE_USAGE_EXTERNAL_TEST
+    @MainActor
+    func testNextCLILaunchUsesTheStyleJustSelectedInThePanel() {
+        let panel = AppState()
+        let original = panel.interfaceStyle.current
+        defer { panel.interfaceStyle.select(original) }
+        let runtime = RuntimeDetector.Runtime(kind: .npx, executablePath: "/usr/bin/npx", launcherPath: nil)
+        for style in [InterfaceStyle.classic, .modern, .classic] {
+            panel.interfaceStyle.select(style)
+            let env = runtime.environment(base: ["VIBE_USAGE_INTERFACE_STYLE": "stale"])
+            XCTAssertEqual(env["VIBE_USAGE_INTERFACE_STYLE"], style.rawValue)
+        }
+    }
+    #endif
+
     /// Tools the CLI starts must keep finding the user's Node, not ours.
+    @MainActor
     func testOnlySystemRuntimesGoFirstOnPath() {
         let base = ["PATH": "/usr/bin:/bin"]
         let bundledEnv = RuntimeDetector.Runtime(kind: .bundledNode, executablePath: bundled,

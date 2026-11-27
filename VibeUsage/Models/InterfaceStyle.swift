@@ -16,6 +16,8 @@ enum InterfaceStyle: String {
 @Observable
 @MainActor
 final class InterfaceStylePreference {
+    static let shared = InterfaceStylePreference()
+
     enum Rollout: Equatable {
         case unreleased
         case externalTest
