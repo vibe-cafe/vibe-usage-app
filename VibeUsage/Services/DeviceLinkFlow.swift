@@ -90,6 +90,11 @@ final class DeviceLinkFlow {
         return nil
     }
 
+    #if DEBUG
+    /// Offscreen renders show a step without running a sign-in.
+    func showForPreview(_ phase: Phase) { self.phase = phase }
+    #endif
+
     /// Starts an attempt; ignored while one is running.
     func start() {
         guard !isRunning else { return }
