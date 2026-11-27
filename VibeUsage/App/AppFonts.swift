@@ -6,7 +6,7 @@ import Foundation
 /// in the resource bundle (`Resources/Fonts`, SIL OFL 1.1, see
 /// `ThirdPartyNotices.txt`) and are registered for this process only, so
 /// nothing is installed on the user's Mac. Neither has CJK glyphs; Chinese
-/// falls back to the system's PingFang SC.
+/// falls back to the system's PingFang SC, at the weight `ModernTheme` picks.
 ///
 /// The app registers them at launch; tests and the off-screen renderer call
 /// `register(from:)` with the bundle they found.
