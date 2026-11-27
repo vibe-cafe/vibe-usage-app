@@ -46,11 +46,13 @@ enum ClaudeUsageCache {
         // the account can be verified without touching credentials. After an
         // account switch Claude Code leaves the previous account's numbers in
         // place until its next fetch — showing those would be plainly wrong.
-        if let cachedAccount = cached["accountUuid"] as? String,
-           let activeAccount = (root["oauthAccount"] as? [String: Any])?["accountUuid"] as? String,
-           cachedAccount != activeAccount {
+        let profile = root["oauthAccount"] as? [String: Any]
+        let activeAccount = profile?["accountUuid"] as? String
+        let cachedAccount = cached["accountUuid"] as? String
+        if let cachedAccount, let activeAccount, cachedAccount != activeAccount {
             return nil
         }
+        let verified = cachedAccount?.isEmpty == false && cachedAccount == activeAccount
 
         let fetchedAt = Date(timeIntervalSince1970: fetchedAtMs / 1000)
         let age = now.timeIntervalSince(fetchedAt)
@@ -67,6 +69,11 @@ enum ClaudeUsageCache {
 
         return ProviderRateLimit(
             provider: .claudeCode,
+            modelScopedMeters: ClaudeUsageProbe.modelScopedMeters(utilization["limits"]),
+            hasClaudeLimits: utilization["limits"] != nil,
+            claudeAccountScope: verified ? ClaudeQuotaAccountScope(
+                email: profile?["emailAddress"] as? String, organization: profile?["organizationName"] as? String
+            ) : nil,
             fiveHour: fiveHour,
             sevenDay: sevenDay,
             sevenDayOpus: opus,
