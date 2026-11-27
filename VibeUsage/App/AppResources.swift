@@ -13,6 +13,15 @@ extension Bundle {
             return bundle
         }
 
+        // `swift test`: the code lives in the test bundle, whose folder also
+        // holds the resource bundle (SwiftPM's own `Bundle.module` lookup).
+        let codeFolder = Bundle(for: ResourceBundleToken.self).bundleURL.deletingLastPathComponent()
+        if let bundle = Bundle(url: codeFolder.appendingPathComponent("\(bundleName).bundle")) {
+            return bundle
+        }
+
         fatalError("could not find resource bundle \(bundleName)")
     }()
 }
+
+private final class ResourceBundleToken {}

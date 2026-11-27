@@ -1,9 +1,12 @@
 import SwiftUI
 
-/// 通用: what the app shows in the menu bar, and how it starts.
+/// 通用: what the app shows in the menu bar, how it starts, and — while the
+/// choice is offered (`InterfaceStylePreference.canSelect`) — which interface
+/// style the panel and this window use.
 struct SettingsGeneralPage: View {
     @Environment(AppState.self) private var appState
     @Environment(SettingsModel.self) private var model
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
         SettingsPageScroll {
@@ -30,7 +33,7 @@ struct SettingsGeneralPage: View {
                     .toggleStyle(.settingsSwitch)
                 }
             }
-            .padding(.top, 16)
+            .padding(.top, theme.cardGap)
             SettingsCard {
                 SettingsRow {
                     SettingsRowLabel(title: "开机自启动")
@@ -52,7 +55,25 @@ struct SettingsGeneralPage: View {
                     .toggleStyle(.settingsSwitch)
                 }
             }
-            .padding(.top, 16)
+            .padding(.top, theme.cardGap)
+            if appState.interfaceStyle.canSelect {
+                SettingsCard {
+                    SettingsRow {
+                        SettingsRowLabel(title: "界面样式")
+                        Spacer(minLength: 8)
+                        SettingsSegmented(
+                            options: [(InterfaceStyle.modern, InterfaceStyle.modern.displayName),
+                                      (.classic, InterfaceStyle.classic.displayName)],
+                            selection: Binding(
+                                get: { appState.interfaceStyle.current },
+                                set: { appState.interfaceStyle.select($0) }
+                            )
+                        )
+                        .accessibilityLabel("界面样式")
+                    }
+                }
+                .padding(.top, theme.cardGap)
+            }
         }
     }
 }
@@ -73,12 +94,16 @@ struct SettingsGeneralPage: View {
 struct MenuBarPreview: View {
     @Environment(AppState.self) private var appState
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.settingsStaticPreview) private var staticPreview
+    @Environment(\.settingsTheme) private var theme
     @State private var screen: NSScreen?
     @State private var wallpaper: MenuBarWallpaper.Strip?
 
     private static let desktopHeight: CGFloat = 48
-    private static let width = SettingsTheme.windowSize.width - SettingsTheme.sidebarWidth
-        - SettingsTheme.contentHorizontalInset * 2
+    /// The page column's inner width (classic 488, modern 496).
+    private var width: CGFloat {
+        SettingsTheme.windowSize.width - theme.sidebarWidth - theme.pageHorizontalInset * 2
+    }
 
     /// The menu bar's height on the window's screen: 24 pt, taller beside a
     /// notch (frame minus visible frame; an auto-hidden menu bar reports 0).
@@ -96,7 +121,7 @@ struct MenuBarPreview: View {
                 Image(systemName: "switch.2")
                     .font(.system(size: 13, weight: .medium))
                     .accessibilityHidden(true)
-                MenuBarClock()
+                MenuBarClock(fixed: staticPreview)
             }
             .foregroundStyle(.primary)
             .environment(\.colorScheme, wallpaper?.prefersDarkText == true ? .light : .dark)
@@ -118,13 +143,14 @@ struct MenuBarPreview: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(SettingsTheme.line, lineWidth: 1)
+                .strokeBorder(theme.line, lineWidth: 1)
         )
         .background { WindowScreenReader { screen = $0 } }
-        .task(id: ScreenKey(screen: screen, height: height, scale: displayScale)) {
+        .task(id: ScreenKey(screen: screen, width: width, height: height, scale: displayScale)) {
+            guard !staticPreview else { return }
             let url = (screen ?? NSScreen.main).flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
-            let pixelWidth = Int(Self.width * displayScale)
-            let aspect = Self.width / height
+            let pixelWidth = Int(width * displayScale)
+            let aspect = width / height
             let fraction = barHeight / height
             wallpaper = await Task.detached(priority: .utility) {
                 MenuBarWallpaper.loadStrip(url: url, pixelWidth: pixelWidth, aspect: aspect, menuBarFraction: fraction)
@@ -135,14 +161,16 @@ struct MenuBarPreview: View {
         .accessibilityValue(MenuBarLabel.lines(for: appState).joined(separator: "，"))
     }
 
-    /// Re-read only when the screen, the preview's height or the scale changes.
+    /// Re-read only when the screen, the preview's size or the scale changes.
     private struct ScreenKey: Equatable {
         let displayID: UInt32?
+        let width: CGFloat
         let height: CGFloat
         let scale: CGFloat
 
-        init(screen: NSScreen?, height: CGFloat, scale: CGFloat) {
+        init(screen: NSScreen?, width: CGFloat, height: CGFloat, scale: CGFloat) {
             displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            self.width = width
             self.height = height
             self.scale = scale
         }
@@ -151,9 +179,12 @@ struct MenuBarPreview: View {
 
 /// The menu-bar clock, in the menu bar's own font, ticking once a minute.
 private struct MenuBarClock: View {
+    /// Off-screen renders show a fixed Thursday 14:32 (the design's time).
+    var fixed = false
+
     var body: some View {
         TimelineView(.everyMinute) { context in
-            Text(Self.format(context.date))
+            Text(fixed ? "周四 14:32" : Self.format(context.date))
                 .font(Font(NSFont.menuBarFont(ofSize: 0)))
                 .monospacedDigit()
                 .lineLimit(1)
@@ -168,4 +199,10 @@ private struct MenuBarClock: View {
         formatter.dateFormat = "EEE HH:mm"
         return formatter.string(from: date)
     }
+}
+
+extension EnvironmentValues {
+    /// Off-screen renders (tests): the 通用 preview never reads the desktop
+    /// picture (it draws the fallback gradient) and its clock stands still.
+    @Entry var settingsStaticPreview = false
 }

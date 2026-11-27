@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 struct SettingsQuotaPage: View {
     @Environment(AppState.self) private var appState
     @Environment(SettingsNavigation.self) private var navigation
+    @Environment(\.settingsTheme) private var theme
     @State private var drag = QuotaDragState()
 
     private var enabled: [ProviderRateLimit.Provider] {
@@ -27,10 +28,13 @@ struct SettingsQuotaPage: View {
         ScrollViewReader { proxy in
             SettingsPageScroll(bottomInset: 8) {
                 SettingsPageHeader(title: SettingsPage.quotas.title) {
-                    Text("\(enabled.count) / \(appState.quotaProducts.count) 已开启 · 拖动排序")
-                        .font(SettingsTheme.body)
-                        .monospacedDigit()
-                        .foregroundStyle(SettingsTheme.secondaryText)
+                    SettingsNumberText.text(
+                        "\(enabled.count) / \(appState.quotaProducts.count) 已开启 · 拖动排序",
+                        font: theme.isModern ? theme.caption : theme.body,
+                        numberFont: theme.numberFont?(.regular)
+                    )
+                    .monospacedDigit()
+                    .foregroundStyle(theme.secondaryText)
                 } trailing: {
                     Button {
                         appState.rediscoverQuotaProducts()
@@ -41,8 +45,9 @@ struct SettingsQuotaPage: View {
                     .help("重新检测本机产品")
                 }
                 table
-                SettingsSectionTitle(title: "隐私保护")
-                EgressSettingsCard()
+                SettingsSection(title: "隐私保护") {
+                    EgressSettingsRow()
+                }
             }
             .onAppear { reveal(navigation.focusedProvider, proxy: proxy) }
             // Whether the CLI the app runs has `login cursor` (the Cursor
@@ -63,21 +68,31 @@ struct SettingsQuotaPage: View {
 
     // MARK: - Table
 
+    /// Classic: 「未开启」 is a grey band. Modern: a small line of text under a
+    /// rule, like the panel.
     private var table: some View {
-        SettingsCard {
+        SettingsCard(padding: theme.isModern ? EdgeInsets(top: 2, leading: 16, bottom: 6, trailing: 16) : nil) {
             QuotaTableHeader()
             rows(enabled)
             if !disabled.isEmpty {
                 Text("未开启")
-                    .font(SettingsTheme.caption)
-                    .foregroundStyle(SettingsTheme.secondaryText)
-                    .padding(.horizontal, 14)
+                    .font(theme.caption)
+                    .foregroundStyle(theme.secondaryText)
+                    .padding(.horizontal, theme.isModern ? 0 : 14)
                     .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
-                    .background { Rectangle().fill(SettingsTheme.band) }
+                    .background { Rectangle().fill(theme.band) }
+                    .overlay(alignment: .top) {
+                        if theme.isModern { theme.line.frame(height: 1) }
+                    }
                 rows(disabled)
             }
         }
+        // Classic clips the band to the card's corners; modern must not clip
+        // the card's shadow or a flashed row's wash, so there the clip is
+        // pushed 24 pt out (same view either way, so switching keeps state).
+        .padding(theme.isModern ? 24 : 0)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(theme.isModern ? -24 : 0)
     }
 
     private func rows(_ group: [ProviderRateLimit.Provider]) -> some View {
@@ -96,23 +111,31 @@ struct SettingsQuotaPage: View {
 
 // MARK: - Header
 
-/// 工具 · 状态 · 面板卡片, aligned with the row columns.
-/// The egress check's one setting (`EgressCheck.Mode`), a pop-up menu like
-/// System Settings' 「显示滚动条」: what Codex, Claude, Grok and Antigravity do when
-/// no proxy is detected. What each option does is in the README, not here
+/// The egress check's one setting (`EgressCheck.Mode`): what Codex, Claude,
+/// Grok and Antigravity do when no proxy is detected. Classic: a system
+/// pop-up button like System Settings' 「显示滚动条」. Modern: the panel's menu
+/// (design §10 #15). What each option does is in the README, not here
 /// (maintainer, 2026-11-26: no explanatory sentences in Settings).
-private struct EgressSettingsCard: View {
+private struct EgressSettingsRow: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
-        SettingsCard {
-            SettingsRow {
-                SettingsRowLabel(title: "没检测到代理时")
-                Spacer(minLength: 8)
-                Picker("没检测到代理时", selection: Binding(
-                    get: { appState.egressMode },
-                    set: { appState.egressMode = $0 }
-                )) {
+        let selection = Binding(
+            get: { appState.egressMode },
+            set: { appState.egressMode = $0 }
+        )
+        SettingsRow {
+            SettingsRowLabel(title: "没检测到代理时")
+            Spacer(minLength: 8)
+            if theme.isModern {
+                SettingsMenuPicker(
+                    id: "egressMode", label: "没检测到代理时",
+                    options: EgressCheck.Mode.allCases.map { ($0, $0.title) },
+                    selection: selection
+                )
+            } else {
+                Picker("没检测到代理时", selection: selection) {
                     ForEach(EgressCheck.Mode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
@@ -125,24 +148,27 @@ private struct EgressSettingsCard: View {
     }
 }
 
+/// 工具 · 状态 · 面板卡片, aligned with the row columns.
 private struct QuotaTableHeader: View {
+    @Environment(\.settingsTheme) private var theme
+
     var body: some View {
         HStack(spacing: 10) {
             Text("工具")
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("状态")
-                .frame(width: QuotaProductRow.statusWidth, alignment: .leading)
+                .frame(width: QuotaProductRow.statusWidth(theme), alignment: .leading)
             Text("面板卡片")
                 .fixedSize()
                 .frame(width: 30, alignment: .trailing)
             Color.clear.frame(width: 10, height: 1)
         }
-        .font(SettingsTheme.caption)
-        .foregroundStyle(SettingsTheme.secondaryText)
-        .padding(.leading, QuotaProductRow.nameInset)
-        .padding(.trailing, 12)
+        .font(theme.caption)
+        .foregroundStyle(theme.secondaryText)
+        .padding(.leading, QuotaProductRow.nameInset(theme))
+        .padding(.trailing, theme.isModern ? 0 : 12)
         .frame(height: 28)
-        .overlay(alignment: .bottom) { SettingsTheme.line.frame(height: 1) }
+        .overlay(alignment: .bottom) { theme.line.frame(height: 1) }
     }
 }
 
@@ -182,11 +208,15 @@ final class QuotaDragState {
 // MARK: - Row
 
 struct QuotaProductRow: View {
-    /// Column metrics shared with the header (design: 状态 124 wide; names
-    /// start 58 pt in, after the disclosure slot and the 22 pt mark).
-    static let statusWidth: CGFloat = 124
-    static let nameInset: CGFloat = 58
-    static let rowHeight: CGFloat = 40
+    /// Column metrics shared with the header. Classic: 状态 124 wide; names
+    /// start 58 pt in, after the disclosure slot and the 22 pt mark; 40 pt
+    /// rows. Modern: 状态 96 wide; names 36 pt in (a 14 pt disclosure slot and
+    /// the 22 pt mark slot, no gap); 36 pt rows under a 1 pt rule slot.
+    static func statusWidth(_ theme: SettingsTheme) -> CGFloat { theme.isModern ? 96 : 124 }
+    static func nameInset(_ theme: SettingsTheme) -> CGFloat { theme.isModern ? 36 : 58 }
+    static func rowHeight(_ theme: SettingsTheme) -> CGFloat { theme.isModern ? 37 : 40 }
+    /// Where a disclosure's expanded content starts (modern: under the name).
+    static func expansionLeading(_ theme: SettingsTheme) -> CGFloat { theme.isModern ? 36 : 14 }
 
     let provider: ProviderRateLimit.Provider
     let drag: QuotaDragState
@@ -195,6 +225,7 @@ struct QuotaProductRow: View {
 
     @Environment(AppState.self) private var appState
     @Environment(SettingsNavigation.self) private var navigation
+    @Environment(\.settingsTheme) private var theme
     @State private var flash = false
 
     private var isOn: Bool { appState.isQuotaProviderSelected(provider) }
@@ -217,9 +248,12 @@ struct QuotaProductRow: View {
                     drag: drag,
                     enabled: enabled,
                     disabled: disabled,
+                    rowHeight: Self.rowHeight(theme),
                     move: { appState.moveQuotaProduct($0, before: $1) }
                 ))
             if isConfigurable, isExpanded {
+                // Classic: a rounded block under the row. Modern: the row's
+                // second line, starting under the name (no box).
                 Group {
                     if provider == .cursor {
                         CursorLoginBlock()
@@ -227,9 +261,9 @@ struct QuotaProductRow: View {
                         ZCodeConfigBlock()
                     }
                 }
-                .padding(.leading, 14)
-                .padding(.trailing, 12)
-                .padding(.bottom, 12)
+                .padding(.leading, Self.expansionLeading(theme))
+                .padding(.trailing, theme.isModern ? 0 : 12)
+                .padding(.bottom, theme.isModern ? 10 : 12)
             }
         }
         .onAppear { if navigation.focusedProvider == provider { pulse() } }
@@ -241,15 +275,14 @@ struct QuotaProductRow: View {
     private var row: some View {
         HStack(spacing: 10) {
             HStack(spacing: 10) {
-                ProviderGlyph(provider: provider, size: 18)
-                    .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
-                    .opacity(isOn ? 1 : 0.72)
-                    .frame(width: 22, height: 22)
-                Text(provider.displayName)
-                    .font(SettingsTheme.label)
-                    .foregroundStyle(isOn ? SettingsTheme.text : SettingsTheme.secondaryText)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: theme.isModern ? 0 : 10) {
+                    QuotaRowMark(provider: provider, isOn: isOn)
+                    Text(provider.displayName)
+                        .font(theme.label)
+                        .foregroundStyle(isOn ? theme.text : theme.secondaryText)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 QuotaStatusCell(value: statusValue, isOn: isOn)
             }
             .contentShape(Rectangle())
@@ -266,9 +299,9 @@ struct QuotaProductRow: View {
 
             DragHandle(dimmed: !isOn)
         }
-        .padding(.leading, 26)
-        .padding(.trailing, 12)
-        .frame(height: Self.rowHeight)
+        .padding(.leading, theme.isModern ? 14 : 26)
+        .padding(.trailing, theme.isModern ? 0 : 12)
+        .frame(height: theme.isModern ? 36 : Self.rowHeight(theme))
         .overlay(alignment: .leading) {
             if isConfigurable {
                 Button(action: toggleExpanded) {
@@ -278,23 +311,28 @@ struct QuotaProductRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .offset(x: 6)
+                // The arrow's left edge on the rows' rule (classic 14, modern 0).
+                .offset(x: theme.isModern ? -4 : 6)
                 .help(isExpanded ? "收起" : "展开")
                 .accessibilityLabel(isExpanded ? "收起 \(provider.displayName)" : "展开 \(provider.displayName)")
             }
         }
         .background {
+            // The flash after arriving from the panel. Modern: the panel's
+            // row wash, reaching 8 pt into the card's padding.
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(SettingsTheme.selection)
-                .padding(.horizontal, 4)
+                .fill(theme.selection)
+                .padding(.horizontal, theme.isModern ? -8 : 4)
                 .opacity(flash ? 1 : 0)
         }
+        .padding(.top, theme.isModern ? 1 : 0)
         .overlay(alignment: indicatorEdge ?? .top) {
             if indicatorEdge != nil {
-                SettingsTheme.green
+                theme.dropLine
                     .frame(height: 2)
                     .clipShape(Capsule())
-                    .padding(.horizontal, 10)
+                    // 10 pt from the card's edges.
+                    .padding(.horizontal, theme.isModern ? -6 : 10)
                     .offset(y: indicatorEdge == .top ? -1 : 1)
             }
         }
@@ -303,7 +341,8 @@ struct QuotaProductRow: View {
             drag.begin(provider)
             return NSItemProvider(object: provider.rawValue as NSString)
         } preview: {
-            QuotaDragPreview(provider: provider, isOn: isOn, status: statusValue)
+            // A drag preview is rendered outside this view's environment.
+            QuotaDragPreview(provider: provider, isOn: isOn, status: statusValue, theme: theme)
         }
     }
 
@@ -337,23 +376,46 @@ struct QuotaProductRow: View {
     }
 }
 
+/// The product's mark in its 22 pt slot. Classic: 18 pt, dimmed when off.
+/// Modern: 15 pt, 86 % ink when on, 45 % when off.
+private struct QuotaRowMark: View {
+    let provider: ProviderRateLimit.Provider
+    let isOn: Bool
+    @Environment(\.settingsTheme) private var theme
+
+    var body: some View {
+        if theme.isModern {
+            ProviderGlyph(provider: provider, size: 15)
+                .foregroundStyle(theme.text.opacity(isOn ? 0.86 : 0.45))
+                .frame(width: 22, height: 22, alignment: .leading)
+        } else {
+            ProviderGlyph(provider: provider, size: 18)
+                .foregroundStyle(isOn ? theme.text : theme.secondaryText)
+                .opacity(isOn ? 1 : 0.72)
+                .frame(width: 22, height: 22)
+        }
+    }
+}
+
 /// Six dots, always visible: the row can be dragged anywhere, the handle says so.
 private struct DragHandle: View {
     let dimmed: Bool
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
+        let color = theme.isModern ? theme.text.opacity(0.5) : theme.tertiaryText
         Canvas { context, _ in
             for x in [2.6, 7.4] {
                 for y in [3.0, 8.0, 13.0] {
                     context.fill(
                         Path(ellipseIn: CGRect(x: x - 1.2, y: y - 1.2, width: 2.4, height: 2.4)),
-                        with: .color(SettingsTheme.tertiaryText)
+                        with: .color(color)
                     )
                 }
             }
         }
         .frame(width: 10, height: 16)
-        .opacity(dimmed ? 0.38 : 0.75)
+        .opacity(dimmed ? (theme.isModern ? 0.4 : 0.38) : (theme.isModern ? 0.8 : 0.75))
         .onHover { inside in
             (inside ? NSCursor.openHand : NSCursor.arrow).set()
         }
@@ -362,9 +424,11 @@ private struct DragHandle: View {
     }
 }
 
-/// The row-start triangle: right when closed, down when open.
+/// The row-start triangle: right when closed, down when open. Same shape and
+/// weight in both styles (the maintainer kept it, design §10 「没动的」).
 struct DisclosureTriangle: View {
     let isOpen: Bool
+    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
         Path { path in
@@ -372,21 +436,24 @@ struct DisclosureTriangle: View {
             path.addLine(to: CGPoint(x: 8, y: 6))
             path.addLine(to: CGPoint(x: 4.3, y: 9.7))
         }
-        .stroke(SettingsTheme.secondaryText, style: StrokeStyle(lineWidth: 1.9, lineCap: .round, lineJoin: .round))
+        .stroke(theme.secondaryText, style: StrokeStyle(lineWidth: 1.9, lineCap: .round, lineJoin: .round))
         .frame(width: 12, height: 12)
         .rotationEffect(.degrees(isOpen ? 90 : 0))
     }
 }
 
+/// Classic: 13 pt, the text color while on. Modern: 11 pt in the secondary
+/// color — only a problem is colored.
 private struct QuotaStatusCell: View {
     let value: (kind: SettingsStatusKind, text: String)
     let isOn: Bool
+    @Environment(\.settingsTheme) private var theme
 
     private var textColor: Color {
         switch value.kind {
-        case .warning: SettingsTheme.amber
-        case .error: SettingsTheme.red
-        case .ok, .none: isOn ? SettingsTheme.text : SettingsTheme.secondaryText
+        case .warning: theme.amber
+        case .error: theme.red
+        case .ok, .none: isOn && !theme.isModern ? theme.text : theme.secondaryText
         }
     }
 
@@ -394,46 +461,83 @@ private struct QuotaStatusCell: View {
         HStack(spacing: 7) {
             SettingsStatusDot(kind: value.kind, dimmed: !isOn)
             Text(value.text)
-                .font(SettingsTheme.body)
+                .font(theme.status)
                 .foregroundStyle(textColor)
                 .lineLimit(1)
         }
-        .frame(width: QuotaProductRow.statusWidth, alignment: .leading)
+        .frame(width: QuotaProductRow.statusWidth(theme), alignment: .leading)
     }
 }
 
 /// What follows the pointer while a row is dragged: the row, lifted.
-private struct QuotaDragPreview: View {
+/// Classic: a raised grey row with a hairline. Modern: the panel's lifted
+/// card — a lighter gradient, a deep soft shadow, a dark outline.
+struct QuotaDragPreview: View {
     let provider: ProviderRateLimit.Provider
     let isOn: Bool
     let status: (kind: SettingsStatusKind, text: String)
+    let theme: SettingsTheme
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
         HStack(spacing: 10) {
-            ProviderGlyph(provider: provider, size: 18)
-                .foregroundStyle(SettingsTheme.text)
-                .frame(width: 22, height: 22)
-            Text(provider.displayName)
-                .font(SettingsTheme.label)
-                .foregroundStyle(SettingsTheme.text)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            QuotaStatusCell(value: status, isOn: isOn)
-            Capsule()
-                .fill(isOn ? SettingsTheme.green : SettingsTheme.switchTrack)
-                .overlay(alignment: isOn ? .trailing : .leading) {
-                    Circle().fill(SettingsTheme.switchKnob).frame(width: 14, height: 14).padding(2)
+            HStack(spacing: theme.isModern ? 0 : 10) {
+                if theme.isModern {
+                    ProviderGlyph(provider: provider, size: 15)
+                        .foregroundStyle(theme.ok)
+                        .frame(width: 22, height: 22, alignment: .leading)
+                } else {
+                    ProviderGlyph(provider: provider, size: 18)
+                        .foregroundStyle(theme.text)
+                        .frame(width: 22, height: 22)
                 }
-                .frame(width: 30, height: 18)
+                Text(provider.displayName)
+                    .font(theme.label)
+                    .foregroundStyle(theme.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            QuotaStatusCell(value: status, isOn: isOn)
+            if theme.isModern {
+                SettingsSwitchTrack(isOn: isOn)
+            } else {
+                // The classic preview's own switch: no knob shadow.
+                Capsule()
+                    .fill(isOn ? theme.ok : Color.white.opacity(0.17))
+                    .overlay(alignment: isOn ? .trailing : .leading) {
+                        Circle().fill(Color(settingsHex: 0xF4F4F4)).frame(width: 14, height: 14).padding(2)
+                    }
+                    .frame(width: 30, height: 18)
+            }
         }
-        .padding(.leading, 20)
-        .padding(.trailing, 18)
-        .frame(width: 440, height: 40)
-        .background(SettingsTheme.raised, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(SettingsTheme.strongLine, lineWidth: 1)
-        )
+        .padding(.leading, theme.isModern ? 16 : 20)
+        .padding(.trailing, theme.isModern ? 14 : 18)
+        .frame(width: theme.isModern ? 420 : 440, height: theme.isModern ? 36 : 40)
+        .background {
+            if theme.isModern {
+                shape.fill(LinearGradient(
+                    colors: [theme.raised, Color(settingsHex: 0x22262B)], startPoint: .top, endPoint: .bottom
+                ))
+                .overlay {
+                    shape.strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                        .mask(LinearGradient(
+                            stops: [.init(color: .white, location: 0), .init(color: .clear, location: 0.1)],
+                            startPoint: .top, endPoint: .bottom
+                        ))
+                }
+                .shadow(color: .black.opacity(0.5), radius: 11, y: 8)
+            } else {
+                shape.fill(theme.raised)
+            }
+        }
+        .overlay {
+            if theme.isModern {
+                shape.inset(by: -1).strokeBorder(Color.black.opacity(0.45), lineWidth: 1)
+            } else {
+                shape.strokeBorder(theme.strongLine, lineWidth: 1)
+            }
+        }
         .environment(\.colorScheme, .dark)
+        .environment(\.settingsTheme, theme)
     }
 }
 
@@ -444,13 +548,14 @@ private struct QuotaRowDropDelegate: DropDelegate {
     let drag: QuotaDragState
     let enabled: [ProviderRateLimit.Provider]
     let disabled: [ProviderRateLimit.Provider]
+    let rowHeight: CGFloat
     let move: @MainActor (ProviderRateLimit.Provider, ProviderRateLimit.Provider?) -> Void
 
     private func target(_ info: DropInfo) -> QuotaReorder.Target {
         QuotaReorder.target(
             dragged: drag.dragged,
             row: row,
-            dropAfter: info.location.y > QuotaProductRow.rowHeight / 2,
+            dropAfter: info.location.y > rowHeight / 2,
             enabled: enabled,
             disabled: disabled
         )
@@ -465,7 +570,7 @@ private struct QuotaRowDropDelegate: DropDelegate {
             if drag.indicator?.provider == row { drag.indicator = nil }
             return DropProposal(operation: .forbidden)
         }
-        let after = info.location.y > QuotaProductRow.rowHeight / 2
+        let after = info.location.y > rowHeight / 2
         if drag.indicator?.provider != row || drag.indicator?.after != after {
             drag.indicator = (row, after)
         }
@@ -507,11 +612,12 @@ private struct QuotaRowDropDelegate: DropDelegate {
 struct ZCodeConfigBlock: View {
     @Environment(AppState.self) private var appState
     @Environment(SettingsModel.self) private var model
+    @Environment(\.settingsTheme) private var theme
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
         @Bindable var model = model
-        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 5) {
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: theme.isModern ? 6 : 5) {
             GridRow {
                 SettingsSegmented(
                     options: ZCodeQuotaRegion.allCases.map { ($0, $0.displayName) },
@@ -524,12 +630,10 @@ struct ZCodeConfigBlock: View {
 
                 if model.showsSavedZCodeKey {
                     HStack(spacing: 6) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(SettingsTheme.green)
+                        SettingsCheckMark()
                         Text("Key 已保存")
-                            .font(SettingsTheme.body)
-                            .foregroundStyle(SettingsTheme.text)
+                            .font(theme.body)
+                            .foregroundStyle(theme.text)
                             .lineLimit(1)
                     }
                     .padding(.leading, 4)
@@ -565,19 +669,24 @@ struct ZCodeConfigBlock: View {
                 }
             }
             if let error = model.zCodeAPIKeyError {
+                // Classic: under the field. Modern: from the line's start.
                 GridRow {
-                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                    if !theme.isModern { Color.clear.gridCellUnsizedAxes([.horizontal, .vertical]) }
                     Text(error)
-                        .font(SettingsTheme.caption)
-                        .foregroundStyle(SettingsTheme.red)
+                        .font(theme.caption)
+                        .foregroundStyle(theme.red)
                         .fixedSize(horizontal: false, vertical: true)
-                        .gridCellColumns(2)
+                        .gridCellColumns(theme.isModern ? 3 : 2)
                 }
             }
         }
-        .padding(12)
+        .padding(theme.isModern ? 0 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SettingsTheme.configBlock, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background {
+            if !theme.isModern {
+                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.configBlock)
+            }
+        }
         .onAppear {
             if model.isReplacingZCodeAPIKey { fieldFocused = true }
         }
@@ -604,6 +713,7 @@ struct ZCodeConfigBlock: View {
 /// sign-in is and does is in the README.
 struct CursorLoginBlock: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.settingsTheme) private var theme
     @State private var confirmingSignOut = false
 
     static let waitingText = "请在浏览器里确认；如果 Cursor 让你去邮箱确认，点完邮件里的链接再回来"
@@ -615,7 +725,7 @@ struct CursorLoginBlock: View {
     private var canSignIn: Bool { login.cliSupportsSignIn == true }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: theme.isModern ? 6 : 8) {
             HStack(alignment: .center, spacing: 8) {
                 state
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -623,14 +733,18 @@ struct CursorLoginBlock: View {
             }
             if let error = login.errorText, login.phase != .waiting {
                 Text(error)
-                    .font(SettingsTheme.caption)
-                    .foregroundStyle(SettingsTheme.red)
+                    .font(theme.caption)
+                    .foregroundStyle(theme.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(12)
+        .padding(theme.isModern ? 0 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(SettingsTheme.configBlock, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background {
+            if !theme.isModern {
+                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.configBlock)
+            }
+        }
         .alert("退出 Cursor 登录？", isPresented: $confirmingSignOut) {
             Button("取消", role: .cancel) {}
             Button("退出", role: .destructive) { login.signOut() }
@@ -644,8 +758,8 @@ struct CursorLoginBlock: View {
         switch login.phase {
         case .signedOut:
             Text("未登录")
-                .font(SettingsTheme.body)
-                .foregroundStyle(SettingsTheme.secondaryText)
+                .font(theme.body)
+                .foregroundStyle(theme.secondaryText)
         case .waiting:
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 ProgressView()
@@ -654,26 +768,25 @@ struct CursorLoginBlock: View {
                     .frame(width: 12, height: 12)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 Text(Self.waitingText)
-                    .font(SettingsTheme.body)
-                    .foregroundStyle(SettingsTheme.text)
+                    .font(theme.body)
+                    .foregroundStyle(theme.text)
+                    .lineSpacing(theme.isModern ? 2 : 0)
                     .fixedSize(horizontal: false, vertical: true)
             }
         case .signedIn(let email):
             HStack(spacing: 6) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(SettingsTheme.green)
+                SettingsCheckMark()
                 Text(email ?? "Cursor 账号")
-                    .font(SettingsTheme.body)
-                    .foregroundStyle(SettingsTheme.text)
+                    .font(theme.body)
+                    .foregroundStyle(theme.text)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .help(email ?? "Cursor 账号")
             }
         case .expired:
             Text("登录已失效")
-                .font(SettingsTheme.body)
-                .foregroundStyle(SettingsTheme.amber)
+                .font(theme.body)
+                .foregroundStyle(theme.amber)
         }
     }
 

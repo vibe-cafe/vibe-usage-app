@@ -285,7 +285,7 @@ final class SettingsModel {
 
     // 数据同步
     var apiKeyDisplay = ""
-    private(set) var hasAPIKey = false
+    var hasAPIKey = false
     /// 「链接」 / 「重新链接」: this window's own device sign-in, the same flow
     /// as the panel's. A link reloads the key line.
     @ObservationIgnored private(set) lazy var relink: DeviceLinkFlow = appState.makeDeviceLink { [weak self] in

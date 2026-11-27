@@ -8,13 +8,22 @@ import SwiftUI
 /// dark, with the content running under a transparent title bar so the
 /// sidebar reaches the top edge. Only the close button is live, as Apple
 /// recommends for settings windows.
+///
+/// Switching the interface style keeps this window and its state: the
+/// SwiftUI content redraws with the other theme, and the window's own
+/// background and button position follow (`followInterfaceStyle`).
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     static let shared = SettingsWindowController()
 
     private var window: NSWindow?
+    private weak var appState: AppState?
     /// Outlives the window: the page it shows is remembered across openings.
     private let navigation = SettingsNavigation()
+
+    private var theme: SettingsTheme {
+        SettingsTheme.of(appState?.interfaceStyle.current ?? .classic)
+    }
 
     /// - Parameter destination: `.lastPage` for the popover's 「设置」, or
     ///   `.quotas(focus:)` from the 订阅配额 strip (gear / grey product tab).
@@ -38,6 +47,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             return
         }
 
+        self.appState = appState
         navigation.resetTransientState()
         navigation.open(
             destination, zCodeKeyConfigured: appState.zCodeAPIKeyConfigured,
@@ -67,7 +77,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.appearance = NSAppearance(named: .darkAqua)
-        window.backgroundColor = SettingsTheme.contentNSColor
+        window.backgroundColor = theme.contentNSColor
         // With a full-size content view the frame is the window's real size
         // (the title bar is drawn over the content), so size by frame.
         window.minSize = size
@@ -82,6 +92,29 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         placeWindowButtons(in: window)
 
         self.window = window
+        followInterfaceStyle()
+    }
+
+    /// Re-applies the window's own background and button position whenever
+    /// the interface style changes while the window exists. One observation
+    /// at a time, however often the window is reopened.
+    private var followsInterfaceStyle = false
+
+    private func followInterfaceStyle() {
+        guard let appState, !followsInterfaceStyle else { return }
+        followsInterfaceStyle = true
+        withObservationTracking {
+            _ = appState.interfaceStyle.current
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.followsInterfaceStyle = false
+                guard let window = self.window else { return }
+                window.backgroundColor = self.theme.contentNSColor
+                self.placeWindowButtons(in: window)
+                self.followInterfaceStyle()
+            }
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -98,12 +131,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     // MARK: - Window buttons
 
-    /// The design centers the window buttons 24 pt below the top edge,
-    /// 22 pt in from the left (over the sidebar, whose items start at 52 pt);
-    /// AppKit's default places them higher for a plain title bar. Only the
-    /// position moves — the buttons stay the system's own. AppKit lays them
-    /// out again on resize and key changes, so those re-apply it.
-    static let windowButtonCenter = CGPoint(x: 22, y: 24)
+    /// The design centers the window buttons over the sidebar (whose items
+    /// start at 52 pt): classic 24 pt below the top edge and 22 pt in, modern
+    /// 22 pt and 26 pt (`SettingsTheme.windowButtonCenter`); AppKit's default
+    /// places them higher for a plain title bar. Only the position moves —
+    /// the buttons stay the system's own. AppKit lays them out again on
+    /// resize and key changes, so those re-apply it.
 
     private func placeWindowButtons(in window: NSWindow) {
         let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton]
@@ -112,11 +145,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let spacing = buttons[1].frame.minX - buttons[0].frame.minX
         guard spacing > 0 else { return }
         let size = first.frame.size
-        let fromTop = Self.windowButtonCenter.y - size.height / 2
+        let center = theme.windowButtonCenter
+        let fromTop = center.y - size.height / 2
         // Stay inside the title bar view: never move a button out of it.
         let y = container.isFlipped ? fromTop : container.bounds.height - fromTop - size.height
         guard y >= 0, y + size.height <= container.bounds.height else { return }
-        let x = Self.windowButtonCenter.x - size.width / 2
+        let x = center.x - size.width / 2
         for (index, button) in buttons.enumerated() {
             button.setFrameOrigin(NSPoint(x: x + CGFloat(index) * spacing, y: y))
         }
