@@ -182,15 +182,12 @@ struct ModernQuotaEmptyState: View {
             .frame(width: ModernTheme.leadingColumnWidth, alignment: .topLeading)
 
             VStack(alignment: .leading, spacing: 0) {
+                // Only the title and the way to Settings; no line explaining
+                // what the card will show (maintainer, 2026-11-27).
                 Text("还没有要看的订阅")
                     .font(ModernTheme.text(13, .medium))
                     .foregroundStyle(ModernTheme.text)
                     .frame(height: 18)
-                Text("在设置里打开后，这里会列出每家还剩多少。")
-                    .font(ModernTheme.text(11))
-                    .foregroundStyle(ModernTheme.secondaryText)
-                    .frame(minHeight: 16)
-                    .padding(.top, 2)
                 Button(action: openSettings) {
                     HStack(spacing: 7) {
                         Text("去设置").font(ModernTheme.text(13))
