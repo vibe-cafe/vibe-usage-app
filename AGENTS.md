@@ -18,6 +18,9 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── InterfaceStyle.swift   # Observable panel and Settings style, rollout and first-launch choice
 │   │   ├── AppConfig.swift        # Version string, API URL, debug/release config
 │   │   ├── UsageBucket.swift      # Codable data model (source, model, project, hostname, tokens, cost) + server-supplied `names`
+│   │   ├── UsagePanelState.swift  # New panel controls, effective filters and subscription-to-tool mapping
+│   │   ├── UsageDisplaySnapshot.swift # New panel totals, series and Token composition at a supplied instant
+│   │   ├── UsageRanking.swift     # Top three, full remainder and rank colors for a single metric
 │   │   ├── Config.swift           # Shared ~/.vibe-usage config; app-owned fields + unknown CLI-field-preserving writes
 │   │   └── SyncHistory.swift      # Last 10 sync summaries (typed fields only) in the app's preferences
 │   ├── Views/
@@ -247,6 +250,13 @@ Multi-day API buckets carry UTC instants for the viewer's local midnight. Daily 
 - `isRefreshingData` → keep the current dashboard visible, dim it, and overlay a small loading pill.
 
 Time-range changes and custom-date Apply refresh both reads. Tool, project and hostname changes refetch only activity, whose union depends on the selected rows. Model changes and all filtering of cost and tokens remain local.
+
+### New panel usage rules (#105, model only)
+`AppState.timeRange` drives the query, panel and menu bar. In #107 call `appState.applyDefaultTimeRange(forModernInterface: appState.interfaceStyle.current == .modern)` before the launch fetch and on an actual style change (modern Today, classic rolling 24H). After a change of period, including a style change that changes it, call `fetchUsageData()` as the classic selector does. Each presentation calls `UsagePanelState.panelDidOpen()` to restore overview, cost and collapsed details. Keep that state for the app session so units and individual card metrics survive reopening.
+
+Use `effectiveFilters` for the terminal, tool and model inputs. Selecting one of several enabled subscriptions replaces the manual tools with its usage source (OpenCode Go maps to `opencode`). Clearing filters preserves the classic project selection and the period. Rebuild on a new response, period or changed effective filters. Hero, unit, disclosure and card metric changes reuse the snapshot.
+
+Build through `AppState.usageDisplaySnapshot(filters:now:)`. It returns nil until the loaded query matches the selected period and custom dates. Today begins at the first matching usage hour. The rolling day includes the first partial UTC hour. 90D and custom ranges over 60 local days group backward from the last included day, leaving any short group at the start. For #103/#115 pass hourly or daily seconds keyed by their start instant to `snapshot.grid.sums(_:)` for the same slots as cost and Tokens. Each ranking row carries its fraction of the metric total. The modern Chinese Token formatter uses 万 and 亿.
 
 ### Chart Hover & Scroll
 `BarChartView` is split into a parent that computes the O(n) `chartData`

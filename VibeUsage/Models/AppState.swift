@@ -91,6 +91,7 @@ final class AppState {
     var isLoadingData: Bool = false
     var hasLoadedUsageData: Bool = false
     private var usageFetchGeneration: UInt = 0
+    private var loadedUsageRange: UsageQueryRange?
 
     var isInitialDataLoad: Bool {
         isLoadingData && !hasLoadedUsageData && buckets.isEmpty
@@ -203,9 +204,13 @@ final class AppState {
     }
 
     var currentQueryRange: UsageQueryRange {
+        queryRange(at: Date())
+    }
+
+    private func queryRange(at now: Date) -> UsageQueryRange {
         switch timeRange {
         case .today:
-            return .from(Calendar.current.startOfDay(for: Date()))
+            return .from(Calendar.current.startOfDay(for: now))
         case .oneDay:
             return .days(1)
         case .sevenDays:
@@ -218,6 +223,17 @@ final class AppState {
             let bounds = normalizedCustomRange
             return .custom(from: bounds.from, to: bounds.to)
         }
+    }
+
+    /// Apply at launch before the first fetch, and whenever the interface style changes.
+    func applyDefaultTimeRange(forModernInterface modern: Bool) {
+        timeRange = modern ? .today : .oneDay
+    }
+
+    func usageDisplaySnapshot(filters: UsagePanelFilters, now: Date) -> UsageDisplaySnapshot? {
+        guard let loadedUsageRange, loadedUsageRange == queryRange(at: now) else { return nil }
+        return UsageDisplaySnapshot(buckets: buckets, dataRange: loadedUsageRange, filters: filters,
+                                    modelName: modelName, toolName: toolName, now: now)
     }
 
     var visibleDayCount: Int {
@@ -393,6 +409,7 @@ final class AppState {
             // the Settings preview have figures to display.
             if ProcessInfo.processInfo.environment["VIBE_USAGE_SAMPLE_USAGE"] == "1" {
                 self.buckets = Self.sampleUsageBuckets()
+                self.loadedUsageRange = currentQueryRange
             }
             if !selectedQuotaProviders.isEmpty {
                 startRateLimitCoordinator()
@@ -499,6 +516,7 @@ final class AppState {
             hasLoadedUsageData = false
             isLoadingData = false
             hasAnyData = false
+            loadedUsageRange = nil
             buckets = []
             usageNames = nil
         }
@@ -604,6 +622,7 @@ final class AppState {
             withAnimation(.easeInOut(duration: 0.25)) {
                 buckets = response.buckets
                 hasAnyData = response.hasAnyData
+                loadedUsageRange = queryRange
                 usageNames = response.names
             }
         } catch {
