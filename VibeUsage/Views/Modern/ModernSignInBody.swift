@@ -63,7 +63,7 @@ struct ModernSignInBody: View {
         }
         .padding(.top, 3)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(height: ModernTheme.recentUsageBodyHeight, alignment: .top)
+        .frame(height: ModernTheme.cardBodyHeight, alignment: .top)
     }
 
     /// The step's one line: 13 pt, primary.

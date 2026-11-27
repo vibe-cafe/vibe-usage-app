@@ -20,24 +20,24 @@ struct RecentUsageCardTests {
         private let host: NSHostingView<AnyView>
         private let box: Box
 
-        init(_ state: AppState, onActivityNumber: (@MainActor (String?) -> Void)? = nil) {
+        init(_ state: AppState, onActivityNumbers: (@MainActor (RecentUsageActivityShown) -> Void)? = nil) {
             var preview = RecentUsagePreview()
             let box = Box()
             preview.onShow = { box.value = $0 }
-            preview.onActivityNumber = onActivityNumber
+            preview.onActivityNumbers = onActivityNumbers
             self.box = box
             host = NSHostingView(rootView: AnyView(
                 ModernRecentUsageBody()
                     .environment(state)
                     .environment(\.recentUsagePreview, preview)
-                    .frame(width: 464, height: ModernTheme.recentUsageBodyHeight)
+                    .frame(width: 464, height: ModernTheme.cardBodyHeight)
             ))
             host.sizingOptions = []
-            window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 464, height: 116),
+            window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 464, height: ModernTheme.cardBodyHeight),
                               styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = host
-            host.frame = NSRect(x: 0, y: 0, width: 464, height: 116)
+            host.frame = NSRect(x: 0, y: 0, width: 464, height: ModernTheme.cardBodyHeight)
         }
 
         private final class Box { var value: RecentUsageShown? }
@@ -117,7 +117,7 @@ struct RecentUsageCardTests {
                 let isCodex = filters.sources == ["codex"]
                 if isCodex { await withCheckedContinuation { codex = $0 } }
                 let seconds = (isCodex ? 17 : 9) * 60
-                return UsageActivity(activeSeconds: seconds, workSeconds: seconds, parallel: 1, series: [],
+                return UsageActivity(activeSeconds: seconds, workSeconds: 2 * seconds, parallel: 2, series: [],
                                      firstBucketStart: "2020-01-01T00:00:00Z")
             },
             quotaDefaults: UserDefaults(suiteName: suite)!,
@@ -127,21 +127,23 @@ struct RecentUsageCardTests {
         state.filters.sources = ["claude-code"]
         await state.fetchUsageData()
         try await waitForDashboard { state.activity != nil }
-        var displayed: [String?] = []
+        // AI 工时 comes with active time and loads with it.
+        var displayed: [RecentUsageActivityShown] = []
         let card = Card(state) { displayed.append($0) }
         _ = try await card.update()
-        #expect(displayed.last == "9m")
+        #expect(displayed.last == RecentUsageActivityShown(active: "9m", work: "18m"))
         state.modernPanel.selectedSubscription = .codex
         try await waitForDashboard { codex != nil }
         _ = try await card.update()
-        #expect(displayed == ["9m", nil])
+        #expect(displayed == [RecentUsageActivityShown(active: "9m", work: "18m"),
+                              RecentUsageActivityShown(active: nil, work: nil)])
         codex?.resume()
         try await waitForDashboard { state.activity != nil }
         _ = try await card.update()
-        #expect(displayed.last == "17m")
+        #expect(displayed.last == RecentUsageActivityShown(active: "17m", work: "34m"))
         state.modernPanel.selectedSubscription = nil
         try await waitForDashboard { state.activity != nil }
         _ = try await card.update()
-        #expect(displayed.last == "9m")
+        #expect(displayed.last == RecentUsageActivityShown(active: "9m", work: "18m"))
     }
 }

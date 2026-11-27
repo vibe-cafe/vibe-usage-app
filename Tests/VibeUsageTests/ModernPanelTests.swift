@@ -486,12 +486,13 @@ struct ModernPanelHeightReportTests {
         window.contentView = host
 
         host.layoutSubtreeIfNeeded()
-        // Header 40 + 概览 row 46 + cards 208 + 8 + 176 + footer 38 (131a).
-        #expect(reports.last == 516)
+        // Header 40 + 概览 row 46 + cards 208 + 8 + 208 + footer 38 (131a):
+        // the two cards stand the same height.
+        #expect(reports.last == 548)
 
         fixture.state.modernPanel.detailsExpanded = true
         host.layoutSubtreeIfNeeded()
-        #expect(reports.last == 1_036)
+        #expect(reports.last == 1_068)
 
         layout.maxHeight = 700  // a short screen: the middle scrolls
         host.layoutSubtreeIfNeeded()
@@ -499,7 +500,40 @@ struct ModernPanelHeightReportTests {
 
         fixture.state.modernPanel.panelDidOpen()
         host.layoutSubtreeIfNeeded()
-        #expect(reports.last == 516)
+        #expect(reports.last == 548)
+    }
+
+    /// The collapsed cards stand the same height whatever 订阅配额 shows:
+    /// two, three or four subscriptions, one of them opened, or none (no
+    /// 概览 row then: 4 pt instead of 46).
+    @Test @MainActor
+    func theQuotaCardKeepsTheSharedHeightInEveryCollapsedState() throws {
+        _ = NSApplication.shared
+        let cases: [(PanelScene, CGFloat)] = [
+            (PanelScene(id: "four", title: "4"), 548),
+            (PanelScene(id: "two", title: "2", subscriptions: [.codex, .claudeCode]), 548),
+            (PanelScene(id: "three", title: "3", subscriptions: [.claudeCode, .codex, .cursor]), 548),
+            (PanelScene(id: "opened", title: "Codex", selected: .codex), 548),
+            (PanelScene(id: "one", title: "1", subscriptions: [.claudeCode]), 506),
+            (PanelScene(id: "none", title: "0", subscriptions: []), 506),
+        ]
+        for (scene, expected) in cases {
+            let fixture = PanelFixture(scene)
+            defer { fixture.tearDown() }
+            var reports: [CGFloat] = []
+            let root = PanelRootView(layout: ModernPanelLayout()) { reports.append($0) }
+                .environment(fixture.state)
+                .environmentObject(fixture.updater)
+            let host = NSHostingView(rootView: root)
+            host.sizingOptions = [.minSize, .maxSize]
+            let window = NSWindow(
+                contentRect: NSRect(x: -20_000, y: -20_000, width: 520, height: 620),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+            #expect(reports.last == expected, "\(scene.id)")
+        }
     }
 }
 

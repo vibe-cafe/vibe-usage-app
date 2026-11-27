@@ -123,7 +123,8 @@ struct ModernQuotaRing<Center: View>: View {
     var isEmpty = false
     @ViewBuilder var center: Center
 
-    static var size: CGFloat { 148 }
+    /// The card body's height, which 近期消耗 shares.
+    static var size: CGFloat { ModernTheme.cardBodyHeight }
 
     var body: some View {
         ZStack {

@@ -236,7 +236,9 @@ struct ModernQuotaEmptyState: View {
             .padding(.top, 3)
             Spacer(minLength: 0)
         }
-        .frame(height: 112, alignment: .top)
+        // The shared card body, like 近期消耗 beside it; the content keeps
+        // the overview's top line.
+        .frame(height: ModernTheme.cardBodyHeight, alignment: .top)
     }
 }
 
@@ -273,11 +275,11 @@ struct ModernQuotaOverview: View {
     let overview: QuotaOverviewDisplay
     let select: (ProviderRateLimit.Provider) -> Void
 
-    /// Four lines (four subscriptions, or three and 「其余 N 个」) fill the
-    /// 148 pt ring height; two or three take 112 (132a, 132b).
-    private var height: CGFloat {
-        overview.rows.count + (overview.remainder == nil ? 0 : 1) > 3 ? 148 : 112
-    }
+    /// The shared card body, as tall as 近期消耗 (maintainer 2026-11-27):
+    /// four lines (four subscriptions, or three and 「其余 N 个」) fill it;
+    /// two or three run from the top and leave the rest below them, while
+    /// 快用完 / 偏快 stay at the bottom of the left column (132a, 132b).
+    private var height: CGFloat { ModernTheme.cardBodyHeight }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
