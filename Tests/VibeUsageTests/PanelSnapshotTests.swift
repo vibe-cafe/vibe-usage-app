@@ -108,6 +108,8 @@ struct PanelScene {
     var maxHeight: CGFloat = .infinity
     /// The device sign-in's step (unlinked scenes).
     var signIn: SignIn = .idle
+    /// 近期消耗's data, period, filters, units and forced hover (linked scenes).
+    var usage = RecentUsageScene()
 
     enum SignIn: String {
         /// 「登录并链接数据」.
@@ -139,7 +141,69 @@ struct PanelScene {
         PanelScene(id: "136k-asking", title: "登录：验证码还没拿到", linked: false, lastSyncMinutesAgo: nil, signIn: .asking),
         PanelScene(id: "136l", title: "登录没成功：原因和重新登录", linked: false, lastSyncMinutesAgo: nil, signIn: .failed),
         PanelScene(id: "overflow", title: "展开后超过屏幕：顶栏底栏固定、中间滚动", expanded: true, maxHeight: 640),
-    ]
+    ] + recentUsageScenes
+
+    /// 近期消耗 (134a–134s) and a few states the design did not draw.
+    static let recentUsageScenes: [PanelScene] = {
+        func scene(_ id: String, _ title: String, _ usage: RecentUsageScene, selected: ProviderRateLimit.Provider? = nil) -> PanelScene {
+            PanelScene(id: id, title: title, selected: selected, usage: usage)
+        }
+        let codex = FilterState(sources: ["codex"])
+        return [
+            scene("134a", "平时：今天", .init()),
+            scene("134b", "鼠标停在曲线上", .init(preview: .init(hoveredSlot: 2))),
+            scene("134c", "24H：鼠标停在昨晚", .init(range: .oneDay, preview: .init(hoveredSlot: 6))),
+            scene("134d", "7D：一天一个点", .init(range: .sevenDays)),
+            scene("134e", "筛选菜单：四行", .init(preview: .init(menu: .some(nil)))),
+            scene("134f", "工具那一行，选了 Codex", .init(range: .sevenDays, filters: codex, preview: .init(menu: .tool))),
+            scene("134g", "选好以后：7D、Codex", .init(range: .sevenDays, filters: codex)),
+            scene("134h", "自定义日期", .init(range: .custom, preview: .init(menu: .time))),
+            scene("134i", "自定义日期选好以后", .init(range: .custom)),
+            scene("134j", "工具多选：Codex +1", .init(filters: FilterState(sources: ["codex", "cursor"]),
+                                                  preview: .init(menu: .tool))),
+            scene("134k", "模型按家族分组", .init(filters: FilterState(models: ["Opus 5.5", "Sonnet 5.5"]),
+                                                  preview: .init(menu: .model, expandedFamilies: ["claude"]))),
+            scene("134l", "Token 当大数字，悬停看细分", .init(hero: .token, preview: .init(hoveredSlot: 5))),
+            scene("134m", "活跃当大数字", .init(hero: .activeTime)),
+            scene("134n", "费用换成人民币", .init(cny: true)),
+            scene("134o", "Token 换成万、亿", .init(hero: .token, chineseTokens: true)),
+            scene("134p", "鼠标停在大数字上", .init(preview: .init(heroHovered: true))),
+            scene("134q", "第一次打开，还没读出来", .init(loading: .initial)),
+            scene("134r", "换了周期，旧的变淡", .init(loading: .switching(.sevenDays))),
+            scene("134s", "这段时间没有用量", .init(empty: true)),
+            scene("134-active-hover", "活跃当大数字，悬停看 AI 工时", .init(hero: .activeTime, preview: .init(hoveredSlot: 1))),
+            scene("134-active-row", "悬停小数字「活跃」", .init(preview: .init(activityHovered: true))),
+            scene("134-active-hero-hover", "活跃当大数字，悬停大数字", .init(hero: .activeTime, preview: .init(heroHovered: true))),
+            scene("134-90d", "90D：按周", .init(range: .ninetyDays)),
+            scene("134-30d", "30D", .init(range: .thirtyDays, hero: .token)),
+            scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
+            scene("134-chips", "条件很多时标题那一行", .init(
+                range: .custom,
+                filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
+            )),
+        ]
+    }()
+}
+
+/// What 近期消耗 shows in a scene.
+struct RecentUsageScene {
+    var range: TimeRange = .today
+    var hero: ChartMode = .cost
+    var cny = false
+    var chineseTokens = false
+    var filters = FilterState()
+    /// No usage in the period (134s).
+    var empty = false
+    var loading: Loading = .none
+    var preview = RecentUsagePreview()
+
+    enum Loading {
+        case none
+        /// The first read has not answered (134q).
+        case initial
+        /// Loaded, then switched to another period that has not answered (134r).
+        case switching(TimeRange)
+    }
 }
 
 /// An AppState (and updater) holding a scene's data.
@@ -147,7 +211,13 @@ struct PanelScene {
 final class PanelFixture {
     let state: AppState
     let updater = UpdaterViewModel()
-    private let scene: PanelScene
+    let scene: PanelScene
+    private let reads: FixtureReads
+    private var pending: [Task<Void, Never>] = []
+    /// Runs once the rendered view has laid out with the loaded data: the
+    /// switch to a period that is still loading (134r) must find the view
+    /// already showing the previous one.
+    private(set) var afterFirstLayout: (@MainActor () async throws -> Void)?
     private let defaults: UserDefaults
     private let suite: String
 
@@ -161,10 +231,19 @@ final class PanelFixture {
             defaults.set(now.addingTimeInterval(-minutes * 60), forKey: AppState.lastSuccessfulSyncKey)
         }
         let config = scene.linked ? VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test") : nil
+        let reads = FixtureReads(empty: scene.usage.empty)
+        self.reads = reads
         state = AppState(
             initialConfig: config,
             loadConfig: { config },
-            usageFetcher: { _, _, _ in throw URLError(.notConnectedToInternet) },
+            usageFetcher: { _, _, range in
+                try await reads.waitIfHanging()
+                return RecentUsageFixtures.response(for: range, empty: reads.empty)
+            },
+            activityFetcher: { _, _, range, _ in
+                try await reads.waitIfHanging()
+                return RecentUsageFixtures.activity(for: range, empty: reads.empty)
+            },
             quotaDefaults: defaults,
             zCodeAPIKeyStore: FixtureZCodeKeys(),
             quotaProductDiscoverer: {
@@ -190,9 +269,14 @@ final class PanelFixture {
         if scene.hasUpdate { updater.availableUpdate = SUAppcastItem.empty() }
     }
 
-    /// Walks the sign-in to the scene's step against the fixture server.
+    /// Loads 近期消耗's data (or leaves a read hanging), or walks the
+    /// sign-in to the scene's step against the fixture server.
     func prepare() async throws {
-        guard !scene.linked, scene.signIn != .idle else { return }
+        if scene.linked {
+            try await prepareUsage()
+            return
+        }
+        guard scene.signIn != .idle else { return }
         state.deviceLink.start()
         for _ in 0..<200 {
             switch (scene.signIn, state.deviceLink.phase) {
@@ -203,9 +287,80 @@ final class PanelFixture {
         Issue.record("sign-in did not reach \(scene.signIn)")
     }
 
+    private func prepareUsage() async throws {
+        let usage = scene.usage
+        let custom = RecentUsageFixtures.customRange
+        state.customRangeFrom = custom.from
+        state.customRangeTo = custom.to
+        state.filters = usage.filters
+        state.modernPanel.hero = usage.hero
+        if usage.cny {
+            state.modernPanel.hero = .cost
+            state.modernPanel.usage.toggleHeroUnit()
+        }
+        if usage.chineseTokens {
+            state.modernPanel.hero = .token
+            state.modernPanel.usage.toggleHeroUnit()
+        }
+        state.modernPanel.hero = usage.hero
+        switch usage.loading {
+        case .none:
+            state.timeRange = usage.range
+            await state.fetchUsageData()
+            try await waitFor { self.state.activity != nil }
+        case .initial:
+            state.timeRange = usage.range
+            reads.hangs = true
+            pending.append(Task { await self.state.fetchUsageData() })
+            try await waitFor { self.state.isLoadingData }
+        case .switching(let next):
+            state.timeRange = usage.range
+            await state.fetchUsageData()
+            try await waitFor { self.state.activity != nil }
+            afterFirstLayout = { [self] in
+                reads.hangs = true
+                state.timeRange = next
+                pending.append(Task { await self.state.fetchUsageData() })
+                try await waitFor { self.state.isLoadingData }
+            }
+        }
+    }
+
+    private func waitFor(_ condition: @escaping @MainActor () -> Bool) async throws {
+        for _ in 0..<400 where !condition() {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        try #require(condition())
+    }
+
     func tearDown() {
+        pending.forEach { $0.cancel() }
+        reads.release()
         state.deviceLink.cancel()
         defaults.removePersistentDomain(forName: suite)
+    }
+}
+
+/// The fixture server's reads: answered at once, or left hanging until the
+/// scene is torn down (a read still loading).
+@MainActor
+private final class FixtureReads: Sendable {
+    let empty: Bool
+    var hangs = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(empty: Bool) { self.empty = empty }
+
+    func waitIfHanging() async throws {
+        guard hangs else { return }
+        await withCheckedContinuation { waiters.append($0) }
+        throw CancellationError()
+    }
+
+    func release() {
+        hangs = false
+        waiters.forEach { $0.resume() }
+        waiters = []
     }
 }
 
@@ -262,9 +417,12 @@ enum PanelSnapshot {
     /// number `MenuBarController` would size the window to), then draws it at
     /// that height with the window's 16 pt corners and shadow.
     static func render(fixture: PanelFixture, maxHeight: CGFloat, scale: CGFloat = 2) async throws -> Data {
+        var preview = fixture.scene.usage.preview
+        preview.now = RecentUsageFixtures.now
         let reported = HeightBox()
         let measuring = ModernPanelView(maxHeight: maxHeight) { reported.value = $0 }
             .environment(fixture.state)
+            .environment(\.recentUsagePreview, preview)
             .environmentObject(fixture.updater)
         let probe = OffscreenHost(measuring, size: CGSize(width: ModernTheme.panelWidth, height: 2_000))
         for _ in 0..<40 where reported.value == nil {
@@ -275,6 +433,7 @@ enum PanelSnapshot {
 
         let framed = ModernPanelView(maxHeight: maxHeight)
             .environment(fixture.state)
+            .environment(\.recentUsagePreview, preview)
             .environmentObject(fixture.updater)
             .frame(width: ModernTheme.panelWidth, height: height)
             .clipShape(RoundedRectangle(cornerRadius: ModernTheme.panelCornerRadius, style: .continuous))
@@ -289,6 +448,11 @@ enum PanelSnapshot {
         let host = OffscreenHost(framed, size: size)
         try await host.settle()
         try await host.settle()
+        if let action = fixture.afterFirstLayout {
+            try await action()
+            try await host.settle()
+            try await host.settle()
+        }
         return try host.png(scale: scale)
     }
 }

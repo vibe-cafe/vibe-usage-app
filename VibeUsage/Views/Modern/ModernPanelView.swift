@@ -44,8 +44,9 @@ struct PanelRootView: View {
 
 /// The new panel (design 131, 136): header, 概览 row, 订阅配额 and 近期消耗
 /// cards, footer. Without a linked account 近期消耗 holds the sign-in
-/// (136j–136l). Card contents, the round buttons and the details cards are
-/// filled in by later tickets.
+/// (136j–136l); with one, the figures, the curve and the filter menu (134).
+/// The quota card's contents, the round buttons and the details cards are
+/// filled in by their own tickets.
 struct ModernPanelView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
@@ -55,6 +56,8 @@ struct ModernPanelView: View {
     @State private var headerHeight: CGFloat?
     @State private var footerHeight: CGFloat?
     @State private var contentHeight: CGFloat?
+    /// 近期消耗's filter menu, drawn over the whole panel.
+    @State private var filterMenu = UsageFilterMenuState()
 
     private var enabled: [ProviderRateLimit.Provider] { appState.quotaCardProviders }
 
@@ -95,6 +98,9 @@ struct ModernPanelView: View {
             ModernFooterBar()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
+        .coordinateSpace(.named(UsageFilterMenuState.space))
+        .overlay { UsageFilterMenuOverlay() }
+        .environment(filterMenu)
         .frame(width: ModernTheme.panelWidth)
         // The window, sized by `MenuBarController` from `preferredHeight`,
         // decides the height; the content stays pinned to the top and never
@@ -132,10 +138,10 @@ struct ModernPanelView: View {
             }
 
             ModernCard(title: "近期消耗") {
-                EmptyView()
+                if appState.isConfigured { RecentUsageControls() }
             } content: {
                 if appState.isConfigured {
-                    Color.clear.frame(height: ModernTheme.recentUsageBodyHeight)
+                    ModernRecentUsageBody()
                 } else {
                     // Not linked: the same card walks through the sign-in.
                     ModernSignInBody()

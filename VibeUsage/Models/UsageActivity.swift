@@ -40,7 +40,7 @@ struct ActivityTime: Equatable {
 }
 
 /// Keys match the classic chart: UTC hours or Gregorian days in the viewer's time zone.
-struct ActivityReport {
+struct ActivityReport: Equatable {
     let summary: ActivityTime?
     private let coverageHint: String?
     var summaryHelp: String {
@@ -49,14 +49,25 @@ struct ActivityReport {
     }
     private let firstKey: String?
     private var periods: [String: ActivityTime] = [:]
+    /// Hour periods (today, 24H) or day periods (every longer range).
+    let isHourly: Bool
+    /// The new panel's curve (`UsagePlotGrid.sums`): active and work seconds
+    /// keyed by each period's start instant.
+    private(set) var activeSecondsByStart: [Date: Int] = [:]
+    private(set) var workSecondsByStart: [Date: Int] = [:]
+    /// The first recorded instant; nil when nothing was recorded. Periods
+    /// before it are unknown, later ones without a period were idle.
+    let firstRecorded: Date?
 
     init(_ response: UsageActivity, rangeStart: Date, hourly: Bool, timeZone: TimeZone = .current) {
         func key(_ iso: String) -> String {
             hourly ? String(iso.prefix(13)) : Formatters.localDayKey(iso, timeZone: timeZone)
         }
+        isHourly = hourly
         firstKey = response.firstBucketStart.map(key)
         let start = response.since.flatMap(Formatters.dateFromISO8601) ?? rangeStart
         let first = response.firstBucketStart.flatMap(Formatters.dateFromISO8601)
+        firstRecorded = first
         let partial = first.map { $0 > start } ?? false
         if first == nil || (partial && response.workSeconds == 0) {
             summary = nil
@@ -73,6 +84,10 @@ struct ActivityReport {
                 : nil
             periods[key(period.periodStart)] = ActivityTime(activeSeconds: period.activeSeconds,
                                                            workSeconds: period.workSeconds, parallel: parallel)
+            if let date = Formatters.dateFromISO8601(period.periodStart) {
+                activeSecondsByStart[date, default: 0] += period.activeSeconds
+                workSecondsByStart[date, default: 0] += period.workSeconds
+            }
         }
     }
 
