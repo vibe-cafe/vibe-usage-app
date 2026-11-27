@@ -300,6 +300,9 @@ struct PanelScene {
                                                                        singleCustomDay: true, preview: .init(hoveredSlot: 15))),
             scene("134-unavailable", "读取失败：数字写「—」，不画曲线", .init(loading: .failed)),
             scene("134-active-missing", "活跃当大数字，活跃时长没读到：不印峰值", .init(hero: .activeTime, activityFails: true)),
+            scene("134-subscription-active-row", "点进 Codex：活跃小数字读取中", .init(loading: .subscription(.codex))),
+            scene("134-subscription-active-hero", "点进 Codex：活跃大数字读取中",
+                  .init(hero: .activeTime, loading: .subscription(.codex))),
             scene("134-chips", "条件很多时标题那一行；所选模型没用量时活跃照画", .init(
                 range: .custom, hero: .activeTime,
                 filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
@@ -430,6 +433,8 @@ struct RecentUsageScene {
         case initial
         /// Loaded, then switched to another period that has not answered (134r).
         case switching(TimeRange)
+        /// Open a subscription while its activity read is held.
+        case subscription(ProviderRateLimit.Provider)
         /// The first read failed.
         case failed
     }
@@ -550,10 +555,15 @@ final class PanelFixture {
         }
         state.modernPanel.hero = usage.hero
         switch usage.loading {
-        case .none:
+        case .none, .subscription:
             state.timeRange = usage.range
             await state.fetchUsageData()
             if !usage.activityFails { try await waitFor { self.state.activity != nil } }
+            if case .subscription(let provider) = usage.loading {
+                reads.hangs = true
+                state.modernPanel.selectedSubscription = provider
+                #expect(state.isLoadingActivity && state.activity == nil)
+            }
         case .initial:
             state.timeRange = usage.range
             reads.hangs = true

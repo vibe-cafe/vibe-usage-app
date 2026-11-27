@@ -11,6 +11,7 @@ struct RecentUsagePreview {
     var expandedFamilies: Set<String> = []
     /// View tests: what the card settled on after each update.
     var onShow: (@MainActor (RecentUsageShown) -> Void)?
+    var onActivityNumber: (@MainActor (String?) -> Void)?
 }
 
 /// What 近期消耗 drew, reported to view tests.
@@ -97,7 +98,12 @@ struct ModernRecentUsageBody: View {
         content
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .frame(height: ModernTheme.recentUsageBodyHeight, alignment: .top)
-            .onChange(of: rebuildKey, initial: true) { rebuild() }
+            .onChange(of: rebuildKey, initial: true) { previous, current in
+                if previous.filters.sources != current.filters.sources || previous.filters.hostnames != current.filters.hostnames {
+                    activity = nil
+                }
+                rebuild()
+            }
             .onChange(of: appState.activity) { _, latest in
                 if !isFaded { activity = latest }
             }
@@ -162,9 +168,13 @@ struct ModernRecentUsageBody: View {
                                        isInteractive: !faded)
                         .opacity(faded ? 0.38 : 1)
                         .zIndex(1)
-                    RecentUsagePlot(chart: makeChart(snapshot, hero: hero, units: units), isFaded: faded,
-                                    isLoading: faded, initialHover: preview.hoveredSlot)
-                        .id(hero)
+                    if hero == .activeTime && activity == nil && appState.isLoadingActivity {
+                        RecentUsageLoadingPlot(showsLabel: true)
+                    } else {
+                        RecentUsagePlot(chart: makeChart(snapshot, hero: hero, units: units), isFaded: faded,
+                                        isLoading: faded, initialHover: preview.hoveredSlot)
+                            .id(hero)
+                    }
                 }
             }
         }
@@ -252,16 +262,24 @@ private struct RecentUsageNumbers: View {
             heroHovered = preview.heroHovered
             activityHovered = preview.activityHovered
         }
+        .onChange(of: activityValue, initial: true) { _, value in preview.onActivityNumber?(value) }
     }
 
     private var heroButton: some View {
-        Button {
+        let value = number(hero)
+        return Button {
             appState.modernPanel.usage.toggleHeroUnit()
         } label: {
-            RecentUsageBigNumber(
-                parts: RecentUsageNumber.parts(figures.text(hero), dropsCentsFromHundred: hero == .cost),
-                isMuted: isEmpty
-            )
+            Group {
+                if let value {
+                    RecentUsageBigNumber(
+                        parts: RecentUsageNumber.parts(value, dropsCentsFromHundred: hero == .cost),
+                        isMuted: isEmpty
+                    )
+                } else {
+                    RecentUsageHeroPlaceholder()
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -275,7 +293,16 @@ private struct RecentUsageNumbers: View {
                     .allowsHitTesting(false)
             }
         }
-        .accessibilityLabel("\(RecentUsageFigures.label(hero)) \(figures.text(hero))")
+        .accessibilityLabel("\(RecentUsageFigures.label(hero)) \(value ?? "加载中")")
+    }
+
+    /// A missing value draws a loading block. A finished read can show 「—」.
+    private var activityValue: String? {
+        activity == nil && appState.isLoadingActivity ? nil : figures.text(.activeTime)
+    }
+
+    private func number(_ metric: ChartMode) -> String? {
+        metric == .activeTime ? activityValue : figures.text(metric)
     }
 
     /// 134p: the exact figure and what a click does; for active time, the
@@ -293,8 +320,7 @@ private struct RecentUsageNumbers: View {
         Button {
             appState.modernPanel.hero = metric
         } label: {
-            RecentUsageRowLabel(title: RecentUsageFigures.rowLabel(metric), value: figures.text(metric),
-                                isMuted: isEmpty)
+            RecentUsageRowLabel(title: RecentUsageFigures.rowLabel(metric), value: number(metric), isMuted: isEmpty)
         }
         .buttonStyle(.plain)
         .disabled(!isInteractive)
@@ -368,7 +394,7 @@ private struct RecentUsageBigNumber: View {
 /// A small row: 11 pt label in a 36 pt column, the value at 13 pt.
 private struct RecentUsageRowLabel: View {
     let title: String
-    let value: String
+    let value: String?
     var isMuted = false
     @State private var isHovered = false
     @Environment(\.isEnabled) private var isEnabled
@@ -379,10 +405,17 @@ private struct RecentUsageRowLabel: View {
                 .font(ModernTheme.text(11))
                 .foregroundStyle(isHovered && isEnabled ? ModernTheme.text : ModernTheme.secondaryText)
                 .frame(width: 36, alignment: .leading)
-            RecentUsageWords(value, spacing: 4.5)
-                .font(ModernTheme.mono(13, .medium))
-                .foregroundStyle(isMuted ? ModernTheme.secondaryText : ModernTheme.text)
-                .lineLimit(1)
+            if let value {
+                RecentUsageWords(value, spacing: 4.5)
+                    .font(ModernTheme.mono(13, .medium))
+                    .foregroundStyle(isMuted ? ModernTheme.secondaryText : ModernTheme.text)
+                    .lineLimit(1)
+            } else {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(ModernTheme.placeholder)
+                    .frame(width: 42, height: 10)
+                    .accessibilityLabel("加载中")
+            }
         }
         .frame(height: 18)
         .contentShape(Rectangle())
@@ -763,17 +796,23 @@ private struct RecentUsageLoadingLabel: View {
 }
 
 /// 134q: gray blocks where the numbers will be.
+private struct RecentUsageHeroPlaceholder: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(ModernTheme.placeholder)
+            .frame(width: 108, height: 32)
+            .padding(.bottom, 5)
+            .frame(height: 44, alignment: .bottom)
+    }
+}
+
 private struct RecentUsageLoadingNumbers: View {
     let hero: ChartMode
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(ModernTheme.placeholder)
-                    .frame(width: 108, height: 32)
-                    .padding(.bottom, 5)
-                    .frame(height: 44, alignment: .bottom)
+                RecentUsageHeroPlaceholder()
                 Text(RecentUsageFigures.label(hero))
                     .font(ModernTheme.text(11))
                     .foregroundStyle(ModernTheme.secondaryText)

@@ -31,10 +31,18 @@ final class ModernPanelState {
     /// Escape handling (`MenuBarController`) can close it first.
     let filterMenu = UsageFilterMenuState()
 
+    /// A navigation click. A real open resets `usage` separately so the
+    /// dashboard's ordinary read can also serve the restored overview.
+    @ObservationIgnored var onSubscriptionSelection: (() -> Void)?
+
     /// The subscription opened from its round button; nil is 概览.
     var selectedSubscription: ProviderRateLimit.Provider? {
         get { usage.selectedSubscription }
-        set { usage.selectedSubscription = newValue }
+        set {
+            guard newValue != usage.selectedSubscription else { return }
+            usage.selectedSubscription = newValue
+            onSubscriptionSelection?()
+        }
     }
 
     /// The big number of 近期消耗.
