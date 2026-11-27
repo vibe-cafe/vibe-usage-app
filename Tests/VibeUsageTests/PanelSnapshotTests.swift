@@ -79,9 +79,12 @@ struct PanelSnapshotTests {
             let usage: PanelUsage
             var open: UsageRanking.Dimension?
             var faded = false
+            /// The height of a scrolling area around the grid (a short screen).
+            var viewport: CGFloat?
         }
         let crops = [
             Crop(id: "135d", usage: .today, open: .model),
+            Crop(id: "135d-viewport", usage: .today, open: .model, viewport: 252),
             Crop(id: "135d-up", usage: .many, open: .tool),
             Crop(id: "135d-scroll", usage: .many, open: .model),
             Crop(id: "135-faded", usage: .today, faded: true),
@@ -100,7 +103,8 @@ struct PanelSnapshotTests {
                     state.isLoadingData = true
                 }
             }
-            let png = try await PanelSnapshot.renderDetails(fixture: fixture, openRemainder: crop.open, change: fade)
+            let png = try await PanelSnapshot.renderDetails(fixture: fixture, openRemainder: crop.open,
+                                                            viewport: crop.viewport, change: fade)
             let url = directory.appendingPathComponent("\(crop.id).png")
             try png.write(to: url)
             print("[panel-snapshot] \(crop.id) → \(url.path)")
@@ -158,6 +162,8 @@ struct PanelScene {
     var metrics: [UsageRanking.Dimension: MetricMode] = [:]
     /// The first usage read is still on its way.
     var loading = false
+    /// The usage read failed (no figures for the period).
+    var failedRead = false
     /// Drawn with the scrolling middle at its end (`maxHeight` scenes).
     var scrolledToEnd = false
 
@@ -213,6 +219,7 @@ struct PanelScene {
                    filters: FilterState(hostnames: ["Mac-mini"])),
         PanelScene(id: "135-empty", title: "这段时间没有用量", expanded: true, usage: PanelUsage.none),
         PanelScene(id: "135-loading", title: "第一次打开，用量还没读出来", expanded: true, loading: true),
+        PanelScene(id: "135-unavailable", title: "读取失败：写「—」，不写 0", expanded: true, failedRead: true),
         PanelScene(id: "135-many", title: "模型、工具很多：前三名加其余", expanded: true, usage: .many),
     ]
 }
@@ -276,7 +283,7 @@ final class PanelFixture {
     /// Loads the scene's usage from the fixture server, or walks the sign-in
     /// to the scene's step against it.
     func prepare() async throws {
-        if scene.linked, scene.usage != nil { await state.fetchUsageData() }
+        if scene.linked, scene.usage != nil || scene.failedRead { await state.fetchUsageData() }
         if scene.loading { state.isLoadingData = true }
         guard !scene.linked, scene.signIn != .idle else { return }
         state.deviceLink.start()
@@ -387,17 +394,28 @@ enum PanelSnapshot {
     /// width on the panel's background. `change` runs after a first pass,
     /// for states that need a previous one (the faded figures of 134r).
     static func renderDetails(fixture: PanelFixture, openRemainder: UsageRanking.Dimension? = nil,
+                              viewport: CGFloat? = nil,
                               change: (@MainActor (AppState) -> Void)? = nil) async throws -> Data {
-        let details = ModernDetailsSection(openRemainder: openRemainder)
+        let grid = ModernDetailsSection(openRemainder: openRemainder)
             .padding(.horizontal, ModernTheme.cardInset)
             .padding(.vertical, 12)
             .frame(width: ModernTheme.panelWidth, alignment: .top)
-            .background(ModernTheme.panel)
-            .environment(\.colorScheme, .dark)
-            .environment(fixture.state)
-            .padding(margin)
-            .background(board)
-        let size = CGSize(width: ModernTheme.panelWidth + 2 * margin, height: 2 * 252 + 8 + 24 + 2 * margin)
+        let fullHeight: CGFloat = 2 * 252 + 8 + 24
+        let details = Group {
+            if let viewport {
+                ScrollView(.vertical) { grid }
+                    .scrollIndicators(.never)
+                    .frame(height: viewport)
+            } else {
+                grid
+            }
+        }
+        .background(ModernTheme.panel)
+        .environment(\.colorScheme, .dark)
+        .environment(fixture.state)
+        .padding(margin)
+        .background(board)
+        let size = CGSize(width: ModernTheme.panelWidth + 2 * margin, height: (viewport ?? fullHeight) + 2 * margin)
         let host = OffscreenHost(details, size: size)
         try await host.settle()
         try await host.settle()

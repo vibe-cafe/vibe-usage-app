@@ -56,21 +56,133 @@ struct ModernDetailsTests {
 
     @Test
     func remainderListOpensUnderItsRowAndAboveItAtTheBottomOfTheGrid() {
-        let grid = CGSize(width: 496, height: 512)
+        let grid = CGRect(x: 0, y: 0, width: 496, height: 512)
+        let row = CGRect(x: 16, y: 214, width: 212, height: 22)
         // 135d: the top-left card's row (16 + 20 + 8 + 4 + 88 + 12 + 3 × 22).
-        let top = RemainderListPlacement.frame(
-            trigger: CGRect(x: 16, y: 214, width: 212, height: 22), rows: 3, container: grid)
+        let top = RemainderListPlacement.frame(trigger: row, rows: 3, visible: grid)
         #expect(top == CGRect(x: 7, y: 238, width: 230, height: 76))
         // The same row on a bottom card would leave the grid: it opens upward.
         let bottom = RemainderListPlacement.frame(
-            trigger: CGRect(x: 268, y: 474, width: 212, height: 22), rows: 3, container: grid)
+            trigger: CGRect(x: 268, y: 474, width: 212, height: 22), rows: 3, visible: grid)
         #expect(bottom == CGRect(x: 259, y: 396, width: 230, height: 76))
         // Twelve rows show nine and a half.
-        let long = RemainderListPlacement.frame(
-            trigger: CGRect(x: 16, y: 214, width: 212, height: 22), rows: 12, container: grid)
+        let long = RemainderListPlacement.frame(trigger: row, rows: 12, visible: grid)
         let nineAndAHalfRows: CGFloat = 5 + 22 * 9.5
         #expect(long.height == nineAndAHalfRows)
         #expect(long.minY == 238)
+    }
+
+    /// A short screen, scrolled: only part of the grid is on screen, and the
+    /// list goes where it can be seen.
+    @Test
+    func remainderListStaysInTheVisiblePartOfAScrolledPanel() {
+        let row = CGRect(x: 16, y: 214, width: 212, height: 22)
+        // The row sits just above the footer (on screen: −240…240 of the
+        // grid): the list opens upward, over the cards above it.
+        let atFooter = RemainderListPlacement.frame(
+            trigger: row, rows: 3, visible: CGRect(x: 0, y: -240, width: 496, height: 480))
+        #expect(atFooter == CGRect(x: 7, y: 136, width: 230, height: 76))
+        // Neither side holds three rows (on screen: 150…270): the roomier
+        // side, shortened so that it scrolls.
+        let squeezed = RemainderListPlacement.frame(
+            trigger: row, rows: 3, visible: CGRect(x: 0, y: 150, width: 496, height: 120))
+        #expect(squeezed == CGRect(x: 7, y: 150, width: 230, height: 62))
+        #expect(squeezed.height < RemainderListPlacement.height(rows: 3))
+        // Hardly any room on either side: still a row and a half.
+        let edge = RemainderListPlacement.frame(
+            trigger: row, rows: 3, visible: CGRect(x: 0, y: 205, width: 496, height: 40))
+        let rowAndAHalf: CGFloat = 38
+        #expect(edge.height == rowAndAHalf)
+    }
+
+    // MARK: What a card shows
+
+    private func kind(_ figures: UsageFigures) -> String {
+        switch figures {
+        case .loading: "loading"
+        case .unavailable: "unavailable"
+        case .figures(let snapshot, let faded):
+            faded ? "faded" : snapshot.grid.slots.isEmpty ? "zero" : "figures"
+        }
+    }
+
+    @Test @MainActor
+    func onlyASuccessfulReadOfThePeriodDrawsFiguresOrZero() async {
+        var fails = false
+        var empty = false
+        let stamp = ISO8601DateFormatter().string(
+            from: Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970 / 3600) * 3600))
+        let used = UsageBucket(
+            source: "codex", model: "m", project: "p", hostname: "mac", bucketStart: stamp,
+            inputTokens: 100, outputTokens: 0, cacheCreation5mTokens: nil, cacheCreation1hTokens: nil,
+            cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 100, estimatedCost: 1)
+        let state = AppState(
+            initialConfig: VibeUsageConfig(apiKey: "one", apiUrl: "https://example.test"),
+            loadConfig: { nil },
+            usageFetcher: { _, _, _ in
+                if fails { throw URLError(.timedOut) }
+                return UsageResponse(buckets: empty ? [] : [used], sessions: nil, hasAnyData: true, names: nil)
+            },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
+        )
+        state.timeRange = .today
+        let keeper = UsageFiguresKeeper()
+        func shown() -> String { kind(keeper.figures(state, filters: .init())) }
+
+        // Nothing read yet, then a first read that fails: never a zero.
+        #expect(shown() == "loading")
+        fails = true
+        await state.fetchUsageData()
+        #expect(shown() == "unavailable")
+
+        fails = false
+        await state.fetchUsageData()
+        #expect(shown() == "figures")
+
+        // A new period: the previous figures fade while its read runs, and
+        // only until it ends — a failure is 「—」, not the old numbers.
+        state.timeRange = .sevenDays
+        state.isLoadingData = true
+        #expect(shown() == "faded")
+        fails = true
+        await state.fetchUsageData()
+        #expect(shown() == "unavailable")
+
+        // Zero only for a period read successfully without usage.
+        fails = false
+        empty = true
+        await state.fetchUsageData()
+        #expect(shown() == "zero")
+        empty = false
+        await state.fetchUsageData()
+        #expect(shown() == "figures")
+
+        // Another account: the previous one's figures are gone at once, even
+        // while the new account's first read runs.
+        state.applyConfig(VibeUsageConfig(apiKey: "two", apiUrl: "https://example.test"))
+        #expect(shown() == "loading")
+        state.isLoadingData = true
+        #expect(shown() == "loading")
+    }
+
+    @Test
+    func figuresRuleCoversEveryReadState() {
+        let snapshot = UsageDisplaySnapshot(buckets: [], dataRange: .days(7), now: Date())
+        func shown(_ current: UsageDisplaySnapshot?, _ retained: UsageDisplaySnapshot?,
+                   loading: Bool, finished: Bool) -> String {
+            kind(UsageFigures.resolve(current: current, retained: retained, isLoading: loading,
+                                      hasFinishedRead: finished))
+        }
+        let refreshing = shown(snapshot, nil, loading: true, finished: true)
+        let changingPeriod = shown(nil, snapshot, loading: true, finished: true)
+        let firstRead = shown(nil, nil, loading: true, finished: true)
+        let failed = shown(nil, snapshot, loading: false, finished: true)
+        let notYetRead = shown(nil, nil, loading: false, finished: false)
+        #expect(refreshing == "zero")
+        #expect(changingPeriod == "faded")
+        #expect(firstRead == "loading")
+        #expect(failed == "unavailable")
+        #expect(notYetRead == "loading")
     }
 
     @Test

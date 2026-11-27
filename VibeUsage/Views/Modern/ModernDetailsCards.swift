@@ -13,61 +13,57 @@ struct ModernDetailsSection: View {
     @Environment(AppState.self) private var appState
     /// Off-screen renders only: the card whose 「其余 N 个」 list starts open.
     var openRemainder: UsageRanking.Dimension?
-    @State private var memory = SnapshotMemory()
+    @State private var keeper = UsageFiguresKeeper()
 
     var body: some View {
         // Reads only what the figures depend on: switching a card's metric or
         // opening a list redraws the grid without rebuilding the snapshot.
         let filters = appState.modernPanel.usageFilters(appState.filters, enabled: appState.quotaCardProviders)
-        let current = appState.usageDisplaySnapshot(filters: filters, now: Date())
-        if let current { memory.last = current }
-        // Between a new period and its response there is no snapshot: the
-        // previous figures stay, faded (134r), as in 近期消耗.
-        return ModernDetailsGrid(
-            snapshot: current ?? memory.last,
-            isStale: current == nil && memory.last != nil,
-            isLoading: appState.isLoadingData,
-            openRemainder: openRemainder
-        )
+        return ModernDetailsGrid(figures: keeper.figures(appState, filters: filters), openRemainder: openRemainder)
     }
-}
-
-/// The last snapshot this section drew. Not observed: writing it from `body`
-/// never schedules another update.
-@MainActor
-private final class SnapshotMemory {
-    var last: UsageDisplaySnapshot?
 }
 
 /// What a card shows in place of figures.
 private enum DetailsPhase {
     case figures
-    /// First load: loading blocks where the numbers go (134q).
+    /// Being read, nothing to show yet: loading blocks where the numbers go
+    /// (134q).
     case loading
-    /// Nothing in this period with these filters: an empty ring around a
-    /// faded zero (134s).
+    /// The period was read and has no usage (with these filters): an empty
+    /// ring around a faded zero (134s).
     case empty
+    /// The read ended without figures for this period: 「—」, every tick off.
+    case unavailable
 }
 
 private struct ModernDetailsGrid: View {
     @Environment(AppState.self) private var appState
     @Environment(\.controlActiveState) private var windowState
-    let snapshot: UsageDisplaySnapshot?
-    let isStale: Bool
-    let isLoading: Bool
+    let figures: UsageFigures
     @State private var openRemainder: UsageRanking.Dimension?
     @State private var dismissal = RemainderDismissal()
 
-    init(snapshot: UsageDisplaySnapshot?, isStale: Bool, isLoading: Bool, openRemainder: UsageRanking.Dimension?) {
-        self.snapshot = snapshot
-        self.isStale = isStale
-        self.isLoading = isLoading
+    init(figures: UsageFigures, openRemainder: UsageRanking.Dimension?) {
+        self.figures = figures
         _openRemainder = State(initialValue: openRemainder)
     }
 
+    private var snapshot: UsageDisplaySnapshot? {
+        if case .figures(let snapshot, _) = figures { return snapshot }
+        return nil
+    }
+
+    private var isStale: Bool {
+        if case .figures(_, let faded) = figures { return faded }
+        return false
+    }
+
     private var phase: DetailsPhase {
-        guard let snapshot else { return isLoading ? .loading : .empty }
-        return snapshot.grid.slots.isEmpty ? .empty : .figures
+        switch figures {
+        case .figures(let snapshot, _): snapshot.grid.slots.isEmpty ? .empty : .figures
+        case .loading: .loading
+        case .unavailable: .unavailable
+        }
     }
 
     var body: some View {
@@ -125,15 +121,20 @@ private struct ModernDetailsGrid: View {
     }
 
     /// 135d: the rest of the ranking, in a small raised list that continues
-    /// the card's own rows (same columns), under 「其余 N 个」. A list that
-    /// would leave the grid opens above the row instead (the bottom cards);
-    /// a long one scrolls.
+    /// the card's own rows (same columns), under 「其余 N 个」. Placed in the
+    /// part of the panel's scrolling middle that is on screen, so a scrolled
+    /// panel on a short screen never hides it: above the row when it does not
+    /// fit below; a long one scrolls.
     private func remainderList(_ rows: [UsageRanking.Row], metric: MetricMode, cardTotal: Double,
                                trigger: CGRect, in proxy: GeometryProxy) -> some View {
-        let frame = RemainderListPlacement.frame(trigger: trigger, rows: rows.count, container: proxy.size)
+        // The scroll view's visible bounds in the grid's space; the whole
+        // grid when it is not in one (the off-screen crops).
+        let visible = proxy.bounds(of: .scrollView) ?? CGRect(origin: .zero, size: proxy.size)
+        let frame = RemainderListPlacement.frame(trigger: trigger, rows: rows.count, visible: visible)
         let origin = proxy.frame(in: .global).origin
-        dismissal.list = frame.offsetBy(dx: origin.x, dy: origin.y)
-        dismissal.trigger = trigger.offsetBy(dx: origin.x, dy: origin.y)
+        // Clicks count only on what is on screen.
+        dismissal.list = frame.intersection(visible).offsetBy(dx: origin.x, dy: origin.y)
+        dismissal.trigger = trigger.intersection(visible).offsetBy(dx: origin.x, dy: origin.y)
         let scrolls = frame.height < RemainderListPlacement.height(rows: rows.count)
         return ModernRemainderList(rows: rows, metric: metric, cardTotal: cardTotal, scrolls: scrolls)
             .frame(width: frame.width, height: frame.height)
@@ -143,8 +144,9 @@ private struct ModernDetailsGrid: View {
 
 /// Where 「其余 N 个」 opens its list (135d): 2 pt under the row, inset so
 /// its rows line up with the card's (9 pt padding on a 7 pt inset); above
-/// the row when the grid ends first. A longer list than ten rows shows nine
-/// and a half, so the cut row says there is more to scroll.
+/// the row when the visible area ends first; when neither side holds it, on
+/// the roomier side, shortened to scroll. A longer list than ten rows shows
+/// nine and a half, so the cut row says there is more to scroll.
 enum RemainderListPlacement {
     static let rowHeight: CGFloat = 22
     static let verticalPadding: CGFloat = 5
@@ -162,12 +164,24 @@ enum RemainderListPlacement {
         rows > maxVisibleRows ? verticalPadding + rowHeight * (CGFloat(maxVisibleRows) - 0.5) : height(rows: rows)
     }
 
-    static func frame(trigger: CGRect, rows: Int, container: CGSize) -> CGRect {
-        let height = visibleHeight(rows: rows)
-        let below = trigger.maxY + gap
-        let above = trigger.minY - gap - height
-        let y = below + height <= container.height || above < 0 ? below : above
-        return CGRect(x: trigger.minX - horizontalPadding, y: y,
+    /// - Parameter visible: the on-screen area, in the trigger's space.
+    static func frame(trigger: CGRect, rows: Int, visible: CGRect) -> CGRect {
+        let wanted = visibleHeight(rows: rows)
+        let roomBelow = visible.maxY - (trigger.maxY + gap)
+        let roomAbove = trigger.minY - gap - visible.minY
+        let height: CGFloat
+        let opensBelow: Bool
+        if wanted <= roomBelow {
+            (height, opensBelow) = (wanted, true)
+        } else if wanted <= roomAbove {
+            (height, opensBelow) = (wanted, false)
+        } else {
+            // At least a row and a half, even when the trigger sits at an edge.
+            let least = min(wanted, verticalPadding + rowHeight * 1.5)
+            (height, opensBelow) = (max(max(roomBelow, roomAbove), least), roomBelow >= roomAbove)
+        }
+        return CGRect(x: trigger.minX - horizontalPadding,
+                      y: opensBelow ? trigger.maxY + gap : trigger.minY - gap - height,
                       width: trigger.width + 2 * horizontalPadding, height: height)
     }
 }
@@ -266,6 +280,8 @@ private struct ModernDetailCard: View {
                         .frame(height: 16)
                 case .empty:
                     centerValue(DetailsFormat.value(0, metric, cardTotal: 0)).opacity(0.3)
+                case .unavailable:
+                    centerValue("—", color: ModernTheme.secondaryText)
                 }
                 Text(metric.label)
                     .font(metric == .tokens ? ModernTheme.mono(11) : ModernTheme.text(11))
@@ -276,10 +292,10 @@ private struct ModernDetailCard: View {
         .frame(width: ModernDistributionRing.size, height: ModernDistributionRing.size)
     }
 
-    private func centerValue(_ text: String) -> some View {
+    private func centerValue(_ text: String, color: Color = ModernTheme.text) -> some View {
         Text(text)
             .font(ModernTheme.mono(13, .medium))
-            .foregroundStyle(ModernTheme.text)
+            .foregroundStyle(color)
             .lineLimit(1)
             // A five-figure spend still fits inside the ticks.
             .minimumScaleFactor(0.75)
