@@ -532,15 +532,40 @@ struct RecentUsageBlockBackground: View {
 
 /// The right column fills the card body: the curve, 2 pt, the axis labels,
 /// which sit level with the last small row on the left.
-private enum RecentUsagePlotLayout {
+///
+/// Inside the curve's area the peak's label has a band of its own at the top
+/// and the dashed peak line runs under it, across the whole width; the curve
+/// stays below that line, so a peak at the far left never runs through the
+/// label (outside-the-plot labels, as in Apple's Health and Stocks charts).
+enum RecentUsagePlotLayout {
     static let axisHeight: CGFloat = 18
     static let spacing: CGFloat = 2
     static let curveHeight = ModernTheme.cardBodyHeight - spacing - axisHeight
+    /// The peak's label: 11 pt figures on a 12 pt line, 2 pt from the top.
+    static let labelTop: CGFloat = 2
+    static let labelHeight: CGFloat = 12
+    static var labelBottom: CGFloat { labelTop + labelHeight }
+    /// The hover marker's radius (8 pt circle), the largest mark drawn on the
+    /// curve's points.
+    static let markerRadius: CGFloat = 4
+    /// The dashed line's middle, where the peak sits: one marker radius under
+    /// the label, so neither the curve, its end dot nor the hover marker
+    /// reaches the label. Half a point puts the 1 pt line on whole points.
+    static let peakY = labelBottom + markerRadius + 0.5
+
+    /// A value's height in a curve area `height` tall: the peak on the dashed
+    /// line, zero half the stroke over the bottom edge.
+    static func y(_ value: Double, peak: Double, height: CGFloat) -> CGFloat {
+        let zero = height - 1.5
+        guard peak > 0 else { return zero }
+        return zero - CGFloat(value / peak) * (zero - peakY)
+    }
 }
 
-/// The curve (134a–134d): the peak's label and a dashed line at the top, the
-/// filled curve with its end dot, two ticks, and the axis labels below. The
-/// pointer snaps to a slot and shows its figures (134b, 134c, 134l).
+/// The curve (134a–134d): the peak's label at the top, the dashed peak line
+/// under it, the filled curve with its end dot, two ticks, and the axis
+/// labels below. The pointer snaps to a slot and shows its figures (134b,
+/// 134c, 134l).
 private struct RecentUsagePlot: View {
     let chart: RecentUsageChart
     var isFaded = false
@@ -559,7 +584,7 @@ private struct RecentUsagePlot: View {
                     RecentUsageCurve(chart: chart)
                         .opacity(isFaded ? 0.3 : 1)
                     if !isFaded, chart.hasKnownPoints {
-                        peakLine
+                        peakLine(width: width)
                         ForEach(Array(chart.ticks.enumerated()), id: \.offset) { _, tick in
                             Rectangle()
                                 .fill(ModernTheme.text.opacity(0.2))
@@ -598,20 +623,21 @@ private struct RecentUsagePlot: View {
         chart.hoverPoints.indices.min { abs(chart.hoverPoints[$0].x - x) < abs(chart.hoverPoints[$1].x - x) }
     }
 
-    /// The peak's label at the top left and a dashed line from it to the
-    /// right edge at the peak's height.
-    private var peakLine: some View {
-        HStack(spacing: 7) {
+    /// The peak's label in its band at the top left, and the dashed line
+    /// under it at the peak's height, edge to edge.
+    private func peakLine(width: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
             Text(chart.peakLabel)
                 .font(ModernTheme.mono(11))
                 .foregroundStyle(ModernTheme.secondaryText)
-                .frame(height: 12)
+                .frame(height: RecentUsagePlotLayout.labelHeight)
                 .fixedSize()
+                .offset(y: RecentUsagePlotLayout.labelTop)
             Line()
                 .stroke(ModernTheme.text.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .frame(height: 1)
+                .frame(width: width, height: 1)
+                .offset(y: RecentUsagePlotLayout.peakY - 0.5)
         }
-        .padding(.top, 2)
     }
 
     private struct Line: Shape {
@@ -656,18 +682,19 @@ private struct RecentUsagePlot: View {
     private func marker(_ index: Int, width: CGFloat) -> some View {
         let point = chart.hoverPoints[index]
         let x = point.x * width
-        let y = RecentUsageCurve.y(point.value, peak: chart.peak, height: height)
+        let y = RecentUsagePlotLayout.y(point.value, peak: chart.peak, height: height)
         // An unknown slot has no point on the curve: only its 「—」.
         if point.isKnown {
             Rectangle()
                 .fill(ModernTheme.text.opacity(0.3))
                 .frame(width: 1, height: max(0, height - y))
                 .offset(x: x - 0.5, y: y)
+            let radius = RecentUsagePlotLayout.markerRadius
             Circle()
                 .fill(RecentUsageStyle.markerFill)
                 .overlay(Circle().strokeBorder(RecentUsageStyle.ink, lineWidth: 1.5))
-                .frame(width: 8, height: 8)
-                .offset(x: x - 4, y: y - 4)
+                .frame(width: 2 * radius, height: 2 * radius)
+                .offset(x: x - radius, y: y - radius)
         }
         if index < chart.tooltips.count {
             RecentUsageTooltipView(tooltip: chart.tooltips[index], pointX: x, pointY: y, width: width)
@@ -676,20 +703,16 @@ private struct RecentUsagePlot: View {
 }
 
 /// The filled curve: a monotone cubic through the slot points (it never
-/// overshoots below zero or above the peak), a gradient under it, a 1.5 pt
-/// stroke, the baseline and the end dot.
+/// overshoots below zero or above the peak, so it stays under the peak
+/// line), a gradient under it, a 1.5 pt stroke, the baseline and the end dot.
 private struct RecentUsageCurve: View {
     let chart: RecentUsageChart
-
-    static func y(_ value: Double, peak: Double, height: CGFloat) -> CGFloat {
-        guard peak > 0 else { return height - 1.5 }
-        return height - 1.5 - CGFloat(value / peak) * (height - 10)
-    }
 
     var body: some View {
         Canvas { context, size in
             let points = chart.curve.map {
-                CGPoint(x: $0.x * size.width, y: Self.y($0.value, peak: chart.peak, height: size.height))
+                CGPoint(x: $0.x * size.width,
+                        y: RecentUsagePlotLayout.y($0.value, peak: chart.peak, height: size.height))
             }
             var baseline = Path()
             baseline.move(to: CGPoint(x: 0, y: size.height - 0.5))
@@ -709,7 +732,7 @@ private struct RecentUsageCurve: View {
             ))
             context.stroke(line, with: .color(RecentUsageStyle.ink.opacity(0.92)),
                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-            let dot = CGRect(x: size.width - 3.5 - 3, y: max(4, last.y) - 3, width: 6, height: 6)
+            let dot = CGRect(x: size.width - 3.5 - 3, y: last.y - 3, width: 6, height: 6)
             context.fill(Path(ellipseIn: dot), with: .color(RecentUsageStyle.ink))
         }
     }

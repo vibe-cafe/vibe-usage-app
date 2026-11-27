@@ -46,6 +46,10 @@ enum RecentUsageFixtures {
     ]
 
     private static let todayCost: [Double] = [3.2, 6.6, 6.1, 0.4, 7.6, 9.4, 7.9]  // 9:00 … 15:00
+    /// A day whose dearest hour is its first: midnight, lower after, the
+    /// last hour below the peak (the peak's label must stay clear of it).
+    private static let peakAtMidnightCost: [Double] = [134, 41, 8.2, 0, 0, 0, 0, 0, 3.6, 18, 36, 29,
+                                                       12, 44, 57, 39]  // 0:00 … 15:00
     private static let todayActive: [Int] = [1_500, 2_880, 2_400, 0, 1_800, 2_280, 660]
     /// The rolling day, from yesterday 15:00 to today 15:00.
     private static let dayCost: [Double] = [0.6, 1.9, 1.4, 0.7, 1.8, 2.4, 2.9, 1.1, 0.2,
@@ -53,13 +57,16 @@ enum RecentUsageFixtures {
     private static let weekCost: [Double] = [38, 58, 62, 22, 9, 60, 19]
 
     /// Spend per slot start for a range; days and weeks use one value per day.
-    static func costs(for range: UsageQueryRange) -> [(start: Date, cost: Double)] {
+    /// `peakAtMidnight` swaps today for the day that peaks at its first hour.
+    static func costs(for range: UsageQueryRange, peakAtMidnight: Bool = false) -> [(start: Date, cost: Double)] {
         let calendar = Calendar.current
         let now = now
         let today = calendar.startOfDay(for: now)
         func hour(_ offset: Int, from base: Date) -> Date { base.addingTimeInterval(Double(offset) * 3_600) }
         func day(_ offset: Int) -> Date { calendar.date(byAdding: .day, value: offset, to: today)! }
         switch range {
+        case .from where peakAtMidnight:
+            return peakAtMidnightCost.enumerated().map { (hour($0.offset, from: today), $0.element) }
         case .from:
             let nine = hour(9, from: today)
             return todayCost.enumerated().map { (hour($0.offset, from: nine), $0.element) }
@@ -92,10 +99,10 @@ enum RecentUsageFixtures {
         }
     }
 
-    static func response(for range: UsageQueryRange, empty: Bool) -> UsageResponse {
+    static func response(for range: UsageQueryRange, empty: Bool, peakAtMidnight: Bool = false) -> UsageResponse {
         guard !empty else { return UsageResponse(buckets: [], sessions: nil, hasAnyData: true, names: names) }
         var buckets: [UsageBucket] = []
-        for (start, cost) in costs(for: range) where cost > 0 {
+        for (start, cost) in costs(for: range, peakAtMidnight: peakAtMidnight) where cost > 0 {
             let stamp = start.formatted(.iso8601)
             for part in shares {
                 let spend = cost * part.share
@@ -116,16 +123,19 @@ enum RecentUsageFixtures {
 
     /// Server-side active time: explicit for today, about four minutes per
     /// dollar elsewhere, AI work time 1.4× that. Recorded since long before.
-    static func activity(for range: UsageQueryRange, hourly: Bool, empty: Bool) -> UsageActivity {
+    static func activity(for range: UsageQueryRange, hourly: Bool, empty: Bool,
+                         peakAtMidnight: Bool = false) -> UsageActivity {
         let first = Calendar.current.date(byAdding: .day, value: -200, to: now)!.formatted(.iso8601)
         guard !empty else {
             return UsageActivity(activeSeconds: 0, workSeconds: 0, parallel: nil, series: [], firstBucketStart: first)
         }
-        let slots = costs(for: range)
+        let slots = costs(for: range, peakAtMidnight: peakAtMidnight)
         var series: [UsageActivity.Period] = []
         for (index, slot) in slots.enumerated() {
             let active: Int
-            if case .from = range {
+            if case .from = range, peakAtMidnight {
+                active = min(3_600, Int(slot.cost * 26))
+            } else if case .from = range {
                 active = todayActive[index]
             } else if hourly {
                 active = min(3_600, Int(slot.cost * 300))
