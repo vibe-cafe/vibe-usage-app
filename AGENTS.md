@@ -236,7 +236,7 @@ Active time uses the approved 2026-11-25 model-time contract. Alongside each usa
 - `.today` (UI: 「今天」) — local-midnight → now, fixed start. Only grows through the day.
 - `.oneDay` (UI: 「24H」, raw value still `"1D"` for state stability) — rolling last 24 hours.
 - `.sevenDays`, `.thirtyDays`, `.ninetyDays` — fixed day-count ranges.
-- `.custom` — user-selected local date bounds, sent as `from` / `to` query params.
+- `.custom` — usage and activity share the selected local calendar days and timezone. Both routes parse explicit bounds as instants and include `to`, so the app sends UTC ISO-8601 timestamps from the first day's local midnight through the last millisecond before the next local day. The activity coverage hint uses the same start.
 
 Today requests `from=localMidnight` while rolling 24h requests `days=1`. The today-cutoff is also applied client-side via `TimeRange.startCutoff` so all filtered views and the menu-bar display share the same local-midnight semantics. `BarChartView`'s hourly fill loop keys off `appState.timeRange == .today` to start at midnight (slot count grows from 1 → 24) instead of "23 hours ago" for the rolling-24h case. Every `/api/usage` request includes `tz=TimeZone.current.identifier`.
 Multi-day API buckets carry UTC instants for the viewer's local midnight. Daily bucket/session keys must convert those instants through the current timezone; taking the raw ISO prefix shifts UTC+ users back one day and leaves today's 7D bar empty.
