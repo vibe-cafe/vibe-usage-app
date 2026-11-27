@@ -45,7 +45,8 @@ struct UsageNamesTests {
         let state = AppState(
             initialConfig: VibeUsageConfig(apiKey: "test-key", apiUrl: "https://example.test"),
             loadConfig: { nil },
-            usageFetcher: { _, _, _ in response }
+            usageFetcher: { _, _, _ in response },
+            activityFetcher: { _, _, _, _ in throw URLError(.notConnectedToInternet) }
         )
         await state.fetchUsageData()
         return state

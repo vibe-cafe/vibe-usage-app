@@ -150,7 +150,7 @@ struct RateLimitCardView: View {
 
 // MARK: - Per-provider card
 
-private struct ProviderCard: View {
+struct ProviderCard: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject private var updaterViewModel: UpdaterViewModel
     let snapshot: ProviderRateLimit
@@ -303,7 +303,7 @@ private struct ProviderCard: View {
     /// One slot in the rows VStack: either a live `QuotaRow` or a placeholder
     /// for a window the plan covers but has no current data for. The case
     /// matters for the tooltip overlay — only `.live` rows have a hover key.
-    private enum RowItem {
+    enum RowItem {
         case live(label: String, window: RateLimitWindow, breakdown: [RateLimitMeter.Part] = [])
         case placeholder(label: String, message: String)
 
@@ -328,7 +328,7 @@ private struct ProviderCard: View {
     /// All available meters in provider-defined priority order. Native readers
     /// still populate their typed fields, while future CLI adapters can supply
     /// arbitrary meters through `snapshot.meters`.
-    private var allRows: [RowItem] {
+    var allRows: [RowItem] {
         if !snapshot.meters.isEmpty {
             return QuotaMeterLayout.canonicalMeters(snapshot.meters).map {
                 .live(label: $0.label, window: $0.window, breakdown: $0.breakdown)

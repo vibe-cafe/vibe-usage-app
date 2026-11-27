@@ -76,6 +76,16 @@ enum Formatters {
         return ((value + floatingPointGuard) * scale).rounded() / scale
     }
 
+    /// The modern panel uses only 万 and 亿, keeping exact counts below one 万.
+    static func formatPanelChineseTokens(_ tokens: Int) -> String {
+        guard tokens >= 0 else { return "—" }
+        guard tokens >= 10_000 else { return "\(tokens)" }
+        let wan = roundToThreeSignificantDigits(Double(tokens) / 10_000)
+        if wan < 10_000 { return "\(formatCoefficient(wan))万" }
+        let yi = roundToThreeSignificantDigits(Double(tokens) / 100_000_000)
+        return "\(formatCoefficient(yi))亿"
+    }
+
     private static func formatCoefficient(_ value: Double) -> String {
         var text = String(format: "%.3f", value)
         while text.last == "0" { text.removeLast() }

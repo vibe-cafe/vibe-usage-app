@@ -195,6 +195,12 @@ struct ProviderRateLimit: Equatable, Identifiable {
     /// Claude readers continue filling their typed fields below; CLI-backed
     /// providers can populate this collection directly.
     var meters: [RateLimitMeter] = []
+    /// Claude's named allowances, separate from the generic meters that
+    /// select the classic card's row layout.
+    var modelScopedMeters: [RateLimitMeter] = []
+    /// An explicit limits list is authoritative even when it has no model rows.
+    var hasClaudeLimits = false
+    var claudeAccountScope: ClaudeQuotaAccountScope?
     var fiveHour: RateLimitWindow?
     var sevenDay: RateLimitWindow?
     var sevenDayOpus: RateLimitWindow?     // Claude Max plan only
