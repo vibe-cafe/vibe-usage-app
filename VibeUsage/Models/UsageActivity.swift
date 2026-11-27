@@ -44,7 +44,8 @@ struct ActivityReport {
     let summary: ActivityTime?
     private let coverageHint: String?
     var summaryHelp: String {
-        [summary?.parallelText, coverageHint].compactMap { $0 }.joined(separator: " · ")
+        [summary.flatMap { $0.workSeconds > 0 ? $0.workText : nil }, summary?.parallelText, coverageHint]
+            .compactMap { $0 }.joined(separator: " · ")
     }
     private let firstKey: String?
     private var periods: [String: ActivityTime] = [:]
