@@ -70,6 +70,77 @@ struct ModernQuotaFormatTests {
         #expect(ModernQuotaFormat.tooltip(for: expired, provider: .codex) == nil)
     }
 
+    /// The Cursor sample `QuotaCLIBridgeTests` decodes: Month 48% with its
+    /// own/third-party split, resetting 2026-11-01.
+    private func cursorWithSplit() throws -> ProviderRateLimit {
+        let envelope = try QuotaCLIBridge.decode("""
+        {"schemaVersion":1,"products":[{"id":"cursor","status":"ok","fetchedAt":"2026-10-23T00:00:00Z","source":"live",
+          "meters":[
+            {"id":"plan","label":"Month","utilization":48,"resetsAt":"2026-11-01T00:00:00Z","windowSeconds":2678400,
+             "breakdown":[{"id":"auto","label":"Cursor models","utilization":4},{"id":"api","label":"Third-party models","utilization":88}]},
+            {"id":"on-demand","label":"On-demand","utilization":25}]}]}
+        """)
+        return try #require(QuotaCLIBridge.snapshots(from: envelope).first)
+    }
+
+    @Test func aReadingPastItsResetShowsNoTooltipNotEvenItsSplit() throws {
+        let cursor = try cursorWithSplit()
+        func month(at instant: String) throws -> QuotaPanelMeter {
+            let now = try #require(Formatters.dateFromISO8601(instant))
+            let display = QuotaPanelDisplay(snapshots: [cursor], enabled: [.cursor], selected: nil, now: now)
+            return try #require(display.detail?.rows.first { $0.id == "plan" })
+        }
+        let current = try month(at: "2026-10-23T00:00:00Z")
+        let lines = try #require(ModernQuotaFormat.tooltip(for: current, provider: .cursor)).lines
+        #expect(lines.contains(.init(label: "Cursor 模型", value: "4%")))
+        #expect(lines.contains(.init(label: "第三方模型", value: "88%")))
+        let expired = try month(at: "2026-11-02T00:00:00Z")
+        #expect(expired.message == "已重置，等下次读取")
+        #expect(ModernQuotaFormat.tooltip(for: expired, provider: .cursor) == nil)
+    }
+
+    private func overviewRow(_ snapshot: ProviderRateLimit, models: [RateLimitMeter] = []) throws -> QuotaSubscriptionDisplay {
+        let display = QuotaPanelDisplay(snapshots: [snapshot], enabled: [snapshot.provider, .grok], selected: nil, now: now,
+                                       modelMeters: [snapshot.provider: models])
+        return try #require(display.overview.rows.first { $0.provider == snapshot.provider })
+    }
+
+    private func window(_ remaining: Double, _ duration: TimeInterval, due: Double) -> RateLimitWindow {
+        RateLimitWindow(utilization: 100 - remaining, resetsAt: now.addingTimeInterval(duration * due / 100),
+                        windowDuration: duration)
+    }
+
+    @Test func aLoneAlertingTeamPoolIsWrittenOnce() throws {
+        func team(_ remaining: Double) -> ProviderRateLimit {
+            ProviderRateLimit(provider: .cursor, meters: [
+                .init(id: "team", label: "Team", window: window(remaining, 720 * hours, due: 33)),
+            ], status: .ok, fetchedAt: now)
+        }
+        let alerting = try overviewRow(team(5))
+        #expect(alerting.additionalAlert?.id == "team" && alerting.tightest?.id == "team")
+        #expect(ModernQuotaFormat.overviewChips(alerting) == [
+            .init(id: "team", label: "Team", remaining: 5, tone: .red, isColumn: false),
+        ])
+        let calm = try overviewRow(team(70))
+        #expect(calm.additionalAlert == nil)
+        #expect(ModernQuotaFormat.overviewChips(calm) == [
+            .init(id: "team", label: "Team", remaining: 70, tone: .neutral, isColumn: false),
+        ])
+    }
+
+    @Test func overviewChipsPutTheAlertBeforeTheRingWindows() throws {
+        let claude = ProviderRateLimit(provider: .claudeCode, fiveHour: window(36, 5 * hours, due: 16),
+                                       sevenDay: window(53, 168 * hours, due: 39), status: .ok, fetchedAt: now)
+        let fable = RateLimitMeter(id: "fable", label: "Fable", window: window(9, 168 * hours, due: 61))
+        let chips = ModernQuotaFormat.overviewChips(try overviewRow(claude, models: [fable]))
+        #expect(chips.map(\.label) == ["Fable", "5h", "7d"])
+        #expect(chips.map(\.isColumn) == [false, true, true])
+        #expect(chips.map(\.tone) == [.red, .neutral, .neutral])
+        let weeklyOnly = ProviderRateLimit(provider: .claudeCode, sevenDay: window(62, 168 * hours, due: 55),
+                                           status: .ok, fetchedAt: now)
+        #expect(ModernQuotaFormat.overviewChips(try overviewRow(weeklyOnly)).map(\.label) == ["7d"])
+    }
+
     @Test func labelColumnWidensOnlyForNamedAllowances() {
         #expect(ModernQuotaFormat.labelColumnWidth(["5h", "7d"]) == 28)
         #expect(ModernQuotaFormat.labelColumnWidth(["5h", "7d", "Fable"]) == 40)

@@ -90,7 +90,10 @@ enum ModernQuotaFormat {
     }
 
     /// The tooltip of an allowance row (132r), or nil when nothing is known.
+    /// A reading past its reset has none: its row says 「已重置，等下次读取」,
+    /// and its split (Cursor's own vs third-party models) is last period's.
     static func tooltip(for meter: QuotaPanelMeter, provider: ProviderRateLimit.Provider) -> ModernQuotaTooltip? {
+        guard meter.remaining != nil else { return nil }
         var lines: [ModernQuotaTooltip.Line] = []
         if let used = meter.usedPercent { lines.append(.init(label: "已使用", value: "\(percent(used))%")) }
         if let elapsed = meter.elapsed { lines.append(.init(label: "已过去", value: duration(elapsed))) }
@@ -110,6 +113,36 @@ enum ModernQuotaFormat {
         }
         if seconds >= 3_600 { return "\(Int((seconds / 3_600).rounded())) 小时" }
         return "\(max(1, Int((seconds / 60).rounded()))) 分钟"
+    }
+
+    /// The percentages on an overview row's name line, left to right: the
+    /// alerting allowance without a bar (「Fable 9%」, in its tone), then the
+    /// ring windows (「5h 12%」「7d 79%」, 50 pt each). A subscription with no
+    /// ring window shows its tightest allowance instead, unless that is the
+    /// alert already shown (Cursor's team pool alone).
+    static func overviewChips(_ row: QuotaSubscriptionDisplay) -> [OverviewChip] {
+        var chips: [OverviewChip] = []
+        if let alert = row.additionalAlert, let remaining = alert.remaining {
+            chips.append(.init(id: alert.id, label: alert.label, remaining: remaining, tone: alert.tone, isColumn: false))
+        }
+        for window in [row.inner, row.outer].compactMap({ $0 }) {
+            guard let remaining = window.remaining else { continue }
+            chips.append(.init(id: window.id, label: window.label, remaining: remaining, tone: .neutral, isColumn: true))
+        }
+        if row.outer == nil, row.inner == nil, let tightest = row.tightest, let remaining = tightest.remaining,
+           tightest.id != row.additionalAlert?.id {
+            chips.append(.init(id: tightest.id, label: tightest.label, remaining: remaining, tone: .neutral, isColumn: false))
+        }
+        return chips
+    }
+
+    struct OverviewChip: Equatable {
+        let id: String
+        let label: String
+        let remaining: Double
+        let tone: QuotaPaceTone
+        /// A ring window keeps the 50 pt column; the others take their width.
+        let isColumn: Bool
     }
 
     /// Width of the detail rows' label column: 28 pt (「5h」), wider for a
@@ -371,26 +404,18 @@ struct ModernOverviewRow: View {
         }
     }
 
-    @ViewBuilder
     private var meters: some View {
-        if let alert = row.additionalAlert, let remaining = alert.remaining {
-            ModernMeterChip(label: alert.label, value: remaining, tone: alert.tone)
-                .fixedSize()
-                .padding(.trailing, 8)
-        }
-        if let inner = row.inner, let remaining = inner.remaining {
-            ModernMeterChip(label: inner.label, value: remaining)
-                .frame(width: 50, alignment: .trailing)
-                .padding(.trailing, 8)
-        }
-        if let outer = row.outer, let remaining = outer.remaining {
-            ModernMeterChip(label: outer.label, value: remaining)
-                .frame(width: 50, alignment: .trailing)
-        } else if row.inner == nil, let tightest = row.tightest, let remaining = tightest.remaining {
-            // Only a feature allowance (no recognized period): its number,
-            // without a bar.
-            ModernMeterChip(label: tightest.label, value: remaining)
-                .fixedSize()
+        let chips = ModernQuotaFormat.overviewChips(row)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            ForEach(chips, id: \.id) { chip in
+                if chip.isColumn {
+                    ModernMeterChip(label: chip.label, value: chip.remaining, tone: chip.tone)
+                        .frame(width: 50, alignment: .trailing)
+                } else {
+                    ModernMeterChip(label: chip.label, value: chip.remaining, tone: chip.tone)
+                        .fixedSize()
+                }
+            }
         }
     }
 
