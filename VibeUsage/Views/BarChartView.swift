@@ -51,7 +51,7 @@ struct BarData: Identifiable, Equatable {
     var cached: Int = 0
     var total: Int { input + output + cached }
     var cost: Double = 0
-    var activeMinutes: Double = 0
+    var activity: ActivityTime?
 
     mutating func add(_ bucket: UsageBucket) {
         input += bucket.inputIncludingCacheWrites
@@ -63,9 +63,10 @@ struct BarData: Identifiable, Equatable {
 
 struct BarChartView: View {
     @Environment(AppState.self) private var appState
+    var initialHoveredIndex: Int?
 
     private var isHourly: Bool {
-        appState.timeRange.isHourly
+        appState.currentQueryRange.isHourly
     }
 
     private var filtered: [UsageBucket] {
@@ -84,12 +85,10 @@ struct BarChartView: View {
             buckets[key, default: BarData(id: key)].add(bucket)
         }
 
-        for session in appState.filteredSessions {
-            let key = isHourly ? session.hourKey : session.dayKey
-            if buckets[key] == nil {
-                buckets[key] = BarData(id: key)
-            }
-            buckets[key]!.activeMinutes += Double(session.activeSeconds) / 60.0
+        func bar(for key: String) -> BarData {
+            var bar = buckets[key] ?? BarData(id: key)
+            bar.activity = appState.activity?.time(in: key)
+            return bar
         }
 
         if isHourly {
@@ -113,7 +112,7 @@ struct BarChartView: View {
             while hour <= currentHour {
                 let iso = isoFormatter.string(from: hour)
                 let key = String(iso.prefix(13))
-                result.append(buckets[key] ?? BarData(id: key))
+                result.append(bar(for: key))
                 guard let next = calendar.date(byAdding: .hour, value: 1, to: hour) else { break }
                 hour = next
             }
@@ -133,27 +132,14 @@ struct BarChartView: View {
                     let formatter = DateFormatter()
                     formatter.dateFormat = "yyyy-MM-dd"
                     let key = formatter.string(from: date)
-                    result.append(buckets[key] ?? BarData(id: key))
+                    result.append(bar(for: key))
                 }
             }
             return result
         }
     }
 
-    private var maxTotal: Int {
-        max(chartData.map(\.total).max() ?? 0, 1)
-    }
-
-    private var maxCost: Double {
-        max(chartData.map(\.cost).max() ?? 0, 0.001)
-    }
-
-    private var maxActiveMinutes: Double {
-        max(chartData.map(\.activeMinutes).max() ?? 0, 0.1)
-    }
-
-    private var labelInterval: Int {
-        let count = chartData.count
+    private func labelInterval(count: Int) -> Int {
         if isHourly {
             if count <= 12 { return 3 }
             if count <= 18 { return 4 }
@@ -169,6 +155,7 @@ struct BarChartView: View {
 
     var body: some View {
         @Bindable var state = appState
+        let bars = chartData
 
         VStack(spacing: 0) {
             // Header
@@ -210,13 +197,14 @@ struct BarChartView: View {
             // plus the single hover region inside ChartContent, keeps the
             // popover ScrollView smooth when the cursor passes over the chart.
             ChartContent(
-                data: chartData,
+                data: bars,
                 chartMode: state.chartMode,
                 isHourly: isHourly,
-                maxTotal: maxTotal,
-                maxCost: maxCost,
-                maxActiveMinutes: maxActiveMinutes,
-                labelInterval: labelInterval
+                maxTotal: max(bars.map(\.total).max() ?? 0, 1),
+                maxCost: max(bars.map(\.cost).max() ?? 0, 0.001),
+                maxActiveSeconds: bars.compactMap { $0.activity?.activeSeconds }.max(),
+                labelInterval: labelInterval(count: bars.count),
+                hoveredIndex: initialHoveredIndex
             )
         }
         .padding(14)
@@ -237,14 +225,14 @@ private struct ChartContent: View {
     let isHourly: Bool
     let maxTotal: Int
     let maxCost: Double
-    let maxActiveMinutes: Double
+    let maxActiveSeconds: Int?
     let labelInterval: Int
 
     private let yAxisWidth: CGFloat = 44
     private let chartAxisGap: CGFloat = 6
     private let xLabelWidth: CGFloat = 46
 
-    @State private var hoveredIndex: Int?
+    @State var hoveredIndex: Int?
     @State private var scroll = ScrollWatcher()
 
     private var visibleLabelIndices: [Int] {
@@ -266,7 +254,7 @@ private struct ChartContent: View {
                         case .cost:
                             Text(Formatters.formatCost(maxCost))
                         case .activeTime:
-                            Text(Formatters.formatDuration(Int(maxActiveMinutes * 60)))
+                            Text(maxActiveSeconds.map(ActivityTime.duration) ?? "—")
                         }
                     }
                     .font(.system(size: 11, design: .monospaced))
@@ -311,7 +299,7 @@ private struct ChartContent: View {
                                     .frame(height: costH)
                                     .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2))
                             case .activeTime:
-                                let activeH = CGFloat(bar.activeMinutes) / CGFloat(maxActiveMinutes) * 150
+                                let activeH = CGFloat(bar.activity?.activeSeconds ?? 0) / CGFloat(max(1, maxActiveSeconds ?? 0)) * 150
                                 Rectangle()
                                     .fill(Color(red: 0.38, green: 0.6, blue: 1.0))
                                     .frame(height: activeH)
@@ -440,8 +428,12 @@ private struct ChartContent: View {
                 Text("费用: \(Formatters.formatCost(bar.cost))")
                     .foregroundStyle(Color(red: 0.2, green: 0.8, blue: 0.5))
             case .activeTime:
-                Text("活跃时长: \(Formatters.formatDuration(Int(bar.activeMinutes * 60)))")
+                Text("活跃时长: \(bar.activity?.activeText ?? "—")")
                     .foregroundStyle(Color(red: 0.38, green: 0.6, blue: 1.0))
+                if let time = bar.activity {
+                    if let work = time.chartWorkText { Text(work).foregroundStyle(Color(white: 0.8)) }
+                    if let parallel = time.parallelText { Text(parallel).foregroundStyle(Color(white: 0.8)) }
+                }
             }
         }
         .font(.system(size: 11))

@@ -46,6 +46,7 @@ struct DiagnosticSummaryTests {
             appVersion: "0.7.4",
             buildNumber: "40",
             buildKind: "正式版",
+            interfaceStyle: .classic,
             osVersion: "macOS 26.1.0",
             architecture: "arm64",
             runtime: runtime,
@@ -119,6 +120,23 @@ struct DiagnosticSummaryTests {
     }
 
     // MARK: - Whole report
+
+    @Test
+    func reportNamesOnlyTheCurrentInterfaceStyle() {
+        var fields = input()
+        fields.interfaceStyle = .modern
+        let modern = DiagnosticSummary.render(fields)
+        #expect(modern.contains("界面样式：新版"))
+        #expect(!modern.contains("界面样式：经典"))
+
+        fields.interfaceStyle = .classic
+        let classic = DiagnosticSummary.render(fields)
+        #expect(classic.contains("界面样式：经典"))
+        #expect(!classic.contains("界面样式：新版"))
+
+        fields.interfaceStyle = nil
+        #expect(!DiagnosticSummary.render(fields).contains("界面样式"))
+    }
 
     /// Even if a hostile value slipped into a whitelisted field by mistake,
     /// the rendered report still contains none of the forbidden strings.
