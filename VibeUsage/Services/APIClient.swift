@@ -4,25 +4,40 @@ import Foundation
 struct APIClient: Sendable {
     let server: UsageServer
     let apiKey: String
+    var session: URLSession = .shared
 
     /// Fetch usage buckets for the dashboard.
     func fetchUsage(range: UsageQueryRange) async throws -> UsageResponse {
-        guard let endpoint = server.url(for: "api/usage"),
+        try await get("api/usage", range: range)
+    }
+
+    func fetchActivity(range: UsageQueryRange, filters: FilterState) async throws -> UsageActivity {
+        try await get("api/usage/activity", range: range, parameters: filters.activityQueryItems + [
+            URLQueryItem(name: "granularity", value: range.isHourly ? "hour" : "day"),
+        ])
+    }
+
+    private func get<Response: Decodable>(
+        _ path: String, range: UsageQueryRange, parameters: [URLQueryItem] = []
+    ) async throws -> Response {
+        guard let endpoint = server.url(for: path),
               var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidURL
         }
         var queryItems = (components.queryItems ?? []) + range.queryItems
         queryItems.append(URLQueryItem(name: "tz", value: TimeZone.current.identifier))
-        components.queryItems = queryItems
+        components.queryItems = queryItems + parameters
+        // URLSearchParams decodes a literal plus as a space in a project or host name.
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let url = components.url else { throw APIError.invalidURL }
 
-        debugLog("[APIClient] GET \(url.absoluteString)")
+        debugLog("[APIClient] GET \(path)")
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             debugLog("[APIClient] ERROR: invalid response type")
@@ -34,7 +49,7 @@ struct APIClient: Sendable {
         switch httpResponse.statusCode {
         case 200:
             let decoder = JSONDecoder()
-            return try decoder.decode(UsageResponse.self, from: data)
+            return try decoder.decode(Response.self, from: data)
         case 401:
             throw APIError.unauthorized
         default:
@@ -66,10 +81,31 @@ struct APIClient: Sendable {
     }
 }
 
-enum UsageQueryRange: Sendable {
+enum UsageQueryRange: Sendable, Equatable {
     case days(Int)
     case from(Date)
     case custom(from: Date, to: Date)
+
+    var isHourly: Bool {
+        switch self {
+        case .from, .days(1): true
+        default: false
+        }
+    }
+
+    /// Mirrors the inclusive lower bound parsed by the usage routes.
+    func start(at now: Date) -> Date {
+        switch self {
+        case .from(let date): return date
+        case .custom(let from, _):
+            // The classic dashboard sends date-only ISO bounds, parsed as UTC by the server.
+            return Formatters.dateFromISO8601("\(Self.dateString(from))T00:00:00Z") ?? from
+        case .days(1): return now.addingTimeInterval(-86_400)
+        case .days(let count):
+            let calendar = Calendar.current
+            return calendar.date(byAdding: .day, value: 1 - count, to: calendar.startOfDay(for: now)) ?? now
+        }
+    }
 
     var queryItems: [URLQueryItem] {
         switch self {

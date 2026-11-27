@@ -36,15 +36,8 @@ struct SummaryCardsView: View {
         filtered.reduce(0) { $0 + $1.cachedInputTokens }
     }
 
-    private var filteredSessions: [UsageSession] {
-        appState.filteredSessions
-    }
-
-    private var totalActiveSeconds: Int {
-        filteredSessions.reduce(0) { $0 + $1.activeSeconds }
-    }
-
     var body: some View {
+        let time = appState.activity?.summary
         HStack(alignment: .top, spacing: 8) {
             StatCard(
                 label: "预估费用",
@@ -65,13 +58,16 @@ struct SummaryCardsView: View {
                 action: { cachedTokenMode = cachedTokenMode == .international ? .chinese : .international },
                 help: "点击切换国际/中文单位；精确值：\(formatExactInteger(totalCachedInputTokens))"
             )
-            StatCard(label: "活跃时长", value: Formatters.formatDuration(totalActiveSeconds), color: Color(red: 0.38, green: 0.6, blue: 1.0))
+            StatCard(
+                label: "活跃时长", value: time?.activeText ?? "—", color: Color(red: 0.38, green: 0.6, blue: 1.0),
+                help: appState.activity?.summaryHelp
+            )
         }
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.28), value: totalCost)
         .animation(.easeInOut(duration: 0.28), value: totalTokens)
         .animation(.easeInOut(duration: 0.28), value: totalCachedInputTokens)
-        .animation(.easeInOut(duration: 0.28), value: totalActiveSeconds)
+        .animation(.easeInOut(duration: 0.28), value: time)
     }
 
     private func formatExactInteger(_ value: Int) -> String {
@@ -104,6 +100,8 @@ private struct StatCard: View {
                 .help(help ?? label)
                 .accessibilityLabel(label)
                 .accessibilityValue(value)
+            } else if let help, !help.isEmpty {
+                cardContent.help(help)
             } else {
                 cardContent
             }
