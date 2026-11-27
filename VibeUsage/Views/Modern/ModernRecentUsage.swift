@@ -63,15 +63,17 @@ struct ModernRecentUsageBody: View {
         appState.modernPanel.usageFilters(appState.filters, enabled: appState.quotaCardProviders)
     }
 
-    /// Every end of a read counts (`usageReadsFinished`), not the loading
-    /// flag or the bucket count: a read that ends before the next update, or
-    /// a refresh with as many buckets but other figures, must still redraw.
+    /// Every end of a read counts (`usageReadsFinished`), not the bucket
+    /// count: a read that ends before the next update, or a refresh with as
+    /// many buckets but other figures, must still redraw. The loading flag
+    /// stays in too, so a retry of the same period shows loading blocks.
     private struct RebuildKey: Equatable {
         let filters: UsagePanelFilters
         let range: TimeRange
         let from: Date
         let to: Date
         let readsFinished: UInt
+        let loading: Bool
         let account: UInt
         let presentation: Int
     }
@@ -80,7 +82,8 @@ struct ModernRecentUsageBody: View {
         RebuildKey(
             filters: filters, range: appState.timeRange,
             from: appState.customRangeFrom, to: appState.customRangeTo,
-            readsFinished: appState.usageReadsFinished, account: appState.usageAccount,
+            readsFinished: appState.usageReadsFinished, loading: appState.isLoadingData,
+            account: appState.usageAccount,
             presentation: appState.modernPanel.presentation
         )
     }
