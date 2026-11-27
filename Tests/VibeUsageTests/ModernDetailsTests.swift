@@ -68,7 +68,8 @@ struct ModernDetailsTests {
         // Twelve rows show nine and a half.
         let long = RemainderListPlacement.frame(
             trigger: CGRect(x: 16, y: 214, width: 212, height: 22), rows: 12, container: grid)
-        #expect(long.height == 5 + 22 * 9.5)
+        let nineAndAHalfRows: CGFloat = 5 + 22 * 9.5
+        #expect(long.height == nineAndAHalfRows)
         #expect(long.minY == 238)
     }
 
@@ -181,7 +182,8 @@ struct ModernDetailsTests {
                 .environment(fixture.state))
             host.sizingOptions = [.intrinsicContentSize]
             host.layoutSubtreeIfNeeded()
-            #expect(host.fittingSize.height == 2 * 252 + ModernTheme.cardSpacing)
+            let twoCardRows: CGFloat = 2 * 252 + ModernTheme.cardSpacing
+            #expect(host.fittingSize.height == twoCardRows)
         }
     }
 }
