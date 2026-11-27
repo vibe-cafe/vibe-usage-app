@@ -158,6 +158,8 @@ struct RecentUsageChart {
     struct Point: Equatable {
         let x: Double
         let value: Double
+        /// False for an activity slot before the first record: unknown, not idle.
+        var isKnown = true
     }
 
     struct Tick: Equatable {
@@ -180,7 +182,21 @@ struct RecentUsageChart {
 
     init(snapshot: UsageDisplaySnapshot, metric: ChartMode, activity: [ActivityTime?],
          units: UsagePanelState, rolling: Bool, now: Date, calendar: Calendar = .current) {
-        let slots = snapshot.grid.slots
+        self.init(slots: snapshot.grid.slots, amounts: snapshot.series.map(\.amount), metric: metric,
+                  activity: activity, units: units, rolling: rolling, now: now, calendar: calendar)
+    }
+
+    /// Active time over a period without usage (a model filter can leave
+    /// none; it does not narrow active time): the period's whole grid.
+    init(activityGrid grid: UsagePlotGrid, activity: [ActivityTime?], units: UsagePanelState,
+         rolling: Bool, now: Date, calendar: Calendar = .current) {
+        self.init(slots: grid.slots, amounts: [], metric: .activeTime, activity: activity, units: units,
+                  rolling: rolling, now: now, calendar: calendar)
+    }
+
+    /// `amounts` lines up with `slots` (empty when only active time is drawn).
+    private init(slots: [DateInterval], amounts: [UsageAmount], metric: ChartMode, activity: [ActivityTime?],
+                 units: UsagePanelState, rolling: Bool, now: Date, calendar: Calendar) {
         let kind = SlotKind(slots)
         let span = max(1, (slots.last?.end ?? now).timeIntervalSince(slots.first?.start ?? now))
         func position(_ date: Date) -> Double {
@@ -189,16 +205,18 @@ struct RecentUsageChart {
         }
 
         var values: [Double] = []
+        var known: [Bool] = []
         var tooltips: [RecentUsageTooltip] = []
         let labels = SlotLabels(calendar: calendar, now: now)
-        for (index, point) in snapshot.series.enumerated() {
-            let period = labels.period(DateInterval(start: point.start, end: point.end), kind: kind)
+        for (index, slot) in slots.enumerated() {
+            let period = labels.period(slot, kind: kind)
+            let amount = index < amounts.count ? amounts[index] : UsageAmount()
+            known.append(metric != .activeTime || index < activity.count && activity[index] != nil)
             switch metric {
             case .cost:
-                values.append(point.amount.cost)
-                tooltips.append(.line(period: period, value: RecentUsageNumber.cost(point.amount.cost, units: units)))
+                values.append(amount.cost)
+                tooltips.append(.line(period: period, value: RecentUsageNumber.cost(amount.cost, units: units)))
             case .token:
-                let amount = point.amount
                 values.append(Double(amount.totalTokens))
                 tooltips.append(.table(period: period, rows: [
                     .init(label: "总 Token", value: units.formatTokens(amount.totalTokens)),
@@ -228,19 +246,22 @@ struct RecentUsageChart {
         // Slots sit at their middle; the last one at the right edge, where
         // the dot is. A fixed-start period grows from zero at its left edge;
         // the rolling 24 hours start at their first value (134a, 134c).
+        // Active time before the first record is unknown, not idle: the
+        // curve starts at the first known slot (known idle slots stay on
+        // the zero line).
         var hoverPoints: [Point] = []
         for (index, slot) in slots.enumerated() {
             let x = index == slots.count - 1 ? 1 : position(slot.start.addingTimeInterval(slot.duration / 2))
-            hoverPoints.append(Point(x: x, value: values[index]))
+            hoverPoints.append(Point(x: x, value: values[index], isKnown: known[index]))
         }
-        var curve = hoverPoints
-        if let first = values.first, hoverPoints.first?.x ?? 0 > 0 {
-            curve.insert(Point(x: 0, value: rolling ? first : 0), at: 0)
+        var curve = hoverPoints.filter(\.isKnown)
+        if known.first == true, let first = curve.first, first.x > 0 {
+            curve.insert(Point(x: 0, value: rolling ? first.value : 0), at: 0)
         }
         self.curve = curve
         self.hoverPoints = hoverPoints
         self.tooltips = tooltips
-        peak = values.max() ?? 0
+        peak = curve.map(\.value).max() ?? 0
         peakLabel = RecentUsageChart.axisLabel(peak, metric: metric, units: units)
 
         startLabel = slots.first.map { labels.start($0, kind: kind) } ?? ""
@@ -250,6 +271,16 @@ struct RecentUsageChart {
             guard x > 0.12, x < 0.85 else { return nil }
             return Tick(x: x, label: labels.tick(slots[index].start, kind: kind))
         }
+    }
+
+    /// Whether the big number's metric has nothing in the period: no usage
+    /// for cost and Token (a model filter included), no recorded active time
+    /// for 活跃, which a model filter does not narrow (134s). Active time
+    /// that has not arrived yet is not 「暂无数据」.
+    static func isEmpty(_ metric: ChartMode, snapshot: UsageDisplaySnapshot, activity: ActivityReport?) -> Bool {
+        guard metric == .activeTime else { return snapshot.series.isEmpty }
+        guard let activity else { return false }
+        return (activity.summary?.activeSeconds ?? 0) == 0
     }
 
     /// The peak's label (top left): two significant digits or so, in the

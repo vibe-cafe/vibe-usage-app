@@ -56,8 +56,6 @@ struct ModernPanelView: View {
     @State private var headerHeight: CGFloat?
     @State private var footerHeight: CGFloat?
     @State private var contentHeight: CGFloat?
-    /// 近期消耗's filter menu, drawn over the whole panel.
-    @State private var filterMenu = UsageFilterMenuState()
 
     private var enabled: [ProviderRateLimit.Provider] { appState.quotaCardProviders }
 
@@ -99,8 +97,9 @@ struct ModernPanelView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
         }
         .coordinateSpace(.named(UsageFilterMenuState.space))
+        // 近期消耗's filter menu, drawn over the whole panel.
         .overlay { UsageFilterMenuOverlay() }
-        .environment(filterMenu)
+        .environment(appState.modernPanel.filterMenu)
         .frame(width: ModernTheme.panelWidth)
         // The window, sized by `MenuBarController` from `preferredHeight`,
         // decides the height; the content stays pinned to the top and never

@@ -179,8 +179,8 @@ struct PanelScene {
             scene("134-locked", "点进 Codex：工具一行锁定", .init(preview: .init(menu: .some(nil))), selected: .codex),
             scene("134-custom-day", "自定义只选一天：按小时，活跃曲线", .init(range: .custom, hero: .activeTime,
                                                                        singleCustomDay: true, preview: .init(hoveredSlot: 15))),
-            scene("134-chips", "条件很多时标题那一行", .init(
-                range: .custom,
+            scene("134-chips", "条件很多时标题那一行；所选模型没用量时活跃照画", .init(
+                range: .custom, hero: .activeTime,
                 filters: FilterState(sources: ["codex", "cursor"], models: ["Opus 5.5"], hostnames: ["Hogans-MacBook-Pro"])
             )),
         ]

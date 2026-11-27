@@ -27,6 +27,9 @@ final class ModernPanelState {
     /// Counts real opens, so views that keep a snapshot rebuild it against a
     /// fresh clock on every open.
     private(set) var presentation = 0
+    /// 近期消耗's filter menu. Here rather than in the view so the panel's
+    /// Escape handling (`MenuBarController`) can close it first.
+    let filterMenu = UsageFilterMenuState()
 
     /// The subscription opened from its round button; nil is 概览.
     var selectedSubscription: ProviderRateLimit.Provider? {
@@ -48,6 +51,7 @@ final class ModernPanelState {
 
     func panelDidOpen() {
         usage.panelDidOpen()
+        filterMenu.close()
         presentation &+= 1
     }
 

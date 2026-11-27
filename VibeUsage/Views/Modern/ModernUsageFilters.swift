@@ -4,8 +4,9 @@ import SwiftUI
 /// The filter menu of 近期消耗 (134e–134k). It is drawn by the panel's root
 /// overlay (`UsageFilterMenuOverlay`), not next to its button: the cards
 /// scroll and the menu hangs over the next card and the footer. One menu per
-/// panel; it closes on a click outside, Escape, a period choice, 「应用」,
-/// 「清除筛选」, and whenever the panel opens again.
+/// panel (`ModernPanelState.filterMenu`); it closes on a click outside,
+/// Escape (the first Escape closes only the menu), a period choice,
+/// 「应用」, 「清除筛选」, and whenever the panel opens again.
 @MainActor
 @Observable
 final class UsageFilterMenuState {
@@ -72,7 +73,6 @@ struct RecentUsageControls: View {
         }
         // The icon's padding hangs past the text edge (`margin-right: -7px`).
         .padding(.trailing, -7)
-        .onChange(of: appState.modernPanel.presentation) { menu.close() }
         .onDisappear { menu.close() }
     }
 

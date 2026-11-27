@@ -101,6 +101,115 @@ struct RecentUsageDisplayTests {
         #expect(report.summaryHelp == "AI 工时 4h 28m · 平均同时 1.4 个")
     }
 
+    // MARK: Activity requests and the style
+
+    @MainActor
+    private func modernState(_ suite: String, activity: @escaping (UsageQueryRange, FilterState, Bool) throws -> UsageActivity,
+                             usageReads: @escaping () -> Void = {}) -> AppState {
+        let config = VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test")
+        return AppState(
+            initialConfig: config, loadConfig: { config },
+            usageFetcher: { _, _, _ in
+                usageReads()
+                return UsageResponse(buckets: [], sessions: nil, hasAnyData: true, names: nil)
+            },
+            activityFetcher: { _, _, range, filters, hourly in try activity(range, filters, hourly) },
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
+        )
+    }
+
+    @Test @MainActor
+    func switchingToClassicWithoutReadingAgainSumsTheSingleDaysHours() async throws {
+        let suite = "RecentUsageDisplayTests.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        let day = Calendar.current.startOfDay(for: Date().addingTimeInterval(-9 * 86_400))
+        var reads = 0
+        let state = modernState(suite, activity: { _, _, hourly in
+            reads += 1
+            #expect(hourly)
+            return UsageActivity(
+                activeSeconds: 4_200, workSeconds: 5_880, parallel: 1.4,
+                series: [.init(periodStart: day.addingTimeInterval(9 * 3_600).formatted(.iso8601),
+                               activeSeconds: 1_200, workSeconds: 1_800),
+                         .init(periodStart: day.addingTimeInterval(15 * 3_600).formatted(.iso8601),
+                               activeSeconds: 3_000, workSeconds: 4_080)],
+                firstBucketStart: day.addingTimeInterval(-30 * 86_400).formatted(.iso8601)
+            )
+        })
+        state.customRangeFrom = day
+        state.customRangeTo = day
+        state.timeRange = .custom
+        await state.fetchUsageData()
+        try await waitForDashboard { state.activity != nil }
+
+        // The classic chart asks by day; the style switch alone reads nothing.
+        state.interfaceStyle.select(.classic)
+        let key = Formatters.localDayKey(day.formatted(.iso8601))
+        #expect(state.activity?.time(in: key) == ActivityTime(activeSeconds: 4_200, workSeconds: 5_880, parallel: 1.4))
+        let before = Formatters.localDayKey(day.addingTimeInterval(-40 * 86_400).formatted(.iso8601))
+        #expect(state.activity?.time(in: before) == nil)
+        await Task.yield()
+        #expect(reads == 1)
+    }
+
+    @Test @MainActor
+    func theNewPanelLeavesTheClassicProjectOutOfItsActivityRequest() async throws {
+        let suite = "RecentUsageDisplayTests.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var asked: [FilterState] = []
+        let state = modernState(suite, activity: { _, filters, _ in
+            asked.append(filters)
+            throw URLError(.notConnectedToInternet)
+        })
+        state.filters = FilterState(sources: ["codex"], projects: ["A"])
+        await state.fetchUsageData()
+        try await waitForDashboard { asked.count == 1 }
+        #expect(asked.last == FilterState(sources: ["codex"]))
+        #expect(state.filters.projects == ["A"])  // the classic selection stays
+        // A project change does not change the new panel's request.
+        state.filters.projects = ["B"]
+        await Task.yield()
+        #expect(asked.count == 1)
+
+        state.interfaceStyle.select(.classic)
+        await state.fetchUsageData()
+        try await waitForDashboard { asked.count == 2 }
+        #expect(asked.last == FilterState(sources: ["codex"], projects: ["B"]))
+    }
+
+    @Test @MainActor
+    func eachStyleStartsOnItsDefaultPeriodAndAChangedPeriodIsReadAgain() async throws {
+        let suite = "RecentUsageDisplayTests.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var reads = 0
+        let state = modernState(suite, activity: { _, _, _ in throw URLError(.notConnectedToInternet) },
+                                usageReads: { reads += 1 })
+        #expect(state.timeRange == .oneDay)
+        state.applyDefaultTimeRangeForInterfaceStyle()  // what initialize() does before the launch fetch
+        #expect(state.timeRange == .today)
+
+        state.selectInterfaceStyle(.classic)
+        #expect(state.timeRange == .oneDay)
+        try await waitForDashboard { reads == 1 }
+        state.selectInterfaceStyle(.classic)  // no change, nothing read
+        state.timeRange = .today
+        state.selectInterfaceStyle(.modern)   // already on 今天: nothing read
+        #expect(state.timeRange == .today)
+        state.selectInterfaceStyle(.classic)
+        try await waitForDashboard { reads == 2 }
+        await Task.yield()
+        #expect(reads == 2)
+    }
+
+    @Test @MainActor
+    func openingThePanelClosesTheFilterMenu() {
+        let state = ModernPanelState()
+        state.filterMenu.open(.tool)
+        #expect(state.filterMenu.isOpen)
+        state.panelDidOpen()
+        #expect(!state.filterMenu.isOpen && state.filterMenu.submenu == nil)
+    }
+
     // MARK: Activity granularity
 
     @Test @MainActor
@@ -268,11 +377,56 @@ struct RecentUsageDisplayTests {
         #expect(chart.tooltips[2] == .table(period: "11:00–12:00", rows: [
             .init(label: "活跃", value: "20m"), .init(label: "AI 工时", value: "30m"), .init(label: "平均同时", value: "1.5 个"),
         ]))
+        // The unknown 9:00 is not drawn as idle: the curve starts at the
+        // first known slot (10:00), and the known idle 12:00 stays on zero.
+        #expect(!chart.hoverPoints[0].isKnown && chart.hoverPoints[1].isKnown)
+        #expect(chart.curve.first == chart.hoverPoints[1])
+        #expect(chart.curve.count == 6 && chart.curve.contains(chart.hoverPoints[3]))
+        #expect(chart.hoverPoints[3].value == 0)
+        // With nothing unknown, a fixed start still grows from zero at the left edge.
+        let full = RecentUsageChart(snapshot: snapshot, metric: .activeTime,
+                                    activity: times.map { $0 ?? ActivityTime(activeSeconds: 0, workSeconds: 0, parallel: nil) },
+                                    units: UsagePanelState(), rolling: false, now: now, calendar: calendar)
+        #expect(full.curve.first == RecentUsageChart.Point(x: 0, value: 0))
 
         let daily = ActivityReport(response, rangeStart: calendar.startOfDay(for: now), hourly: false,
                                    timeZone: calendar.timeZone)
         #expect(RecentUsageChart.activity(daily, grid: snapshot.grid).allSatisfy { $0 == nil })
         #expect(RecentUsageChart.activity(nil, grid: snapshot.grid).count == snapshot.grid.slots.count)
+    }
+
+    @Test func theEmptyStateFollowsTheBigNumberAndAModelFilterKeepsActiveTime() {
+        let now = date("2026-11-27T07:42:00Z")
+        // A model filter left no usage in the week, but active time was recorded.
+        let snapshot = UsageDisplaySnapshot(buckets: [bucket("2026-11-25T02:00:00Z", cost: 3)], dataRange: .days(7),
+                                            filters: UsagePanelFilters(models: ["Other"]), now: now, calendar: calendar)
+        #expect(snapshot.series.isEmpty)
+        let response = UsageActivity(
+            activeSeconds: 5_400, workSeconds: 7_200, parallel: 1.3,
+            series: [.init(periodStart: "2026-11-23T16:00:00.000Z", activeSeconds: 1_800, workSeconds: 2_400),
+                     .init(periodStart: "2026-11-24T16:00:00.000Z", activeSeconds: 3_600, workSeconds: 4_800)],
+            firstBucketStart: "2026-01-01T00:00:00.000Z"
+        )
+        let report = ActivityReport(response, rangeStart: date("2026-11-20T16:00:00Z"), hourly: false,
+                                    timeZone: calendar.timeZone)
+        #expect(RecentUsageChart.isEmpty(.cost, snapshot: snapshot, activity: report))
+        #expect(RecentUsageChart.isEmpty(.token, snapshot: snapshot, activity: report))
+        #expect(!RecentUsageChart.isEmpty(.activeTime, snapshot: snapshot, activity: report))
+        // Active time that has not arrived is not 「暂无数据」; none recorded is.
+        #expect(!RecentUsageChart.isEmpty(.activeTime, snapshot: snapshot, activity: nil))
+        let idle = ActivityReport(UsageActivity(activeSeconds: 0, workSeconds: 0, parallel: nil, series: [],
+                                                firstBucketStart: "2026-01-01T00:00:00.000Z"),
+                                  rangeStart: date("2026-11-20T16:00:00Z"), hourly: false, timeZone: calendar.timeZone)
+        #expect(RecentUsageChart.isEmpty(.activeTime, snapshot: snapshot, activity: idle))
+
+        // The curve then uses the week's whole grid.
+        let grid = UsagePlotGrid(dataRange: .days(7), now: now, calendar: calendar)
+        let chart = RecentUsageChart(activityGrid: grid, activity: RecentUsageChart.activity(report, grid: grid),
+                                     units: UsagePanelState(), rolling: false, now: now, calendar: calendar)
+        #expect(chart.hoverPoints.count == 7)
+        #expect(chart.hoverPoints.map(\.value) == [0, 0, 0, 1_800, 3_600, 0, 0])
+        #expect(chart.peakLabel == "1h")
+        #expect(chart.endLabel == "今天")
     }
 
     // MARK: Filters

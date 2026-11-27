@@ -62,6 +62,11 @@ struct ActivityReport: Equatable {
     /// The first recorded instant; nil when nothing was recorded. Periods
     /// before it are unknown, later ones without a period were idle.
     let firstRecorded: Date?
+    /// An hourly report summed by local day, for the classic chart, which
+    /// asks a single custom day by its day key (the new panel reads that day
+    /// by the hour, and switching the style does not read again).
+    private var hourlyDays: [String: ActivityTime] = [:]
+    private let firstDayKey: String?
 
     init(_ response: UsageActivity, rangeStart: Date, hourly: Bool, timeZone: TimeZone = .current) {
         func key(_ iso: String) -> String {
@@ -69,6 +74,7 @@ struct ActivityReport: Equatable {
         }
         isHourly = hourly
         firstKey = response.firstBucketStart.map(key)
+        firstDayKey = response.firstBucketStart.map { Formatters.localDayKey($0, timeZone: timeZone) }
         let start = response.since.flatMap(Formatters.dateFromISO8601) ?? rangeStart
         let first = response.firstBucketStart.flatMap(Formatters.dateFromISO8601)
         firstRecorded = first
@@ -93,9 +99,28 @@ struct ActivityReport: Equatable {
                 workSecondsByStart[date, default: 0] += period.workSeconds
             }
         }
+        if hourly {
+            var days: [String: (active: Int, work: Int)] = [:]
+            for period in response.series {
+                let day = Formatters.localDayKey(period.periodStart, timeZone: timeZone)
+                days[day, default: (0, 0)].active += period.activeSeconds
+                days[day, default: (0, 0)].work += period.workSeconds
+            }
+            hourlyDays = days.mapValues { total in
+                let parallel: Double? = total.active > 0
+                    ? max(1, (10 * Double(total.work) / Double(total.active)).rounded() / 10)
+                    : nil
+                return ActivityTime(activeSeconds: total.active, workSeconds: total.work, parallel: parallel)
+            }
+        }
     }
 
     func time(in key: String) -> ActivityTime? {
+        // A day key ("yyyy-MM-dd") asked of an hourly report: the sum of its hours.
+        if isHourly, key.count == 10 {
+            guard let firstDayKey, key >= firstDayKey else { return nil }
+            return hourlyDays[key] ?? ActivityTime(activeSeconds: 0, workSeconds: 0, parallel: nil)
+        }
         guard let firstKey, key >= firstKey else { return nil }
         return periods[key] ?? ActivityTime(activeSeconds: 0, workSeconds: 0, parallel: nil)
     }

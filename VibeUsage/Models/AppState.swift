@@ -134,7 +134,7 @@ final class AppState {
     var chartMode: ChartMode = .token
     var filters: FilterState = .init() {
         didSet {
-            guard oldValue.activityQueryItems != filters.activityQueryItems,
+            guard activityFilters(oldValue).activityQueryItems != activityFilters(filters).activityQueryItems,
                   let range = activityRange else { return }
             reloadConfig()
             guard let key = config?.apiKey else { return }
@@ -254,6 +254,23 @@ final class AppState {
     /// Apply at launch before the first fetch, and whenever the interface style changes.
     func applyDefaultTimeRange(forModernInterface modern: Bool) {
         timeRange = modern ? .today : .oneDay
+    }
+
+    /// The current style's default period (new panel 今天, classic 24H);
+    /// `initialize()` calls it before the launch fetch.
+    func applyDefaultTimeRangeForInterfaceStyle() {
+        applyDefaultTimeRange(forModernInterface: interfaceStyle.current == .modern)
+    }
+
+    /// 「界面样式」: switch the style, then put the period on its default.
+    /// A changed period is read again, the same read a period change makes.
+    func selectInterfaceStyle(_ style: InterfaceStyle) {
+        let previous = interfaceStyle.current
+        interfaceStyle.select(style)
+        guard interfaceStyle.current != previous else { return }
+        let range = timeRange
+        applyDefaultTimeRangeForInterfaceStyle()
+        if timeRange != range { Task { await fetchUsageData() } }
     }
 
     func usageDisplaySnapshot(filters: UsagePanelFilters, now: Date) -> UsageDisplaySnapshot? {
@@ -426,6 +443,8 @@ final class AppState {
     // MARK: - Lifecycle
 
     func initialize() {
+        // The new panel opens on 今天, the classic one on 24H, from the first fetch on.
+        applyDefaultTimeRangeForInterfaceStyle()
         // Load menu bar prefs
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
@@ -691,6 +710,17 @@ final class AppState {
         }
     }
 
+    /// What the activity request filters by. The new panel has no project
+    /// dimension (its cost and Tokens ignore projects), so the classic
+    /// project selection stays out of its request; the classic request and
+    /// selection are unchanged.
+    private func activityFilters(_ filters: FilterState) -> FilterState {
+        guard interfaceStyle.current == .modern else { return filters }
+        var result = filters
+        result.projects.removeAll()
+        return result
+    }
+
     /// Hour periods for today and the rolling day; in the new panel also for
     /// a single custom day, whose curve is drawn by the hour (#105). The
     /// classic chart keeps one day there, so its request is unchanged.
@@ -704,7 +734,7 @@ final class AppState {
         activityRange = range
         let start = range.start(at: Date())
         let hourly = activityIsHourly(range)
-        activityTask = Task { [weak self, activityFetcher, server = usageServer, filters] in
+        activityTask = Task { [weak self, activityFetcher, server = usageServer, filters = activityFilters(filters)] in
             guard !Task.isCancelled else { return }
             let result = try? await activityFetcher(server, key, range, filters, hourly)
             guard !Task.isCancelled else { return }

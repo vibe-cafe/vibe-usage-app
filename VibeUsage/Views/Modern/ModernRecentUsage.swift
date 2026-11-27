@@ -40,6 +40,7 @@ struct ModernRecentUsageBody: View {
     @State private var snapshot: UsageDisplaySnapshot?
     @State private var builtAt = Date()
     @State private var builtRange = TimeRange.today
+    @State private var builtQueryRange = UsageQueryRange.days(1)
     @State private var isStale = false
     /// The activity that goes with the snapshot on screen.
     @State private var activity: ActivityReport?
@@ -86,6 +87,7 @@ struct ModernRecentUsageBody: View {
             snapshot = fresh
             builtAt = now
             builtRange = appState.timeRange
+            builtQueryRange = appState.currentQueryRange
             isStale = false
             activity = appState.activity
         } else {
@@ -97,9 +99,11 @@ struct ModernRecentUsageBody: View {
     private var content: some View {
         let hero = appState.modernPanel.hero
         let units = appState.modernPanel.usage
-        if let snapshot, !(snapshot.series.isEmpty && isStale) {
+        if let snapshot,
+           case let isEmpty = RecentUsageChart.isEmpty(hero, snapshot: snapshot, activity: activity),
+           !(isEmpty && isStale) {
             let figures = RecentUsageFigures(total: snapshot.total, activity: activity?.summary, units: units)
-            if snapshot.series.isEmpty {
+            if isEmpty {
                 // 134s
                 HStack(alignment: .top, spacing: 0) {
                     RecentUsageNumbers(figures: figures, hero: hero, activity: activity, isEmpty: true)
@@ -107,11 +111,7 @@ struct ModernRecentUsageBody: View {
                 }
             } else {
                 let isLoading = isStale && appState.isLoadingData
-                let chart = RecentUsageChart(
-                    snapshot: snapshot, metric: hero,
-                    activity: RecentUsageChart.activity(activity, grid: snapshot.grid),
-                    units: units, rolling: builtRange == .oneDay, now: builtAt
-                )
+                let chart = makeChart(snapshot, hero: hero, units: units)
                 HStack(alignment: .top, spacing: 0) {
                     // 134r: the old figures fade while the new period loads.
                     RecentUsageNumbers(figures: figures, hero: hero, activity: activity, isEmpty: false,
@@ -136,6 +136,20 @@ struct ModernRecentUsageBody: View {
                 emptyMessage
             }
         }
+    }
+
+    /// The curve of the big number's metric. Active time over a period
+    /// without usage (left by a model filter, which does not narrow active
+    /// time) uses the period's whole grid.
+    private func makeChart(_ snapshot: UsageDisplaySnapshot, hero: ChartMode, units: UsagePanelState) -> RecentUsageChart {
+        if hero == .activeTime, snapshot.series.isEmpty {
+            let grid = UsagePlotGrid(dataRange: builtQueryRange, now: builtAt, calendar: .current)
+            return RecentUsageChart(activityGrid: grid, activity: RecentUsageChart.activity(activity, grid: grid),
+                                    units: units, rolling: builtRange == .oneDay, now: builtAt)
+        }
+        return RecentUsageChart(snapshot: snapshot, metric: hero,
+                                activity: RecentUsageChart.activity(activity, grid: snapshot.grid),
+                                units: units, rolling: builtRange == .oneDay, now: builtAt)
     }
 
     /// 134s: 「暂无数据」 and the design's one line, which only fits when
@@ -526,15 +540,18 @@ private struct RecentUsagePlot: View {
         let point = chart.hoverPoints[index]
         let x = point.x * width
         let y = RecentUsageCurve.y(point.value, peak: chart.peak, height: height)
-        Rectangle()
-            .fill(ModernTheme.text.opacity(0.3))
-            .frame(width: 1, height: max(0, height - y))
-            .offset(x: x - 0.5, y: y)
-        Circle()
-            .fill(RecentUsageStyle.markerFill)
-            .overlay(Circle().strokeBorder(RecentUsageStyle.ink, lineWidth: 1.5))
-            .frame(width: 8, height: 8)
-            .offset(x: x - 4, y: y - 4)
+        // An unknown slot has no point on the curve: only its 「—」.
+        if point.isKnown {
+            Rectangle()
+                .fill(ModernTheme.text.opacity(0.3))
+                .frame(width: 1, height: max(0, height - y))
+                .offset(x: x - 0.5, y: y)
+            Circle()
+                .fill(RecentUsageStyle.markerFill)
+                .overlay(Circle().strokeBorder(RecentUsageStyle.ink, lineWidth: 1.5))
+                .frame(width: 8, height: 8)
+                .offset(x: x - 4, y: y - 4)
+        }
         if index < chart.tooltips.count {
             RecentUsageTooltipView(tooltip: chart.tooltips[index], pointX: x, pointY: y, width: width)
         }
