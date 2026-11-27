@@ -170,13 +170,12 @@ struct RecentUsageDisplayTests {
         #expect(queries == [query("claude-code"), query("codex")])
 
         state.modernPanel.selectedSubscription = nil
-        #expect(state.activity == nil)
-        try await waitForDashboard { activeNumber(state) == "9m" }
+        #expect(activeNumber(state) == "9m")
         state.modernPanel.selectedSubscription = .claudeCode
         await state.panelWillOpen().value
         #expect(activeNumber(state) == "9m")
-        #expect(queries == [query("claude-code"), query("codex"), query("claude-code")])
-        #expect(usageReads == 1)
+        #expect(queries == [query("claude-code"), query("codex")] + Array(repeating: query("claude-code"), count: 4))
+        #expect(usageReads == 5)
     }
 
     @Test @MainActor
@@ -201,8 +200,8 @@ struct RecentUsageDisplayTests {
         try await waitForDashboard { activeNumber(state) == "17m" }
         await state.setQuotaProductSelected(.claudeCode, selected: false)
         try await waitForDashboard { activeNumber(state) == "42m" }
-        #expect(sources == [["codex"], ["codex"], [], ["codex"], []])
-        #expect(usageReads == 2)
+        #expect(sources == [["codex"], ["codex"], [], [], [], [], []])
+        #expect(usageReads == 5)
     }
 
     @Test @MainActor

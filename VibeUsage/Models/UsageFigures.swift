@@ -31,6 +31,7 @@ enum UsageFigures {
 @MainActor
 final class UsageFiguresKeeper {
     private var retained: UsageDisplaySnapshot?
+    private var retainedLocalDay: Date?
     private var account: UInt?
 
     func figures(_ appState: AppState, filters: UsagePanelFilters, now: Date = Date()) -> UsageFigures {
@@ -38,8 +39,14 @@ final class UsageFiguresKeeper {
             account = appState.usageAccount
             retained = nil
         }
+        if let retainedLocalDay, !Calendar.current.isDate(retainedLocalDay, inSameDayAs: now) {
+            retained = nil
+        }
         let current = appState.usageDisplaySnapshot(filters: filters, now: now)
-        if let current { retained = current }
+        if let current {
+            retained = current
+            retainedLocalDay = appState.timeRange == .today || appState.timeRange == .oneDay ? now : nil
+        }
         // A read about to start for a just-changed period counts as running.
         let figures = UsageFigures.resolve(current: current, retained: retained,
                                            isLoading: appState.isLoadingData || appState.isUsageReadPending,

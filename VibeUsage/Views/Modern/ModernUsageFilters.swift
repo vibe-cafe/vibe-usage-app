@@ -136,8 +136,7 @@ struct RecentUsageControls: View {
 
     private func selectPeriod(_ range: TimeRange) {
         guard appState.timeRange != range else { return }
-        appState.timeRange = range
-        Task { await appState.fetchUsageData() }
+        appState.selectUsagePeriod(range)
     }
 }
 
@@ -442,8 +441,7 @@ private struct UsageFilterSubmenu: View {
             lampRow(UsageFilterSummary.periodLabel(range), state: !customOn && appState.timeRange == range ? .on : .off,
                     isMono: range != .today) {
                 if appState.timeRange != range {
-                    appState.timeRange = range
-                    Task { await appState.fetchUsageData() }
+                    appState.selectUsagePeriod(range)
                 }
                 menu.close()
             }
@@ -616,9 +614,8 @@ private struct UsageCustomDates: View {
         let calendar = Calendar.current
         appState.customRangeFrom = calendar.startOfDay(for: draft.from)
         appState.customRangeTo = calendar.startOfDay(for: draft.to)
-        appState.timeRange = .custom
+        appState.selectUsagePeriod(.custom)
         menu.close()
-        Task { await appState.fetchUsageData() }
     }
 }
 

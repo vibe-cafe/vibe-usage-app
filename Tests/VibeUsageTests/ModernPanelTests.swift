@@ -104,6 +104,7 @@ struct ModernPanelTests {
             initialConfig: config,
             loadConfig: { config },
             usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults
         )
         state.runSync = { (.success("ok"), nil) }
@@ -192,6 +193,7 @@ struct ModernPanelTests {
         let state = AppState(
             loadConfig: { stored },
             usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults
         )
         state.saveConfig = { stored = $0 }

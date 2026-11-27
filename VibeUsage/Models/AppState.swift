@@ -112,9 +112,22 @@ final class AppState {
     var buckets: [UsageBucket] = []
     private(set) var activity: ActivityReport?
     private var activityTask: Task<Void, Never>?
+    private var modernActivityTask: Task<Void, Never>?
     private var activityRange: UsageQueryRange?
     private var lastActivityFilterItems: [URLQueryItem]?
-    var isLoadingActivity: Bool { activityTask != nil || (activityRange != nil && lastActivityFilterItems == nil) }
+    var isLoadingActivity: Bool {
+        if interfaceStyle.current == .modern && activity != nil { return false }
+        return activityTask != nil || modernActivityTask != nil || (activityRange != nil && lastActivityFilterItems == nil)
+    }
+    private struct ActivityQuery: Hashable {
+        let range: UsageQueryRange
+        let items: [URLQueryItem]
+    }
+    private let usageCache = RangeReadCache<UsageQueryRange, UsageResponse>()
+    private let activityCache = RangeReadCache<ActivityQuery, ActivityReport>()
+    @ObservationIgnored var usageNow: () -> Date = Date.init
+    private var cacheDay: Date?
+    private var lastPrefetchOpen: Date?
     var hasAnyData: Bool = false
     var isLoadingData: Bool = false
     var hasLoadedUsageData: Bool = false
@@ -165,6 +178,7 @@ final class AppState {
         guard activityFiltersChanged else { return }
         activityTask?.cancel()
         activityTask = nil
+        modernActivityTask = nil
         lastActivityFilterItems = nil
         activity = nil
     }
@@ -176,6 +190,9 @@ final class AppState {
         if activityRange == nil {
             // Disk configuration switched accounts; refresh both halves of the dashboard.
             Task { await fetchUsageData() }
+        } else if interfaceStyle.current == .modern {
+            expireHourlyResults()
+            _ = readModernActivity(currentQueryRange, key: key, reuseFor: 60, display: true)
         } else {
             startActivityFetch(range: range, key: key)
         }
@@ -263,11 +280,11 @@ final class AppState {
     }
 
     var currentQueryRange: UsageQueryRange {
-        queryRange(at: Date())
+        queryRange(at: usageNow())
     }
 
-    private func queryRange(at now: Date) -> UsageQueryRange {
-        switch timeRange {
+    private func queryRange(for period: TimeRange? = nil, at now: Date) -> UsageQueryRange {
+        switch period ?? timeRange {
         case .today:
             return .from(Calendar.current.startOfDay(for: now))
         case .oneDay:
@@ -304,6 +321,14 @@ final class AppState {
         guard interfaceStyle.current != previous else { return }
         let range = timeRange
         applyDefaultTimeRangeForInterfaceStyle()
+        if previous == .modern {
+            // Classic may inherit a foreground read with identical parameters.
+            // Stop the speculative requests and let its usual refresh take over.
+            let current = currentQueryRange
+            usageCache.remove { $0 != current || attemptedUsageRange != current }
+            activityCache.remove { $0.range != current || $0.items != activityFilters.activityQueryItems }
+            lastPrefetchOpen = nil
+        }
         if timeRange != range {
             discardActivityIfFiltersChanged()
             Task { await fetchUsageData() }
@@ -317,7 +342,7 @@ final class AppState {
     /// not cut its start: the slots of the usage without the model filter,
     /// or the period's whole grid when there is none. Nil like the snapshot.
     func activityPlotGrid(filters: UsagePanelFilters, now: Date) -> UsagePlotGrid? {
-        guard let loadedUsageRange, loadedUsageRange == queryRange(at: now) else { return nil }
+        guard let loadedUsageRange = loadedRange(at: now) else { return nil }
         var activityFilters = filters
         activityFilters.models = []
         let usage = UsageDisplaySnapshot(buckets: buckets, dataRange: loadedUsageRange, filters: activityFilters,
@@ -326,9 +351,17 @@ final class AppState {
     }
 
     func usageDisplaySnapshot(filters: UsagePanelFilters, now: Date) -> UsageDisplaySnapshot? {
-        guard let loadedUsageRange, loadedUsageRange == queryRange(at: now) else { return nil }
+        guard let loadedUsageRange = loadedRange(at: now) else { return nil }
         return UsageDisplaySnapshot(buckets: buckets, dataRange: loadedUsageRange, filters: filters,
                                     modelName: modelName, toolName: toolName, now: now)
+    }
+
+    private func loadedRange(at now: Date) -> UsageQueryRange? {
+        guard let loadedUsageRange, loadedUsageRange == queryRange(at: now) else { return nil }
+        // Unlike Today, the rolling day's query is identical across midnight.
+        if interfaceStyle.current == .modern, loadedUsageRange == .days(1), let cacheDay,
+           !Calendar.current.isDate(cacheDay, inSameDayAs: now) { return nil }
+        return loadedUsageRange
     }
 
     var visibleDayCount: Int {
@@ -627,6 +660,7 @@ final class AppState {
             // A pending response or cached dashboard belongs to the previous account/server.
             usageFetchGeneration &+= 1
             usageAccount &+= 1
+            clearRangeCaches()
             activityTask?.cancel()
             activityTask = nil
             activityRange = nil
@@ -736,12 +770,186 @@ final class AppState {
 
     // MARK: - Data Fetching
 
-    func fetchUsageData() async {
+    private var usesFixtureDashboard: Bool {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["VIBE_USAGE_QUOTA_UI_TEST"] == "1" { return }
+        ProcessInfo.processInfo.environment["VIBE_USAGE_QUOTA_UI_TEST"] == "1"
+        #else
+        false
         #endif
+    }
+
+    private func clearRangeCaches() {
+        usageCache.remove()
+        activityCache.remove()
+        modernActivityTask = nil
+        cacheDay = nil
+        lastPrefetchOpen = nil
+    }
+
+    /// Also called when macOS announces midnight while the panel stays open.
+    func expireHourlyResults() {
+        guard interfaceStyle.current == .modern else { return }
+        let today = Calendar.current.startOfDay(for: usageNow())
+        defer { cacheDay = today }
+        guard let cacheDay, cacheDay != today else { return }
+        usageCache.remove { $0.isHourly }
+        activityCache.remove { $0.range.isHourly }
+        lastPrefetchOpen = nil
+        if loadedUsageRange?.isHourly == true {
+            loadedUsageRange = nil
+            buckets = []
+            hasAnyData = false
+            usageNames = nil
+            usageReadsFinished &+= 1
+        }
+        if attemptedUsageRange?.isHourly == true {
+            attemptedUsageRange = nil
+            lastFetchTime = nil
+            isLoadingData = false
+        }
+        if activityRange?.isHourly == true {
+            activityRange = nil
+            modernActivityTask = nil
+            lastActivityFilterItems = nil
+            activity = nil
+        }
+    }
+
+    /// Called by both modern period pickers. Paint a cached answer in the
+    /// same update as the selection, even if its refresh will take a while.
+    func selectUsagePeriod(_ period: TimeRange) {
+        guard interfaceStyle.current == .modern else { return }
+        timeRange = period
+        guard !usesFixtureDashboard else { return }
+        reloadConfig()
+        guard let key = config?.apiKey else { return }
+        expireHourlyResults()
+        _ = readModernRange(currentQueryRange, key: key, reuseFor: 60, display: true)
+    }
+
+    private typealias DashboardReads = (usage: Task<Void, Never>?, activity: Task<Void, Never>?)
+
+    private func readModernRange(_ range: UsageQueryRange, key: String, reuseFor interval: TimeInterval,
+                                 display: Bool, onOpen: Bool = false) -> DashboardReads {
+        let activity = readModernActivity(range, key: key, reuseFor: interval, display: display, onOpen: onOpen)
+        let cached = usageCache[range]
+        if display {
+            usageFetchGeneration &+= 1
+            attemptedUsageRange = range
+            if let cached { showUsage(cached, for: range) }
+        }
+        let task = usageCache.read(range, reuseFor: interval, debounceFailure: onOpen, now: usageNow) {
+            [usageFetcher, server = usageServer] in
+            try await usageFetcher(server, key, range)
+        } finished: { [weak self] response in
+            guard let self else { return }
+            self.expireHourlyResults()
+            guard self.currentQueryRange == range, self.attemptedUsageRange == range else { return }
+            if let response { self.showUsage(response, for: range) }
+            self.lastFetchTime = self.usageNow()
+            self.isLoadingData = false
+            self.hasLoadedUsageData = true
+            self.usageReadsFinished &+= 1
+        }
+        if display { isLoadingData = task != nil && loadedUsageRange != range }
+        return (task, activity)
+    }
+
+    private func showUsage(_ response: UsageResponse, for range: UsageQueryRange) {
+        buckets = response.buckets
+        hasAnyData = response.hasAnyData
+        loadedUsageRange = range
+        hasLoadedUsageData = true
+        usageNames = response.names
+    }
+
+    private func readModernActivity(_ range: UsageQueryRange, key: String, reuseFor interval: TimeInterval,
+                                    display: Bool, onOpen: Bool = false) -> Task<Void, Never>? {
+        let filters = activityFilters
+        let query = ActivityQuery(range: range, items: filters.activityQueryItems)
+        if display {
+            activityTask?.cancel()
+            activityTask = nil
+            activity = activityCache[query]
+            activityRange = range
+            lastActivityFilterItems = query.items
+        }
+        let start = range.start(at: usageNow())
+        let hourly = activityIsHourly(range)
+        let task = activityCache.read(query, reuseFor: interval, debounceFailure: onOpen, now: usageNow) {
+            [activityFetcher, server = usageServer] in
+            let result = try await activityFetcher(server, key, range, filters, hourly)
+            return ActivityReport(result, rangeStart: start, hourly: hourly)
+        } finished: { [weak self] report in
+            guard let self else { return }
+            self.expireHourlyResults()
+            guard self.activityRange == range,
+                  self.lastActivityFilterItems == query.items else { return }
+            self.activity = report
+            self.modernActivityTask = nil
+        }
+        if display { modernActivityTask = task }
+        return task
+    }
+
+    private func openModernUsage() -> Task<Void, Never>? {
+        guard !usesFixtureDashboard else { return nil }
+        reloadConfig()
+        guard let key = config?.apiKey else { return nil }
+        expireHourlyResults()
+        let now = usageNow()
+        let account = usageAccount
+        let shouldPrefetch = lastPrefetchOpen.map { now.timeIntervalSince($0) >= 60 } ?? true
+        if shouldPrefetch { lastPrefetchOpen = now }
+        let reads = readModernRange(currentQueryRange, key: key, reuseFor: 60, display: true, onOpen: true)
+        return Task {
+            await reads.usage?.value
+            await reads.activity?.value
+            if shouldPrefetch { await prefetchQuickPeriods(openedAt: now, account: account) }
+        }
+    }
+
+    private func prefetchQuickPeriods(openedAt: Date, account: UInt) async {
+        // A click or filter change during the open may have selected a slower
+        // request. Give that selection the same priority as the opening one.
+        while lastPrefetchOpen == openedAt {
+            let usage = usageCache.inFlight(for: currentQueryRange)
+            let activity = modernActivityTask
+            if usage == nil && activity == nil { break }
+            await usage?.value
+            await activity?.value
+        }
+        guard lastPrefetchOpen == openedAt, account == usageAccount, interfaceStyle.current == .modern else { return }
+        reloadConfig()
+        guard account == usageAccount, let key = config?.apiKey else { return }
+        expireHourlyResults()
+        let current = currentQueryRange
+        var pending: [DashboardReads] = []
+        for period in UsageFilterSummary.quickPeriods {
+            let range = queryRange(for: period, at: usageNow())
+            guard range != current else { continue }
+            let pair = readModernRange(range, key: key, reuseFor: 300, display: false)
+            if pair.usage != nil || pair.activity != nil { pending.append(pair) }
+            // A custom period leaves five shortcuts. Read at most four per open.
+            if pending.count == 4 { break }
+        }
+        for pair in pending {
+            await pair.usage?.value
+            await pair.activity?.value
+        }
+    }
+
+    func fetchUsageData() async {
+        guard !usesFixtureDashboard else { return }
         reloadConfig()
         guard isConfigured, let apiKey = config?.apiKey else { return }
+        if interfaceStyle.current == .modern {
+            expireHourlyResults()
+            let reads = readModernRange(currentQueryRange, key: apiKey, reuseFor: 0, display: true)
+            await reads.usage?.value
+            return
+        }
+        if cacheDay != nil { clearRangeCaches() }
         usageFetchGeneration &+= 1
         let generation = usageFetchGeneration
         let queryRange = currentQueryRange
@@ -792,6 +1000,10 @@ final class AppState {
 
     private func startActivityFetch(range: UsageQueryRange, key: String) {
         activityTask?.cancel()
+        if modernActivityTask != nil {
+            activityCache.remove()
+            modernActivityTask = nil
+        }
         let filters = activityFilters
         let items = filters.activityQueryItems
         if activityRange != range || lastActivityFilterItems != items { activity = nil }
@@ -811,14 +1023,16 @@ final class AppState {
     /// Fetch dashboard data unless we already fetched within the last 60s.
     /// Used by popover open to avoid hammering /api/usage on rapid open/close.
     func fetchUsageDataIfNeeded() async {
+        if interfaceStyle.current == .modern {
+            await openModernUsage()?.value
+            return
+        }
         // Opening the panel during the eager launch fetch must not start the
         // same request again. Explicit range changes call fetchUsageData()
         // directly and are still allowed to supersede the in-flight request.
         let recentlyFetched = lastFetchTime.map { Date().timeIntervalSince($0) < 60 } ?? false
         if !isLoadingData && !recentlyFetched {
             await fetchUsageData()
-        } else if interfaceStyle.current == .modern {
-            reloadActivityIfFiltersChanged()
         }
     }
 
@@ -1140,16 +1354,13 @@ final class AppState {
     @discardableResult
     func panelWillOpen() -> Task<Void, Never> {
         modernPanel.panelDidOpen()
-        if interfaceStyle.current == .modern {
-            discardActivityIfFiltersChanged()
-        }
-        let usage = Task { await fetchUsageDataIfNeeded() }
+        let usage = interfaceStyle.current == .modern ? openModernUsage() : Task { await fetchUsageDataIfNeeded() }
         // The coordinator applies a per-provider interval, so rapid
         // open/close stays cheap.
         let quotas = Task { await refreshSelectedRateLimitsIfNeeded() }
         rateLimitPanelVisibilityChanged(visible: true)
         return Task {
-            await usage.value
+            await usage?.value
             await quotas.value
         }
     }
