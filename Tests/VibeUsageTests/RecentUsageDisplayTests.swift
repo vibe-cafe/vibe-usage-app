@@ -60,6 +60,7 @@ struct RecentUsageDisplayTests {
         #expect(figures.text(.token) == "65.5M")
         #expect(figures.exactText(.token) == "65,500,000")
         #expect(figures.text(.activeTime) == "—")
+        #expect(figures.text(.workTime) == "—")
 
         units.toggleHeroUnit()
         figures = RecentUsageFigures(total: total, activity: ActivityTime(activeSeconds: 11_520, workSeconds: 16_128,
@@ -68,7 +69,17 @@ struct RecentUsageDisplayTests {
         #expect(figures.exactText(.cost) == "¥288.4259")
         #expect(figures.unitHint(.cost) == "点一下换成美元")
         #expect(figures.text(.activeTime) == "3h 12m")
-        #expect(RecentUsageFigures.rows(besides: .token) == [.cost, .activeTime])
+        #expect(figures.text(.workTime) == "4h 28m")
+        #expect(RecentUsageFigures.rows(besides: .cost) == [.metric(.token), .metric(.activeTime), .workTime])
+        #expect(RecentUsageFigures.rows(besides: .token) == [.metric(.cost), .metric(.activeTime), .workTime])
+        #expect(RecentUsageFigures.rows(besides: .activeTime) == [.metric(.cost), .metric(.token), .workTime])
+        #expect(RecentUsageFigures.rowLabel(.workTime) == "AI 工时")
+
+        // A recorded period without any: 「0m」, like active time.
+        let idle = RecentUsageFigures(total: total, activity: ActivityTime(activeSeconds: 0, workSeconds: 0, parallel: nil),
+                                      units: units)
+        #expect(idle.text(.activeTime) == "0m")
+        #expect(idle.text(.workTime) == "0m")
     }
 
     @Test func tokensUseThreeSignificantDigitsAndDurationsPadMinutes() {
@@ -97,7 +108,8 @@ struct RecentUsageDisplayTests {
         let report = ActivityReport(UsageActivity(activeSeconds: 11_520, workSeconds: 16_080, parallel: 1.4,
                                                   series: [], firstBucketStart: "2026-01-01T00:00:00Z"),
                                     rangeStart: date("2026-11-27T00:00:00Z"), hourly: true)
-        #expect(report.summaryHelp(duration: RecentUsageNumber.duration) == "AI 工时 4h 28m · 平均同时 1.4 个")
+        // The new panel's hover leaves AI 工时 to its row; the classic one keeps it.
+        #expect(report.panelHelp == "平均同时 1.4 个")
         #expect(report.summaryHelp == "AI 工时 4h 28m · 平均同时 1.4 个")
     }
 

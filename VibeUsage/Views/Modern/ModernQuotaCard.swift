@@ -274,9 +274,9 @@ struct ModernQuotaOverview: View {
     let select: (ProviderRateLimit.Provider) -> Void
 
     /// Four lines (four subscriptions, or three and 「其余 N 个」) fill the
-    /// 148 pt ring height; two or three take 112 (132a, 132b).
+    /// card body (the ring's 148 pt); two or three take 112 (132a, 132b).
     private var height: CGFloat {
-        overview.rows.count + (overview.remainder == nil ? 0 : 1) > 3 ? 148 : 112
+        overview.rows.count + (overview.remainder == nil ? 0 : 1) > 3 ? ModernTheme.cardBodyHeight : 112
     }
 
     var body: some View {

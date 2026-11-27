@@ -11,7 +11,14 @@ struct RecentUsagePreview {
     var expandedFamilies: Set<String> = []
     /// View tests: what the card settled on after each update.
     var onShow: (@MainActor (RecentUsageShown) -> Void)?
-    var onActivityNumber: (@MainActor (String?) -> Void)?
+    var onActivityNumbers: (@MainActor (RecentUsageActivityShown) -> Void)?
+}
+
+/// The 活跃 and AI 工时 figures as drawn (nil: a loading block), reported
+/// to view tests.
+struct RecentUsageActivityShown: Equatable {
+    let active: String?
+    let work: String?
 }
 
 /// What 近期消耗 drew, reported to view tests.
@@ -35,8 +42,10 @@ enum RecentUsageStyle {
     static let markerFill = Color(settingsHex: 0x1B1E23)
 }
 
-/// The body of 近期消耗 with a linked account (134): the big number and two
-/// small rows on the left, the curve on the right. Every figure comes from
+/// The body of 近期消耗 with a linked account (134): the big number and
+/// three small rows (the two other metrics, then AI 工时) on the left, the
+/// curve on the right, as tall as 订阅配额's body
+/// (`ModernTheme.cardBodyHeight`). Every figure comes from
 /// `AppState.usageDisplaySnapshot` (#105) and `AppState.activity`.
 ///
 /// What it shows follows the rule shared with the details cards
@@ -97,7 +106,7 @@ struct ModernRecentUsageBody: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .frame(height: ModernTheme.recentUsageBodyHeight, alignment: .top)
+            .frame(height: ModernTheme.cardBodyHeight, alignment: .top)
             .onChange(of: rebuildKey, initial: true) { previous, current in
                 if previous.filters.sources != current.filters.sources || previous.filters.hostnames != current.filters.hostnames {
                     activity = nil
@@ -226,9 +235,10 @@ struct ModernRecentUsageBody: View {
 
 // MARK: - Numbers (left column)
 
-/// The big number with its caption on top and the two other metrics below
-/// (134a, 134l–134p). Clicking the big number switches its unit; clicking a
-/// small row makes it the big number.
+/// The big number with its caption on top and the small rows at the bottom,
+/// level with the curve's axis (134a, 134l–134p): the two other metrics,
+/// then AI 工时. Clicking the big number switches its unit; clicking a
+/// metric's row makes it the big number. AI 工时 is only a figure.
 private struct RecentUsageNumbers: View {
     @Environment(AppState.self) private var appState
     @Environment(\.recentUsagePreview) private var preview
@@ -252,17 +262,19 @@ private struct RecentUsageNumbers: View {
             }
             Spacer(minLength: 0)
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(RecentUsageFigures.rows(besides: hero), id: \.self) { metric in
-                    row(metric).zIndex(metric == .activeTime ? 1 : 0)
+                ForEach(RecentUsageFigures.rows(besides: hero), id: \.self) { row in
+                    self.row(row).zIndex(row == .metric(.activeTime) ? 1 : 0)
                 }
             }
         }
-        .frame(width: ModernTheme.leadingColumnWidth, height: ModernTheme.recentUsageBodyHeight, alignment: .topLeading)
+        .frame(width: ModernTheme.leadingColumnWidth, height: ModernTheme.cardBodyHeight, alignment: .topLeading)
         .onAppear {
             heroHovered = preview.heroHovered
             activityHovered = preview.activityHovered
         }
-        .onChange(of: activityValue, initial: true) { _, value in preview.onActivityNumber?(value) }
+        .onChange(of: RecentUsageActivityShown(active: activityValue, work: workValue), initial: true) { _, shown in
+            preview.onActivityNumbers?(shown)
+        }
     }
 
     private var heroButton: some View {
@@ -301,40 +313,58 @@ private struct RecentUsageNumbers: View {
         activity == nil && appState.isLoadingActivity ? nil : figures.text(.activeTime)
     }
 
+    /// AI 工时 comes with active time, in the same read: the same rule.
+    private var workValue: String? {
+        activity == nil && appState.isLoadingActivity ? nil : figures.text(.workTime)
+    }
+
     private func number(_ metric: ChartMode) -> String? {
         metric == .activeTime ? activityValue : figures.text(metric)
     }
 
+    /// The hover over active time: average concurrency, or why it is
+    /// missing. AI 工时 is a row of its own.
+    private var activityHelp: String? {
+        guard let help = activity?.panelHelp, !help.isEmpty else { return nil }
+        return help
+    }
+
     /// 134p: the exact figure and what a click does; for active time, the
-    /// AI work time and average concurrency (or why it is missing).
+    /// line above.
     private var heroHoverLines: (primary: String?, secondary: String?)? {
         if hero == .activeTime {
-            guard let help = activity?.summaryHelp(duration: RecentUsageNumber.duration), !help.isEmpty else { return nil }
-            return (nil, help)
+            return activityHelp.map { (nil, $0) }
         }
         guard !isEmpty, let exact = figures.exactText(hero) else { return nil }
         return (exact, figures.unitHint(hero))
     }
 
-    private func row(_ metric: ChartMode) -> some View {
-        Button {
-            appState.modernPanel.hero = metric
-        } label: {
-            RecentUsageRowLabel(title: RecentUsageFigures.rowLabel(metric), value: number(metric), isMuted: isEmpty)
-        }
-        .buttonStyle(.plain)
-        .disabled(!isInteractive)
-        .overlay(alignment: .bottomLeading) {
-            if metric == .activeTime, activityHovered,
-               let help = activity?.summaryHelp(duration: RecentUsageNumber.duration), !help.isEmpty {
-                RecentUsageHoverBlock(primary: nil, secondary: help)
-                    .fixedSize()
-                    .offset(x: -2, y: -22)
-                    .allowsHitTesting(false)
+    @ViewBuilder
+    private func row(_ row: RecentUsageRow) -> some View {
+        switch row {
+        case .metric(let metric):
+            Button {
+                appState.modernPanel.hero = metric
+            } label: {
+                RecentUsageRowLabel(title: RecentUsageFigures.rowLabel(row), value: number(metric), isMuted: isEmpty)
             }
-        }
-        .onHover { inside in
-            if metric == .activeTime, isInteractive { activityHovered = inside }
+            .buttonStyle(.plain)
+            .disabled(!isInteractive)
+            .overlay(alignment: .bottomLeading) {
+                if metric == .activeTime, activityHovered, let help = activityHelp {
+                    RecentUsageHoverBlock(primary: nil, secondary: help)
+                        .fixedSize()
+                        .offset(x: -2, y: -22)
+                        .allowsHitTesting(false)
+                }
+            }
+            .onHover { inside in
+                if metric == .activeTime, isInteractive { activityHovered = inside }
+            }
+        case .workTime:
+            // Not a metric the big number can take: nothing to click.
+            RecentUsageRowLabel(title: RecentUsageFigures.rowLabel(row), value: workValue, isMuted: isEmpty,
+                                isClickable: false)
         }
     }
 }
@@ -391,11 +421,13 @@ private struct RecentUsageBigNumber: View {
     }
 }
 
-/// A small row: 11 pt label in a 36 pt column, the value at 13 pt.
+/// A small row: 11 pt label in a 36 pt column, the value at 13 pt. A row
+/// that can be clicked lights its label under the pointer.
 private struct RecentUsageRowLabel: View {
     let title: String
     let value: String?
     var isMuted = false
+    var isClickable = true
     @State private var isHovered = false
     @Environment(\.isEnabled) private var isEnabled
 
@@ -403,7 +435,11 @@ private struct RecentUsageRowLabel: View {
         HStack(spacing: 10) {
             Text(title)
                 .font(ModernTheme.text(11))
-                .foregroundStyle(isHovered && isEnabled ? ModernTheme.text : ModernTheme.secondaryText)
+                .foregroundStyle(isHovered && isEnabled && isClickable ? ModernTheme.text : ModernTheme.secondaryText)
+                // 「AI 工时」 is half a point wider than the column: it runs
+                // into the gap rather than truncating, and every value stays
+                // on the design's column.
+                .fixedSize()
                 .frame(width: 36, alignment: .leading)
             if let value {
                 RecentUsageWords(value, spacing: 4.5)
@@ -494,6 +530,14 @@ struct RecentUsageBlockBackground: View {
 
 // MARK: - Curve (right column)
 
+/// The right column fills the card body: the curve, 2 pt, the axis labels,
+/// which sit level with the last small row on the left.
+private enum RecentUsagePlotLayout {
+    static let axisHeight: CGFloat = 18
+    static let spacing: CGFloat = 2
+    static let curveHeight = ModernTheme.cardBodyHeight - spacing - axisHeight
+}
+
 /// The curve (134a–134d): the peak's label and a dashed line at the top, the
 /// filled curve with its end dot, two ticks, and the axis labels below. The
 /// pointer snaps to a slot and shows its figures (134b, 134c, 134l).
@@ -504,10 +548,10 @@ private struct RecentUsagePlot: View {
     var initialHover: Int?
 
     @State private var hovered: Int?
-    private let height: CGFloat = 96
+    private let height = RecentUsagePlotLayout.curveHeight
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: RecentUsagePlotLayout.spacing) {
             GeometryReader { proxy in
                 let width = proxy.size.width
                 ZStack(alignment: .topLeading) {
@@ -602,10 +646,10 @@ private struct RecentUsagePlot: View {
                     .foregroundStyle(isPresent ? ModernTheme.text : ModernTheme.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .frame(height: 18)
+            .frame(height: RecentUsagePlotLayout.axisHeight)
             .lineLimit(1)
         }
-        .frame(height: 18)
+        .frame(height: RecentUsagePlotLayout.axisHeight)
     }
 
     @ViewBuilder
@@ -819,11 +863,12 @@ private struct RecentUsageLoadingNumbers: View {
                     .frame(height: 18)
             }
             Spacer(minLength: 0)
-            ForEach(Array(RecentUsageFigures.rows(besides: hero).enumerated()), id: \.offset) { index, metric in
+            ForEach(Array(RecentUsageFigures.rows(besides: hero).enumerated()), id: \.offset) { index, row in
                 HStack(spacing: 10) {
-                    Text(RecentUsageFigures.rowLabel(metric))
+                    Text(RecentUsageFigures.rowLabel(row))
                         .font(ModernTheme.text(11))
                         .foregroundStyle(ModernTheme.secondaryText)
+                        .fixedSize()
                         .frame(width: 36, alignment: .leading)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(ModernTheme.placeholder)
@@ -832,7 +877,7 @@ private struct RecentUsageLoadingNumbers: View {
                 .frame(height: 18)
             }
         }
-        .frame(width: ModernTheme.leadingColumnWidth, height: ModernTheme.recentUsageBodyHeight, alignment: .topLeading)
+        .frame(width: ModernTheme.leadingColumnWidth, height: ModernTheme.cardBodyHeight, alignment: .topLeading)
     }
 }
 
@@ -842,7 +887,7 @@ private struct RecentUsageLoadingPlot: View {
     let showsLabel: Bool
 
     var body: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: RecentUsagePlotLayout.spacing) {
             ZStack(alignment: .bottom) {
                 Rectangle()
                     .fill(ModernTheme.text.opacity(0.08))
@@ -853,8 +898,8 @@ private struct RecentUsageLoadingPlot: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 96, alignment: .bottom)
-            Color.clear.frame(height: 18)
+            .frame(height: RecentUsagePlotLayout.curveHeight, alignment: .bottom)
+            Color.clear.frame(height: RecentUsagePlotLayout.axisHeight)
         }
         .frame(maxWidth: .infinity)
     }

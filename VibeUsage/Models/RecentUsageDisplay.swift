@@ -77,11 +77,21 @@ enum RecentUsageNumber {
     }
 }
 
-/// The figures of the card's three metrics, in the panel's current units.
+/// A small row under the big number: one of the two other metrics (a click
+/// makes it the big number), then AI 工时, which is only a figure: it has
+/// no curve and never becomes the big number.
+enum RecentUsageRow: Hashable {
+    case metric(ChartMode)
+    case workTime
+}
+
+/// The figures of the card's three metrics and AI 工时, in the panel's
+/// current units.
 struct RecentUsageFigures {
     /// Nil when the period's usage could not be read (「—」, never zero).
     let total: UsageAmount?
-    /// Deduplicated active time; nil until the server has recorded any (「—」).
+    /// Deduplicated active time and AI 工时 (the same activity read); nil
+    /// until the server has recorded any (「—」).
     let activity: ActivityTime?
     let units: UsagePanelState
 
@@ -91,6 +101,15 @@ struct RecentUsageFigures {
         case .cost: total.map { RecentUsageNumber.cost($0.cost, units: units) } ?? "—"
         case .token: total.map { units.formatTokens($0.totalTokens) } ?? "—"
         case .activeTime: activity.map { RecentUsageNumber.duration($0.activeSeconds) } ?? "—"
+        }
+    }
+
+    /// A small row's value; AI 工时 follows 活跃's rule (「—」 without a
+    /// recorded activity, 「0m」 for none).
+    func text(_ row: RecentUsageRow) -> String {
+        switch row {
+        case .metric(let metric): text(metric)
+        case .workTime: activity.map { RecentUsageNumber.duration($0.workSeconds) } ?? "—"
         }
     }
 
@@ -125,17 +144,19 @@ struct RecentUsageFigures {
         }
     }
 
-    static func rowLabel(_ metric: ChartMode) -> String {
-        switch metric {
-        case .cost: "费用"
-        case .token: "Token"
-        case .activeTime: "活跃"
+    static func rowLabel(_ row: RecentUsageRow) -> String {
+        switch row {
+        case .metric(.cost): "费用"
+        case .metric(.token): "Token"
+        case .metric(.activeTime): "活跃"
+        case .workTime: "AI 工时"
         }
     }
 
-    /// The two small rows under the big number, in a fixed order.
-    static func rows(besides hero: ChartMode) -> [ChartMode] {
-        [ChartMode.cost, .token, .activeTime].filter { $0 != hero }
+    /// The small rows under the big number, in a fixed order: the two other
+    /// metrics, then AI 工时.
+    static func rows(besides hero: ChartMode) -> [RecentUsageRow] {
+        [ChartMode.cost, .token, .activeTime].filter { $0 != hero }.map(RecentUsageRow.metric) + [.workTime]
     }
 }
 

@@ -22,9 +22,13 @@ enum ModernTheme {
     static let cardCornerRadius: CGFloat = 10
     /// The card's left column (big number or ring).
     static let leadingColumnWidth: CGFloat = 160
-    /// The body of 近期消耗 under its title row, the same with usage (131a)
-    /// and with the sign-in in its place (136j–136l).
-    static let recentUsageBodyHeight: CGFloat = 116
+    /// The body under the title row of the two cards of the collapsed panel,
+    /// so they stand the same height: 订阅配额's ring (one subscription) and
+    /// its overview of four lines, and 近期消耗, with usage (131a) or with
+    /// the sign-in in its place (136j–136l). The overview of two or three
+    /// subscriptions and the empty state stay shorter (112 pt), and an
+    /// unfolded list of allowances grows past it.
+    static let cardBodyHeight: CGFloat = 148
 
     // MARK: Surfaces
 

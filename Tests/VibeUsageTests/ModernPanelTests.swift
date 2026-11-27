@@ -486,12 +486,13 @@ struct ModernPanelHeightReportTests {
         window.contentView = host
 
         host.layoutSubtreeIfNeeded()
-        // Header 40 + 概览 row 46 + cards 208 + 8 + 176 + footer 38 (131a).
-        #expect(reports.last == 516)
+        // Header 40 + 概览 row 46 + cards 208 + 8 + 208 + footer 38 (131a):
+        // the two cards stand the same height.
+        #expect(reports.last == 548)
 
         fixture.state.modernPanel.detailsExpanded = true
         host.layoutSubtreeIfNeeded()
-        #expect(reports.last == 1_036)
+        #expect(reports.last == 1_068)
 
         layout.maxHeight = 700  // a short screen: the middle scrolls
         host.layoutSubtreeIfNeeded()
@@ -499,7 +500,7 @@ struct ModernPanelHeightReportTests {
 
         fixture.state.modernPanel.panelDidOpen()
         host.layoutSubtreeIfNeeded()
-        #expect(reports.last == 516)
+        #expect(reports.last == 548)
     }
 }
 
