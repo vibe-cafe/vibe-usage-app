@@ -20,10 +20,11 @@ struct RecentUsageCardTests {
         private let host: NSHostingView<AnyView>
         private let box: Box
 
-        init(_ state: AppState, onActivityNumbers: (@MainActor (RecentUsageActivityShown) -> Void)? = nil) {
+        init(_ state: AppState, onShow: (@MainActor (RecentUsageShown) -> Void)? = nil,
+             onActivityNumbers: (@MainActor (RecentUsageActivityShown) -> Void)? = nil) {
             var preview = RecentUsagePreview()
             let box = Box()
-            preview.onShow = { box.value = $0 }
+            preview.onShow = { box.value = $0; onShow?($0) }
             preview.onActivityNumbers = onActivityNumbers
             self.box = box
             host = NSHostingView(rootView: AnyView(
@@ -104,6 +105,54 @@ struct RecentUsageCardTests {
         #expect(try await card.update() == RecentUsageShown(kind: .figures, cost: 9))
     }
 
+    @Test func aCachedPeriodShowsItsOwnFiguresThroughoutARefresh() async throws {
+        _ = NSApplication.shared
+        let suite = "RecentUsageCard.\(UUID().uuidString)"
+        defer { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        var now = Date()
+        var weekCost = 7.0
+        var finish: CheckedContinuation<Void, Never>?
+        let state = AppState(
+            initialConfig: VibeUsageConfig(apiKey: "fixture", apiUrl: "https://example.test"), loadConfig: { nil },
+            usageFetcher: { _, _, range in
+                if range == .days(7), weekCost == 8 { await withCheckedContinuation { finish = $0 } }
+                let row = UsageBucket(source: "codex", model: "m", project: "p", hostname: "mac",
+                                      bucketStart: Calendar.current.startOfDay(for: Date()).formatted(.iso8601),
+                                      inputTokens: 1, outputTokens: 0, cacheCreation5mTokens: nil, cacheCreation1hTokens: nil,
+                                      cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 1,
+                                      estimatedCost: range == .days(7) ? weekCost : 1)
+                return UsageResponse(buckets: [row], sessions: nil, hasAnyData: true, names: nil)
+            },
+            activityFetcher: { _, _, range, _, _ in
+                let seconds = range == .days(7) ? 420 : 60
+                return UsageActivity(activeSeconds: seconds, workSeconds: seconds, parallel: 1, series: [],
+                                     firstBucketStart: "2020-01-01T00:00:00Z")
+            },
+            quotaDefaults: UserDefaults(suiteName: suite)!,
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest)
+        )
+        state.usageNow = { now }
+        state.applyDefaultTimeRangeForInterfaceStyle()
+        await state.panelWillOpen().value
+        var shown: [RecentUsageShown] = []
+        var activity: [RecentUsageActivityShown] = []
+        let card = Card(state, onShow: { shown.append($0) }, onActivityNumbers: { activity.append($0) })
+        #expect(try await card.update()?.cost == 1)
+        shown.removeAll()
+        activity.removeAll()
+        now.addTimeInterval(61)
+        weekCost = 8
+        state.selectUsagePeriod(.sevenDays)
+        try await waitForDashboard { finish != nil }
+        #expect(try await card.update() == RecentUsageShown(kind: .figures, cost: 7))
+        finish?.resume()
+        try await waitForDashboard { state.buckets.first?.estimatedCost == 8 }
+        #expect(try await card.update() == RecentUsageShown(kind: .figures, cost: 8))
+        #expect(shown.allSatisfy { $0.kind == .figures && [7, 8].contains($0.cost) })
+        #expect(activity.last == RecentUsageActivityShown(active: "7m", work: "7m"))
+        #expect(activity.allSatisfy { $0.active == "7m" && $0.work == "7m" })
+    }
+
     @Test func subscriptionActivityHeroShowsTheSelectedToolsTimeAfterLoading() async throws {
         _ = NSApplication.shared
         let suite = "RecentUsageCard.\(UUID().uuidString)"
@@ -129,7 +178,7 @@ struct RecentUsageCardTests {
         try await waitForDashboard { state.activity != nil }
         // AI 工时 comes with active time and loads with it.
         var displayed: [RecentUsageActivityShown] = []
-        let card = Card(state) { displayed.append($0) }
+        let card = Card(state, onActivityNumbers: { displayed.append($0) })
         _ = try await card.update()
         #expect(displayed.last == RecentUsageActivityShown(active: "9m", work: "18m"))
         state.modernPanel.selectedSubscription = .codex

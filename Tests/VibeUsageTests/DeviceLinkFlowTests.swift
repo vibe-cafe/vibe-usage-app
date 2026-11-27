@@ -456,6 +456,7 @@ struct DeviceLinkFlowTests {
         let state = AppState(
             initialConfig: nil, loadConfig: { stored },
             usageFetcher: { _, _, _ in UsageResponse(buckets: [], sessions: nil, hasAnyData: false, names: nil) },
+            activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) },
             quotaDefaults: defaults, zCodeAPIKeyStore: NoZCodeKeys(), quotaProductDiscoverer: { [] },
             interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
             deviceLinkService: service

@@ -83,7 +83,7 @@ struct APIClient: Sendable {
     }
 }
 
-enum UsageQueryRange: Sendable, Equatable {
+enum UsageQueryRange: Sendable, Hashable {
     case days(Int)
     case from(Date)
     case custom(DateInterval, timeZone: TimeZone)

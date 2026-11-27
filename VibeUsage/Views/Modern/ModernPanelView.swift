@@ -38,6 +38,10 @@ struct PanelRootView: View {
             PopoverView()
         case .modern:
             ModernPanelView(maxHeight: layout.maxHeight, onPreferredHeightChange: onModernHeightChange)
+                .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+                    .receive(on: DispatchQueue.main)) { _ in
+                    appState.calendarDayDidChange()
+                }
         }
     }
 }
