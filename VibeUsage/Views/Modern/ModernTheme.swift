@@ -55,26 +55,50 @@ enum ModernTheme {
 
     // MARK: Type
 
-    /// Schibsted Grotesk; Chinese falls back to PingFang SC.
+    /// Schibsted Grotesk; Chinese falls back to PingFang SC (see `mediumText`).
     static func text(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        let face: String
         switch weight {
-        case .semibold, .bold, .heavy, .black: face = "SchibstedGrotesk-SemiBold"
-        case .medium: face = "SchibstedGrotesk-Medium"
-        default: face = "SchibstedGrotesk-Regular"
+        case .semibold, .bold, .heavy, .black: .custom("SchibstedGrotesk-SemiBold", fixedSize: size)
+        case .medium: face(mediumText, size)
+        default: .custom("SchibstedGrotesk-Regular", fixedSize: size)
         }
-        return .custom(face, fixedSize: size)
     }
 
     /// JetBrains Mono, for every number.
     static func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        let face: String
         switch weight {
-        case .ultraLight, .thin, .light: face = "JetBrainsMono-Light"
-        case .medium, .semibold, .bold, .heavy, .black: face = "JetBrainsMono-Medium"
-        default: face = "JetBrainsMono-Regular"
+        case .ultraLight, .thin, .light: .custom("JetBrainsMono-Light", fixedSize: size)
+        case .medium, .semibold, .bold, .heavy, .black: face(mediumMono, size)
+        default: .custom("JetBrainsMono-Regular", fixedSize: size)
         }
-        return .custom(face, fixedSize: size)
+    }
+
+    /// Neither typeface has Chinese, so CoreText draws it in PingFang SC at
+    /// the weight nearest the face's own. For the medium (500) faces that is
+    /// PingFang Medium, a step heavier than the design, which the browser drew
+    /// with PingFang Regular. The medium faces therefore take the regular
+    /// face's fallback list (cascade list): the same fonts in the same order,
+    /// a step lighter, so only the fallback changes and Latin letters, digits
+    /// and the faces' own symbols keep the medium glyphs. The regular (400)
+    /// and semibold (600) faces already land on the design's PingFang weight.
+    ///
+    /// Font descriptors are immutable and safe to share across threads
+    /// (CoreText), hence `nonisolated(unsafe)`.
+    private nonisolated(unsafe) static let mediumText =
+        mediumFace("SchibstedGrotesk-Medium", fallbackLike: "SchibstedGrotesk-Regular")
+    private nonisolated(unsafe) static let mediumMono =
+        mediumFace("JetBrainsMono-Medium", fallbackLike: "JetBrainsMono-Regular")
+
+    private static func mediumFace(_ name: String, fallbackLike regular: String) -> CTFontDescriptor {
+        let regularFont = CTFontCreateWithName(regular as CFString, 13, nil)
+        let fallback = CTFontCopyDefaultCascadeListForLanguages(regularFont, Locale.preferredLanguages as CFArray)
+        var attributes: [CFString: Any] = [kCTFontNameAttribute: name]
+        if let fallback { attributes[kCTFontCascadeListAttribute] = fallback }
+        return CTFontDescriptorCreateWithAttributes(attributes as CFDictionary)
+    }
+
+    private static func face(_ descriptor: CTFontDescriptor, _ size: CGFloat) -> Font {
+        Font(CTFontCreateWithFontDescriptor(descriptor, size, nil))
     }
 }
 
