@@ -55,11 +55,11 @@ struct UsageActivityTests {
         #expect(full.summary?.activeText == "40s")
         #expect(full.summary?.workText == "AI 工时 1m")
         #expect(full.summary?.parallelText == "平均同时 1.8 个")
-        #expect(full.summaryHelp == "平均同时 1.8 个")
+        #expect(full.summaryHelp == "AI 工时 1m · 平均同时 1.8 个")
 
         let partial = report(first: first, periods: [period])
         #expect(partial.summary == full.summary)
-        #expect(partial.summaryHelp == "平均同时 1.8 个 · 2026-11-25 之前的记录无法重算")
+        #expect(partial.summaryHelp == "AI 工时 1m · 平均同时 1.8 个 · 2026-11-25 之前的记录无法重算")
         #expect(partial.time(in: "2026-11-25T02") == nil)
         #expect(partial.time(in: "2026-11-25T03") == full.summary)
         #expect(partial.time(in: "2026-11-25T03")?.chartWorkText == "AI 工时: 1m")
@@ -88,7 +88,7 @@ struct UsageActivityTests {
         #expect(report.time(in: "2026-11-24") == nil)
         #expect(report.time(in: "2026-11-25")?.activeText == "1h")
         #expect(report.time(in: "2026-11-25")?.workText == "AI 工时 1h 30m")
-        #expect(report.summaryHelp == "平均同时 1.5 个 · 2026-11-25 之前的记录无法重算")
+        #expect(report.summaryHelp == "AI 工时 1h 30m · 平均同时 1.5 个 · 2026-11-25 之前的记录无法重算")
     }
 
     @Test func filteredRequestReadsModelTimeFromConfiguredServer() async throws {
