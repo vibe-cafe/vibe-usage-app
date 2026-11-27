@@ -8,12 +8,14 @@ final class RangeReadCache<Key: Hashable, Value> {
         var value: Value?
         var succeeded: Date?
         var finished: Date
+        var lastReadSucceeded = false
     }
     private var entries: [Key: Entry] = [:]
     private var pending: [Key: Task<Void, Never>] = [:]
 
     subscript(key: Key) -> Value? { entries[key]?.value }
     func inFlight(for key: Key) -> Task<Void, Never>? { pending[key] }
+    func lastReadSucceeded(for key: Key) -> Bool { entries[key]?.lastReadSucceeded == true }
 
     func read(_ key: Key, reuseFor interval: TimeInterval, debounceFailure: Bool = false,
               now: @escaping () -> Date, fetch: @escaping @MainActor () async throws -> Value,
@@ -29,6 +31,7 @@ final class RangeReadCache<Key: Hashable, Value> {
             let time = now()
             var entry = entries[key] ?? Entry(finished: time)
             entry.finished = time
+            entry.lastReadSucceeded = result != nil
             if let result {
                 entry.value = result
                 entry.succeeded = time
@@ -41,9 +44,24 @@ final class RangeReadCache<Key: Hashable, Value> {
         return task
     }
 
+    /// Keep the figures for instant display, but let the next selection refresh
+    /// them. A request started before the sync cannot make them fresh again.
+    func markStale(asOf cutoff: Date, where matches: (Key) -> Bool) {
+        for (key, var entry) in entries where matches(key) {
+            entry.succeeded = entry.succeeded.map { min($0, cutoff) }
+            entry.finished = min(entry.finished, cutoff)
+            entries[key] = entry
+        }
+        cancelPending(where: matches)
+    }
+
     func remove(where shouldRemove: (Key) -> Bool = { _ in true }) {
         entries = entries.filter { !shouldRemove($0.key) }
-        for key in pending.keys.filter(shouldRemove) {
+        cancelPending(where: shouldRemove)
+    }
+
+    private func cancelPending(where matches: (Key) -> Bool) {
+        for key in pending.keys.filter(matches) {
             pending.removeValue(forKey: key)?.cancel()
         }
     }

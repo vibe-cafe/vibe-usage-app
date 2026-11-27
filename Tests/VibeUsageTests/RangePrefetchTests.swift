@@ -1,4 +1,4 @@
-import Foundation
+import SwiftUI
 import Testing
 @testable import VibeUsage
 
@@ -210,6 +210,29 @@ struct RangePrefetchTests {
         #expect(snapshot.total.cost == cost)
     }
 
+    @Test(arguments: [false, true])
+    func failedCurrentUsageSkipsPrefetchUntilAHealthyOpen(hasCachedFigures: Bool) async throws {
+        let f = Fixture()
+        defer { f.clean() }
+        let state = f.state()
+        let current = state.currentQueryRange
+        if hasCachedFigures {
+            await state.fetchUsageData()
+            try await waitForDashboard { state.activity != nil }
+            f.now.addTimeInterval(61)
+        }
+        f.beforeUsage = { _ in throw URLError(.userAuthenticationRequired) }
+        await state.panelWillOpen().value
+        let expected = Array(repeating: current, count: hasCachedFigures ? 2 : 1)
+        #expect(f.usage == expected && f.activity == expected)
+        #expect(state.activity != nil && (state.buckets.first != nil) == hasCachedFigures)
+
+        f.beforeUsage = { _ in }
+        f.now.addTimeInterval(61)
+        await state.panelWillOpen().value
+        #expect(f.usage.count == expected.count + 5 && f.activity.count == expected.count + 5)
+    }
+
     @Test func launchAndScheduledSyncReadOnlyTheCurrentRange() async throws {
         let f = Fixture()
         defer { f.clean() }
@@ -227,6 +250,31 @@ struct RangePrefetchTests {
         state.runSync = { (.success("ok"), nil) }
         await state.triggerSync(.scheduled)
         #expect(f.usage == [state.currentQueryRange, state.currentQueryRange] && f.activity == f.usage)
+    }
+
+    @Test func successfulSyncRefreshesOtherCachedPeriodsOnlyWhenSelected() async throws {
+        let f = Fixture()
+        defer { f.clean() }
+        let state = f.state()
+        await state.panelWillOpen().value
+        let current = state.currentQueryRange
+        f.now.addTimeInterval(1)
+        state.runSync = { (.success("ok"), nil) }
+        await state.triggerSync()
+        #expect(f.usage.count == 6 && f.activity.count == 6)
+        #expect(f.usage.last == current && f.activity.last == current)
+
+        state.selectUsagePeriod(.sevenDays)
+        #expect(state.buckets.first?.estimatedCost == 1 && state.activity?.summary?.activeSeconds == 1)
+        #expect(!state.isLoadingData && !state.isLoadingActivity)
+        try await waitForDashboard {
+            state.buckets.first?.estimatedCost == 2 && state.activity?.summary?.activeSeconds == 2
+        }
+        state.selectUsagePeriod(.today)
+        state.selectUsagePeriod(.sevenDays)
+        await state.panelWillOpen().value
+        #expect(f.usage.count == 7 && f.activity.count == 7)
+        #expect(f.usage.last == .days(7) && f.activity.last == .days(7))
     }
 
     @Test func openingOnCustomDatesRespectsTheEightExtraRequestLimit() async {
@@ -289,6 +337,45 @@ struct RangePrefetchTests {
         state.selectUsagePeriod(.sevenDays)
         #expect(!state.isLoadingData && state.activity?.summary?.activeSeconds == 1)
         #expect(f.usage.count == 7 && f.activity.count == 7)
+    }
+
+    @Test func midnightNotificationRefreshesOnlyTheVisibleSelection() async throws {
+        _ = NSApplication.shared
+        for period in [TimeRange.today, .oneDay] {
+            let f = Fixture()
+            defer { f.clean() }
+            f.now = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-2)
+            let state = f.state()
+            state.timeRange = period
+            await state.panelWillOpen().value
+            let host = NSHostingView(rootView: PanelRootView(layout: ModernPanelLayout())
+                .environment(state).environmentObject(UpdaterViewModel()))
+            let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 520, height: 620),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            defer { withExtendedLifetime(window) {} }
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+
+            f.now.addTimeInterval(4)
+            await Task.detached {
+                NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+            }.value
+            try await waitForDashboard {
+                f.usage.count == 6 && state.activity != nil &&
+                    state.usageDisplaySnapshot(filters: .init(), now: f.now) != nil
+            }
+            #expect(f.usage.last == state.currentQueryRange && f.activity.last == state.currentQueryRange)
+            #expect(f.activity.count == 6)
+
+            state.rateLimitPanelVisibilityChanged(visible: false)
+            f.now = Calendar.current.date(byAdding: .day, value: 1, to: f.now)!
+            await Task.detached {
+                NotificationCenter.default.post(name: .NSCalendarDayChanged, object: nil)
+            }.value
+            try await waitForDashboard { state.activity == nil }
+            #expect(f.usage.count == 6 && f.activity.count == 6)
+            #expect(!state.isLoadingData && !state.isLoadingActivity)
+        }
     }
 
     @Test(arguments: ["key", "server", "reset"])

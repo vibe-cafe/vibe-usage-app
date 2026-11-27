@@ -475,7 +475,7 @@ final class AppState {
     // MARK: - Services (initialized after launch)
     private var syncScheduler: SyncScheduler?
     private var rateLimitCoordinator: RateLimitCoordinator?
-    private var isRateLimitPanelVisible = false
+    private var isPanelVisible = false
     private var config: VibeUsageConfig?
     private let loadConfig: () -> VibeUsageConfig?
     var usageServer: UsageServer { UsageServer(config?.apiUrl) }
@@ -744,7 +744,12 @@ final class AppState {
             lastSuccessfulSyncAt = finishedAt
             quotaDefaults.set(finishedAt, forKey: Self.lastSuccessfulSyncKey)
             lastSyncMessage = message
-            // Refresh dashboard data after sync
+            if interfaceStyle.current == .modern {
+                let current = currentQueryRange
+                let cutoff = usageNow().addingTimeInterval(-60)
+                usageCache.markStale(asOf: cutoff) { $0 != current }
+                activityCache.markStale(asOf: cutoff) { $0.range != current }
+            }
             await fetchUsageData()
             // Reset to idle after a delay
             try? await Task.sleep(for: .seconds(3))
@@ -786,8 +791,15 @@ final class AppState {
         lastPrefetchOpen = nil
     }
 
-    /// Also called when macOS announces midnight while the panel stays open.
-    func expireHourlyResults() {
+    func calendarDayDidChange() {
+        if isPanelVisible {
+            selectUsagePeriod(timeRange)
+        } else {
+            expireHourlyResults()
+        }
+    }
+
+    private func expireHourlyResults() {
         guard interfaceStyle.current == .modern else { return }
         let today = Calendar.current.startOfDay(for: usageNow())
         defer { cacheDay = today }
@@ -901,11 +913,14 @@ final class AppState {
         let account = usageAccount
         let shouldPrefetch = lastPrefetchOpen.map { now.timeIntervalSince($0) >= 60 } ?? true
         if shouldPrefetch { lastPrefetchOpen = now }
-        let reads = readModernRange(currentQueryRange, key: key, reuseFor: 60, display: true, onOpen: true)
+        let openedRange = currentQueryRange
+        let reads = readModernRange(openedRange, key: key, reuseFor: 60, display: true, onOpen: true)
         return Task {
             await reads.usage?.value
             await reads.activity?.value
-            if shouldPrefetch { await prefetchQuickPeriods(openedAt: now, account: account) }
+            if shouldPrefetch, usageCache.lastReadSucceeded(for: openedRange) {
+                await prefetchQuickPeriods(openedAt: now, account: account)
+            }
         }
     }
 
@@ -924,6 +939,7 @@ final class AppState {
         guard account == usageAccount, let key = config?.apiKey else { return }
         expireHourlyResults()
         let current = currentQueryRange
+        guard usageCache.lastReadSucceeded(for: current) else { return }
         var pending: [DashboardReads] = []
         for period in UsageFilterSummary.quickPeriods {
             let range = queryRange(for: period, at: usageNow())
@@ -1368,7 +1384,7 @@ final class AppState {
     /// The menu-bar panel opened or closed. Closing cancels in-flight refreshes
     /// for both providers — nothing off-screen is worth a round trip.
     func rateLimitPanelVisibilityChanged(visible: Bool) {
-        isRateLimitPanelVisible = visible
+        isPanelVisible = visible
         rateLimitCoordinator?.panelVisibilityChanged(visible: visible)
     }
 
@@ -1428,7 +1444,7 @@ final class AppState {
         self.rateLimitCoordinator = coord
         // Preserve panel state even when the coordinator is created lazily
         // after the panel opened (for example, both providers started off).
-        coord.panelVisibilityChanged(visible: isRateLimitPanelVisible)
+        coord.panelVisibilityChanged(visible: isPanelVisible)
     }
 
     /// Set by the app delegate for a login-item launch (`LoginLaunch`), before
