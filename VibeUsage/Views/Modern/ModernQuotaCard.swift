@@ -275,25 +275,32 @@ struct ModernQuotaOverview: View {
     let overview: QuotaOverviewDisplay
     let select: (ProviderRateLimit.Provider) -> Void
 
-    /// The shared card body, as tall as 近期消耗 (maintainer 2026-11-27):
-    /// four lines (four subscriptions, or three and 「其余 N 个」) fill it;
-    /// two or three run from the top and leave the rest below them, while
-    /// 快用完 / 偏快 stay at the bottom of the left column (132a, 132b).
+    /// The shared card body, as tall as 近期消耗 (maintainer 2026-11-27).
+    /// Four subscriptions fill it at `ModernOverviewRow.tightPitch`; two or
+    /// three, or three over 「其余 N 个」, run from the top at
+    /// `ModernOverviewRow.pitch`. 快用完 / 偏快 stay at the bottom of the left
+    /// column, and 「其余 N 个」 sits on 偏快's line (132a–132d).
     private var height: CGFloat { ModernTheme.cardBodyHeight }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             summary
                 .frame(width: ModernTheme.leadingColumnWidth, height: height, alignment: .topLeading)
+            let pitch = overview.rows.count >= 4 ? ModernOverviewRow.tightPitch : ModernOverviewRow.pitch
             VStack(spacing: 0) {
                 ForEach(overview.rows, id: \.provider) { row in
-                    ModernOverviewRow(row: row) { select(row.provider) }
+                    ModernOverviewRow(row: row, pitch: pitch) { select(row.provider) }
                 }
+            }
+            // Four rows end with the fourth bar on the body's bottom; the rest
+            // of that row's line (its hover band) hangs into the card's padding.
+            .frame(maxWidth: .infinity)
+            .frame(height: height, alignment: .top)
+            .overlay(alignment: .bottom) {
                 if let remainder = overview.remainder {
                     ModernOverviewRemainder(remainder: remainder)
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: height, alignment: .top)
         }
     }
 
@@ -335,7 +342,18 @@ struct ModernQuotaOverview: View {
 /// the bar, and the comment at the right. Clicking it opens the subscription.
 struct ModernOverviewRow: View {
     let row: QuotaSubscriptionDisplay
+    var pitch: CGFloat = Self.pitch
     let action: () -> Void
+
+    /// From one name to the next. The design's 37 pt left a bar as close to
+    /// the next name (8–9.5 pt) as to its own (7.5 pt), so the rows ran
+    /// together (maintainer 2026-11-28: 「还是很拥挤」, without making the
+    /// panel taller). Rows now start on the big number's top line, the ticks
+    /// are 5 pt, and the name keeps its 7.5 pt to its bar, so every saved
+    /// point goes between rows: 12 pt for four rows (`tightPitch`, the
+    /// body's 148 pt exactly), 16 pt otherwise.
+    static let pitch: CGFloat = 42.5
+    static let tightPitch: CGFloat = 38.5
     @Environment(\.modernQuotaPreview) private var preview
     @State private var hoverState = false
 
@@ -355,9 +373,10 @@ struct ModernOverviewRow: View {
             }
             // The comment column is 50 pt; a slightly longer word (「已暂停读取」)
             // reaches into the 12 pt gap so every bar keeps the same length.
-            .overlay(alignment: .topTrailing) { comment.padding(.top, 19) }
-            .padding(.top, 3)
-            .frame(height: 37, alignment: .top)
+            .overlay(alignment: .topTrailing) { comment.padding(.top, 17) }
+            // The name's capitals on the big number's top line.
+            .padding(.top, 1)
+            .frame(height: pitch, alignment: .top)
             .background(alignment: .top) {
                 if isHovered {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -389,7 +408,7 @@ struct ModernOverviewRow: View {
                 .frame(width: 14, height: 14)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                 .padding(.trailing, 6)
-            Text(row.provider.displayName)
+            Text(row.provider.overviewName)
                 .font(ModernTheme.text(13, .medium))
                 .foregroundStyle(ModernTheme.text)
                 .lineLimit(1)
@@ -426,9 +445,9 @@ struct ModernOverviewRow: View {
         if row.showsSkeleton {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(ModernTheme.placeholder)
-                .frame(height: 6)
+                .frame(height: 5)
                 .padding(.top, 5)
-                .frame(height: 11, alignment: .top)
+                .frame(height: 10, alignment: .top)
         } else if row.readState == .nonSubscriptionLogin, let comment = row.comment {
             // 132e: the reason takes the bar's place; nothing at the right.
             Text(comment)
@@ -459,6 +478,18 @@ struct ModernOverviewRow: View {
         case .needsLogin, .loginExpired: ModernTheme.strongText
         default: ModernTheme.secondaryText
         }
+    }
+}
+
+extension ProviderRateLimit.Provider {
+    /// The name on an overview row, which shares its line with the
+    /// percentages: 「Antigravity」 without 「/ AGY」, whose two three-digit
+    /// windows otherwise sit 12 pt from the name, as close as the numbers sit
+    /// to each other (maintainer 2026-11-28: 「AGY 那一行」 crowded). The
+    /// detail header, the round button's tooltip, the folded marks, Settings
+    /// and the classic panel keep `displayName`.
+    var overviewName: String {
+        self == .antigravity ? "Antigravity" : displayName
     }
 }
 
@@ -537,7 +568,11 @@ struct ModernOverviewRemainder: View {
                 .fixedSize()
                 .frame(minWidth: 50, alignment: .trailing)
         }
-        .frame(height: 37)
+        // 偏快's line: the last 18 pt of the body (half a point up puts the
+        // two baselines on one line). It was centered in a 37 pt line,
+        // between 快用完 and 偏快.
+        .frame(height: 18)
+        .offset(y: -0.5)
     }
 }
 

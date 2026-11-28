@@ -18,6 +18,14 @@ struct ModernQuotaFormatTests {
         #expect(ModernQuotaFormat.percent(99.6) == "100")
     }
 
+    @Test func onlyTheOverviewRowShortensAntigravity() {
+        #expect(ProviderRateLimit.Provider.antigravity.overviewName == "Antigravity")
+        #expect(ProviderRateLimit.Provider.antigravity.displayName == "Antigravity / AGY")
+        for provider in ProviderRateLimit.Provider.allCases where provider != .antigravity {
+            #expect(provider.overviewName == provider.displayName)
+        }
+    }
+
     @Test func forecastsReadAsTheDesignWritesThem() {
         #expect(ModernQuotaFormat.prediction(.untilReset) == "够用到重置")
         #expect(ModernQuotaFormat.prediction(.runsOutIn(30 * 60)) == "约 30 分钟后用完")

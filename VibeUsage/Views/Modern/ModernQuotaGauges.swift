@@ -51,7 +51,8 @@ struct ModernGaugeValue: Equatable {
 
 // MARK: - Overview bar (131a)
 
-/// The bar under an overview row: ticks for the longer window, the thin line
+/// The bar under an overview row: 5 pt ticks (the ring's are 6; one point
+/// less leaves room between rows, 2026-11-28) for the longer window, the thin line
 /// under them for the shorter one, a small triangle (and a small mark on the
 /// line) where time says each should be. Without a shorter window the line is
 /// left out; without any window every tick is dim.
@@ -75,7 +76,7 @@ struct ModernOverviewBar: View {
                 } else {
                     color = ModernTheme.ink.opacity(0.13)
                 }
-                let rect = CGRect(x: CGFloat(index) * step, y: 5, width: 1.5, height: 6)
+                let rect = CGRect(x: CGFloat(index) * step, y: 5, width: 1.5, height: 5)
                 context.fill(Path(rect), with: .color(color))
             }
             if let expected = outer?.expected {
@@ -88,11 +89,11 @@ struct ModernOverviewBar: View {
                 context.fill(triangle, with: .color(ModernTheme.text.opacity(0.7)))
             }
             guard let inner else { return }
-            let track = Path(roundedRect: CGRect(x: 0, y: 13, width: width, height: 2.5), cornerRadius: 1.25)
+            let track = Path(roundedRect: CGRect(x: 0, y: 12, width: width, height: 2.5), cornerRadius: 1.25)
             context.fill(track, with: .color(ModernTheme.ink.opacity(0.11)))
             let litWidth = CGFloat(inner.remaining) * width
             if litWidth > 0 {
-                let lit = Path(roundedRect: CGRect(x: 0, y: 13, width: litWidth, height: 2.5), cornerRadius: 1.25)
+                let lit = Path(roundedRect: CGRect(x: 0, y: 12, width: litWidth, height: 2.5), cornerRadius: 1.25)
                 context.fill(lit, with: .linearGradient(
                     Gradient(colors: [ModernTheme.litColor(inner.tone, at: 0, solid: true),
                                       ModernTheme.litColor(inner.tone, at: 1, solid: true)]),
@@ -100,11 +101,11 @@ struct ModernOverviewBar: View {
                 ))
             }
             if let expected = inner.expected {
-                let mark = CGRect(x: CGFloat(expected) * width - 0.75, y: 12, width: 1.5, height: 5)
+                let mark = CGRect(x: CGFloat(expected) * width - 0.75, y: 11, width: 1.5, height: 5)
                 context.fill(Path(mark), with: .color(ModernTheme.text.opacity(0.7)))
             }
         }
-        .frame(height: inner == nil ? 11 : 17)
+        .frame(height: inner == nil ? 10 : 16)
         .accessibilityHidden(true)
     }
 }

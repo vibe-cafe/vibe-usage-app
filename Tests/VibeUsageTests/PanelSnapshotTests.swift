@@ -357,6 +357,8 @@ struct PanelScene {
         PanelScene(id: "132d", title: "概览：8 个订阅", subscriptions: eight),
         PanelScene(id: "132e", title: "概览：用完了、要登录、读不到、不走订阅",
                    subscriptions: [.codex, .claudeCode, .cursor, .kimiCode], quotas: .special),
+        PanelScene(id: "132c-agy", title: "概览：5 个订阅，Antigravity 名字最长、两个 100%（外测截图 11-28）",
+                   subscriptions: [.claudeCode, .codex, .antigravity, .cursor, .grok], quotas: .agyCrowded),
         PanelScene(id: "132f", title: "还没有订阅", subscriptions: []),
         PanelScene(id: "132g", title: "只有一个订阅：没有概览那一排", subscriptions: [.claudeCode]),
         PanelScene(id: "132h", title: "Fable 快用完：概览里多一个红色的 Fable", quotas: .fableAlert),
