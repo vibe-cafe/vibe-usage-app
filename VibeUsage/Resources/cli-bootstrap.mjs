@@ -32,7 +32,7 @@
  * exactly what the parent already parses.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -61,6 +61,7 @@ const METADATA_TIMEOUT_WITH_CACHE_MS = 10_000;
 const METADATA_TIMEOUT_MS = 20_000;
 const DOWNLOAD_TIMEOUT_WITH_CACHE_MS = 15_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+const CACHE_VERSIONS = 3;
 
 /** Where the app keeps its own files; falls back to `~/.vibe-usage`. */
 function cacheRoot() {
@@ -233,22 +234,93 @@ function compareVersions(a, b) {
 }
 
 /**
- * The newest version that a previous run installed completely: a version-named
- * directory with the `complete` marker and the entry file. Staging directories
- * and anything half-written are skipped.
+ * Complete cache entries, newest first. Ignore staging and partial installs.
  */
-function newestCached() {
+function cachedVersions() {
   let names;
   try {
     names = readdirSync(cacheRoot());
   } catch {
-    return null;
+    return [];
   }
-  const version = names
+  return names
     .filter(name => SEMVER.test(name))
     .sort(compareVersions)
-    .find(name => cachedPackage(name));
-  return version ? { version, packageDir: cachedPackage(version) } : null;
+    .filter(name => cachedPackage(name));
+}
+
+// Sync, quota and config commands are independent processes. Publish the
+// selected version before checking its files, and keep it until Node exits:
+// the CLI can import modules long after its entry point has loaded.
+function runningVersions() {
+  const versions = new Set();
+  for (const name of readdirSync(cacheRoot())) {
+    const match = /^\.running-([1-9]\d*)-(.+)$/.exec(name);
+    if (!match) continue;
+    try {
+      process.kill(Number(match[1]), 0);
+    } catch (err) {
+      if (err.code === 'ESRCH') {
+        rmSync(join(cacheRoot(), name), { force: true });
+        continue;
+      }
+      if (err.code !== 'EPERM') throw err;
+    }
+    versions.add(match[2]);
+  }
+  return versions;
+}
+
+function holdVersion(version) {
+  if (!SEMVER.test(version)) return; // Only version-named entries can be pruned.
+  const marker = join(cacheRoot(), `.running-${process.pid}-${version}`);
+  try {
+    mkdirSync(cacheRoot(), { recursive: true });
+    writeFileSync(marker, '');
+  } catch (err) {
+    // A read-only cache can still run and cannot be pruned by this user.
+    if (['EROFS', 'EACCES', 'EPERM'].includes(err.code)) return;
+    throw err;
+  }
+  process.once('exit', () => {
+    try { rmSync(marker, { force: true }); } catch {}
+  });
+  // Each cleaner creates an empty destination parent before reading the run
+  // markers. If it already read them, removing that parent vetoes its rename.
+  // If the rename won, the parent is nonempty and the cache lookup sees a miss.
+  for (const entry of readdirSync(cacheRoot(), { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('.pruning-')) continue;
+    try {
+      rmdirSync(join(cacheRoot(), entry.name, version));
+    } catch (err) {
+      if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(err.code)) throw err;
+    }
+  }
+}
+
+function pruneCache(installed) {
+  let retired;
+  try {
+    const old = cachedVersions().filter(version => version !== installed).slice(CACHE_VERSIONS - 1);
+    if (!old.length) return;
+    retired = mkdtempSync(join(cacheRoot(), '.pruning-'));
+    for (const version of old) mkdirSync(join(retired, version));
+    const inUse = runningVersions();
+    for (const version of old) {
+      if (inUse.has(version)) continue;
+      try {
+        renameSync(join(cacheRoot(), version), join(retired, version, 'old'));
+      } catch {
+        // A new reader vetoed the move, another cleaner won, or a file is locked.
+      }
+    }
+  } catch {
+    // Cache housekeeping is best effort. Run the installed CLI even if it fails.
+  } finally {
+    if (retired) {
+      try { rmSync(retired, { recursive: true, force: true }); } catch {}
+    }
+  }
 }
 
 /** One line, no stack: the notice is for people reading the sync log. */
@@ -263,12 +335,16 @@ function shortReason(err) {
  * with the same text as before when there is none.
  */
 function fallBackToCache(stage, err) {
-  const cached = newestCached();
-  if (!cached) fail(err instanceof LauncherError ? err.message : err?.stack || String(err));
-  process.stderr.write(
-    `${NOTICE_PREFIX} stage=${stage}; running cached ${PACKAGE}@${cached.version} because latest is unavailable (${shortReason(err)})\n`,
-  );
-  return cached.packageDir;
+  for (const version of cachedVersions()) {
+    holdVersion(version);
+    const dir = cachedPackage(version);
+    if (!dir) continue;
+    process.stderr.write(
+      `${NOTICE_PREFIX} stage=${stage}; running cached ${PACKAGE}@${version} because latest is unavailable (${shortReason(err)})\n`,
+    );
+    return dir;
+  }
+  fail(err instanceof LauncherError ? err.message : err?.stack || String(err));
 }
 
 /** Minimal ustar reader — enough for an `npm pack` tarball, no dependency. */
@@ -311,13 +387,13 @@ async function downloadTarball(version, tarball, integrity, timeoutMs) {
   if (!res.ok) throw new LauncherError('download', `download failed (${res.status}) for ${PACKAGE}@${version}`);
   const bytes = Buffer.from(await res.arrayBuffer());
 
-  // The registry states sha512; verify it rather than executing whatever came
-  // back.
-  if (typeof integrity === 'string' && integrity.startsWith('sha512-')) {
-    const digest = createHash('sha512').update(bytes).digest('base64');
-    if (digest !== integrity.slice('sha512-'.length)) {
-      throw new LauncherError('download', `integrity mismatch for ${PACKAGE}@${version}`);
-    }
+  const hashes = typeof integrity === 'string' ? integrity.split(/\s+/).filter(hash => hash.startsWith('sha512-')) : [];
+  if (hashes.length === 0) {
+    throw new LauncherError('download', `download failed (missing sha512 integrity) for ${PACKAGE}@${version}`);
+  }
+  const digest = createHash('sha512').update(bytes).digest('base64');
+  if (!hashes.includes(`sha512-${digest}`)) {
+    throw new LauncherError('download', `integrity mismatch for ${PACKAGE}@${version}`);
   }
   return bytes;
 }
@@ -365,7 +441,7 @@ function install(version, bytes) {
  * back to the cache — never the CLI run itself, which must happen once.
  */
 async function resolvePackageDir() {
-  const hasCache = newestCached() !== null;
+  const hasCache = cachedVersions().length > 0;
   let latest;
   try {
     latest = await fetchLatest(hasCache ? METADATA_TIMEOUT_WITH_CACHE_MS : METADATA_TIMEOUT_MS);
@@ -373,8 +449,11 @@ async function resolvePackageDir() {
     return fallBackToCache(err?.stage ?? 'network', err);
   }
   const { version, tarball, integrity } = latest;
-  const cached = cachedPackage(version);
-  if (cached) return cached;
+  if (cachedPackage(version)) {
+    holdVersion(version);
+    const cached = cachedPackage(version);
+    if (cached) return cached;
+  }
   let bytes;
   try {
     bytes = await downloadTarball(
@@ -387,7 +466,10 @@ async function resolvePackageDir() {
     return fallBackToCache(err?.stage ?? 'download', err);
   }
   try {
-    return install(version, bytes);
+    holdVersion(version);
+    const dir = install(version, bytes);
+    pruneCache(version);
+    return dir;
   } catch (err) {
     return fallBackToCache(err?.stage ?? 'install', err);
   }

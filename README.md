@@ -42,6 +42,7 @@ macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常�
 
 - macOS 14 (Sonoma) 或更高版本
 - 不用另装 Node.js：App 自带官方 Node.js 24 运行同步工具（CLI）。自带的不能用时，会改用系统里的 [Node.js](https://nodejs.org)（v20+）或 [Bun](https://bun.sh)
+- 每次运行先查 npm `latest`。新下载的 CLI 通过 SHA-512 校验后才安装。镜像缺少摘要、校验失败或 npm 不可用时，自动运行版本号最高的完整缓存。成功安装后保留本次版本和另外两个最新完整版本，正在使用的旧版本会额外保留。
 - 从源码构建需要联网下载官方 Node.js（`scripts/fetch-node.sh`，按两份 SHA256 校验），以及系统里的 Node.js 和 npm（打包前检查 CLI 契约）
 
 ## 从源码构建
