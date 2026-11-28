@@ -180,8 +180,8 @@ struct SettingsRenderState: Sendable {
             model.extraRootsError = "CLI 操作超时"
         },
         // 关于 (138e, 143)
-        .init(name: "about", page: .about, height: 600),
-        .init(name: "about-copying", page: .about, height: 600) { model, _ in
+        .init(name: "about", page: .about, height: 620),
+        .init(name: "about-copying", page: .about, height: 620) { model, _ in
             model.isGeneratingDiagnostics = true
         },
         .init(name: "about-copied", page: .about, height: 760) { model, _ in

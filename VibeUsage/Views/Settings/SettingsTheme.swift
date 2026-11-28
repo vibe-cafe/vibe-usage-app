@@ -4,8 +4,8 @@ import AppKit
 /// Colors, type and metrics of the Settings window, one set per interface
 /// style (`appState.interfaceStyle.current`). The window and every page are
 /// the same in both; only these values and a few structural switches differ
-/// (group titles inside or above the card, expanded content boxed or not,
-/// sidebar width). Read it from the environment (`\.settingsTheme`), which
+/// (expanded content boxed or not, the 「未开启」 band or line, sidebar
+/// width). Read it from the environment (`\.settingsTheme`), which
 /// `SettingsWindowContent` sets, so switching the style redraws the open
 /// window in place: same window, same per-window state.
 ///
@@ -95,7 +95,7 @@ struct SettingsTheme: Sendable {
     let mono: Font
     let caption: Font
     let tag: Font
-    /// Group titles (更新, 诊断, 隐私保护 …).
+    /// Group titles above their cards (更新, 诊断, 隐私保护 …).
     let sectionTitle: Font
     /// Short state words: the 状态 column, the 同步 line, the code line.
     let status: Font
@@ -434,28 +434,36 @@ extension SettingsPageHeader where Detail == EmptyView, Trailing == EmptyView {
     }
 }
 
-/// A titled group of rows. Classic: the title above the card. Modern: the
-/// title inside the card, the way the panel titles 订阅配额 and 近期消耗.
+/// A titled group of rows: the title above its card in both styles, the way
+/// System Settings titles its grouped boxes. Every use follows a card, so the
+/// title carries the space between the two cards itself.
 struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
-    @Environment(\.settingsTheme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !theme.isModern { SettingsSectionTitle(title: title) }
-            SettingsCard {
-                if theme.isModern { SettingsSectionTitle(title: title) }
-                content
-            }
+            SettingsSectionTitle(title: title)
+            SettingsCard { content }
         }
-        .padding(.top, theme.isModern ? theme.cardGap : 0)
     }
 }
 
-/// A group title. Classic: above a card, one step smaller than the card's
-/// text, semibold, secondary color (the About page Hogan liked, 2026-11-20).
-/// Modern: the card's first line, 13 pt semibold, secondary color.
+/// A group title above its card.
+///
+/// Classic: one step smaller than the card's text, semibold, secondary color
+/// (the About page Hogan liked, 2026-11-20).
+///
+/// Modern: System Settings' grouped header (2026-11-28; until then it was the
+/// card's first line in secondary color, design hand-off §10, which read as
+/// one more dimmed row). Same size as the rows, heavier, in the text color,
+/// left-aligned with the card's text (28 pt). Measured on a native grouped
+/// `Form` (macOS 27, dark): header text the rows' color, bold 13 pt, about
+/// 32 pt from the box above and 11.5 pt from its own box (glyph edges), with
+/// untitled boxes 12 pt apart. Here, at this window's 8 pt card gap: 16 pt
+/// over the 20 pt line and 4 pt under it, so the glyphs sit about 20 pt
+/// under the card above and 7 pt over their own card, and the two cards are
+/// 40 pt apart.
 struct SettingsSectionTitle: View {
     let title: String
     @Environment(\.settingsTheme) private var theme
@@ -463,11 +471,11 @@ struct SettingsSectionTitle: View {
     var body: some View {
         Text(title)
             .font(theme.sectionTitle)
-            .foregroundStyle(theme.secondaryText)
+            .foregroundStyle(theme.isModern ? theme.text : theme.secondaryText)
             .frame(height: theme.isModern ? 20 : nil)
-            .padding(.horizontal, theme.isModern ? 0 : 2)
-            .padding(.top, theme.isModern ? 8 : 18)
-            .padding(.bottom, theme.isModern ? 2 : 7)
+            .padding(.horizontal, theme.isModern ? 16 : 2)
+            .padding(.top, theme.isModern ? 16 : 18)
+            .padding(.bottom, theme.isModern ? 4 : 7)
     }
 }
 
