@@ -27,7 +27,9 @@ struct SettingsThemeTests {
     }
 
     /// The modern page column is a panel's width (520) and its text sits on
-    /// the panel's 28 pt line; rows are the overview's 37 pt (36 + rule).
+    /// the panel's 28 pt line; rows are 37 pt (36 + rule), the design's
+    /// overview line (the panel's overview has spaced its rows since
+    /// 2026-11-28; Settings kept 37).
     @Test
     func modernLinesUpWithThePanel() {
         let theme = SettingsTheme.modern
