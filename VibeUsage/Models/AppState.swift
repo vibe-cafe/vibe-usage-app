@@ -851,8 +851,10 @@ final class AppState {
             if let cached { showUsage(cached, for: range) }
         }
         let task = usageCache.read(range, reuseFor: interval, debounceFailure: onOpen, now: usageNow) {
-            [usageFetcher, server = usageServer] in
-            try await usageFetcher(server, key, range)
+            [server = usageServer] in
+            await self.waitForLaunchNetwork()
+            try Task.checkCancellation()
+            return try await self.usageFetcher(server, key, range)
         } finished: { [weak self] response in
             guard let self else { return }
             self.expireHourlyResults()
@@ -889,8 +891,10 @@ final class AppState {
         let start = range.start(at: usageNow())
         let hourly = activityIsHourly(range)
         let task = activityCache.read(query, reuseFor: interval, debounceFailure: onOpen, now: usageNow) {
-            [activityFetcher, server = usageServer] in
-            let result = try await activityFetcher(server, key, range, filters, hourly)
+            [server = usageServer] in
+            await self.waitForLaunchNetwork()
+            try Task.checkCancellation()
+            let result = try await self.activityFetcher(server, key, range, filters, hourly)
             return ActivityReport(result, rangeStart: start, hourly: hourly)
         } finished: { [weak self] report in
             guard let self else { return }
@@ -984,6 +988,8 @@ final class AppState {
         }
 
         do {
+            await waitForLaunchNetwork()
+            guard generation == usageFetchGeneration, !Task.isCancelled else { return }
             let response = try await usageFetcher(usageServer, apiKey, queryRange)
             guard generation == usageFetchGeneration else { return }
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -1027,12 +1033,14 @@ final class AppState {
         lastActivityFilterItems = items
         let start = range.start(at: Date())
         let hourly = activityIsHourly(range)
-        activityTask = Task { [weak self, activityFetcher, server = usageServer] in
+        activityTask = Task { [weak self, server = usageServer] in
+            guard let self else { return }
+            await self.waitForLaunchNetwork()
             guard !Task.isCancelled else { return }
-            let result = try? await activityFetcher(server, key, range, filters, hourly)
+            let result = try? await self.activityFetcher(server, key, range, filters, hourly)
             guard !Task.isCancelled else { return }
-            self?.activity = result.map { ActivityReport($0, rangeStart: start, hourly: hourly) }
-            self?.activityTask = nil
+            self.activity = result.map { ActivityReport($0, rangeStart: start, hourly: hourly) }
+            self.activityTask = nil
         }
     }
 
@@ -1451,10 +1459,10 @@ final class AppState {
     /// `initialize()`: network reads then wait for the user's proxy.
     var launchWaitsForProxy = false
     /// That wait, started once by `initialize()`; nil for any other launch.
-    private var launchProxyWait: Task<Void, Never>?
+    @ObservationIgnored var launchProxyWait: Task<Void, Never>?
 
     /// Returns once a login launch's proxy is up or its wait ran out; at once
-    /// for any other launch. The first sync and every live quota read call it.
+    /// for any other launch. Sync, dashboard and live quota reads share it.
     func waitForLaunchNetwork() async {
         await launchProxyWait?.value
     }
@@ -1474,8 +1482,8 @@ final class AppState {
         }
         syncScheduler?.start()
 
-        // Fetch the dashboard immediately so the menu bar populates without waiting for
-        // the CLI subprocess (which can take 5-30s, or hang if Node isn't installed).
+        // Start the dashboard in parallel with sync. Both wait for a login
+        // launch's proxy, but the menu bar need not wait for the CLI subprocess.
         Task { await fetchUsageData() }
         // Run the full sync (CLI upload + fetch) in parallel as the background
         // pipeline; a login launch waits for the user's proxy first.
