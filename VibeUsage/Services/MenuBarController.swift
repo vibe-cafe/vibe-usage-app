@@ -78,16 +78,20 @@ enum PopoverPanelResize {
     }
 }
 
-/// SwiftUI view rendered inside the NSStatusItem button.
-/// Using NSHostingView for the status item content is the best-practice workaround
-/// for proper vertical centering of multi-line text — attributedTitle and
-/// hand-composed NSImages both fight the menu-bar's implicit vertical metrics.
+/// The status item's layout: the icon, then nothing, one line or two stacked
+/// lines of figures. The status item shows it as a template image drawn from
+/// this view (`MenuBarStatusImage`); SwiftUI lays the lines out, which keeps
+/// two lines vertically centered without hand-tuned text metrics.
 ///
 /// Settings' 通用 page draws its menu-bar preview with this same view and
 /// `lines(for:)`, so the preview cannot drift from the real status item.
 struct MenuBarLabel: View {
     let icon: NSImage
     let lines: [String]
+    /// `.primary` in the Settings preview. The status image draws it in
+    /// opaque black: a template image only keeps the alpha, and `.primary`
+    /// is 85 % opaque, which would leave the item fainter than its neighbors.
+    var foreground: Color = .primary
 
     private static let iconSize = NSSize(width: 18, height: 18)
 
@@ -150,28 +154,122 @@ struct MenuBarLabel: View {
                 .fixedSize()
             }
         }
-        .foregroundColor(.primary)
+        .foregroundColor(foreground)
         .padding(.horizontal, 4)
         .fixedSize()
     }
 }
 
-/// NSHostingView subclass that passes all mouse events to the superview (NSStatusBarButton),
-/// so the button's target-action mechanism fires normally on click.
-/// Two-pronged approach:
-///   1. hitTest returns nil → AppKit routes the event to the button directly.
-///   2. mouseDown/mouseUp forward to superview → handles cases where SwiftUI's
-///      internal responder chain receives the event anyway.
-private final class PassthroughHostingView<V: View>: NSHostingView<V> {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { superview?.mouseDown(with: event) }
-    override func mouseUp(with event: NSEvent) { superview?.mouseUp(with: event) }
+/// The status item's picture: `MenuBarLabel` drawn into a template image and
+/// set as the button's own `image` (issue #140). The system tints a template
+/// image itself — white or black for the menu bar's appearance, dimmed with
+/// the other items while the menu bar is inactive (another item's menu or
+/// Control Center open), highlighted while pressed. The SwiftUI view that
+/// used to be laid over the button was outside that drawing and stayed at
+/// full brightness.
+///
+/// The image is as tall as the button, with the label centered in it the
+/// way SwiftUI centered it in the button before, so the button draws it
+/// where the label used to be, on whole pixels. It holds a 1x and a 2x
+/// bitmap; AppKit picks the one for the screen it draws on, so moving the
+/// item between displays keeps it sharp.
+@MainActor
+enum MenuBarStatusImage {
+    static let scales: [CGFloat] = [1, 2]
+
+    /// The picture's size in points: the label's width rounded up to whole
+    /// points (the label starts at the left edge, as before), and `height`,
+    /// the button's height, on the half-point grid of a Retina screen (some
+    /// menu bars are a half point tall). A label taller than the button (two
+    /// lines are 24 pt; the menu bar's own figure is 22) loses the same edge
+    /// rows the button cut from the label laid over it.
+    static func size(lines: [String], height: CGFloat) -> NSSize {
+        let natural = NSHostingView(rootView: label(lines, color: .black)).fittingSize
+        return NSSize(width: ceil(natural.width), height: max(1, (height * 2).rounded() / 2))
+    }
+
+    /// `darkMenuBar`: drawn for a dark menu bar, where macOS draws light text
+    /// a little bolder than dark text on light — and drew the label laid
+    /// over the button that way. The picture only holds coverage, so for a
+    /// dark menu bar it is drawn white on black and its brightness becomes
+    /// the coverage; drawn black on clear it would come out thinner there.
+    static func image(lines: [String], height: CGFloat, darkMenuBar: Bool) -> NSImage {
+        let size = size(lines: lines, height: height)
+        let image = NSImage(size: size)
+        for scale in scales {
+            guard let coverage = coverage(lines: lines, size: size, scale: scale, darkMenuBar: darkMenuBar)
+            else { continue }
+            let rep = NSBitmapImageRep(cgImage: coverage)
+            rep.size = size
+            image.addRepresentation(rep)
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    /// The button's height, or the menu bar's before the button is laid out.
+    static func height(of button: NSButton) -> CGFloat {
+        button.bounds.height > 0 ? button.bounds.height : NSStatusBar.system.thickness
+    }
+
+    static func isDark(_ appearance: NSAppearance) -> Bool {
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    /// Shows `lines` on `button` and returns the picture's width, which is
+    /// the status item's length.
+    @discardableResult
+    static func apply(lines: [String], to button: NSButton) -> CGFloat {
+        let image = image(lines: lines, height: height(of: button),
+                          darkMenuBar: isDark(button.effectiveAppearance))
+        button.title = ""
+        button.imagePosition = .imageOnly
+        button.imageScaling = .scaleNone
+        button.image = image
+        button.setAccessibilityValue(lines.joined(separator: "，"))
+        return image.size.width
+    }
+
+    private static func label(_ lines: [String], color: Color) -> MenuBarLabel {
+        MenuBarLabel(icon: MenuBarLabel.statusIcon, lines: lines, foreground: color)
+    }
+
+    /// Black whose alpha is the label's coverage, `scale` pixels per point.
+    private static func coverage(lines: [String], size: NSSize, scale: CGFloat, darkMenuBar: Bool) -> CGImage? {
+        guard darkMenuBar else {
+            let renderer = ImageRenderer(content: label(lines, color: .black)
+                .frame(width: size.width, height: size.height, alignment: .leading))
+            renderer.scale = scale
+            return renderer.cgImage
+        }
+        let renderer = ImageRenderer(content: label(lines, color: .white)
+            .frame(width: size.width, height: size.height, alignment: .leading)
+            .background(Color.black))
+        renderer.scale = scale
+        renderer.isOpaque = true
+        guard let drawn = renderer.cgImage else { return nil }
+        let width = drawn.width, height = drawn.height
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let data = context.data else { return nil }
+        context.draw(drawn, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let pixels = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        for pixel in stride(from: 0, to: width * height * 4, by: 4) {
+            // White on black: every channel is the coverage.
+            pixels[pixel + 3] = pixels[pixel]
+            pixels[pixel] = 0
+            pixels[pixel + 1] = 0
+            pixels[pixel + 2] = 0
+        }
+        return context.makeImage()
+    }
 }
 
 /// Owns the menu-bar status item and the borderless popover panel.
 /// Replaces SwiftUI MenuBarExtra so we can:
-///   - render stacked text (cost over tokens) via NSHostingView
+///   - show stacked text (cost over tokens) in the status item
 ///   - control the popover open/close animation (anchored to the icon)
 @MainActor
 final class MenuBarController: NSObject {
@@ -179,7 +277,10 @@ final class MenuBarController: NSObject {
     private let updaterViewModel: UpdaterViewModel
 
     private let statusItem: NSStatusItem
-    private var hostingView: PassthroughHostingView<MenuBarLabel>!
+    /// What the status item's picture was last drawn for; nothing is redrawn
+    /// while these stay the same.
+    private var statusImageInputs: (lines: [String], height: CGFloat, dark: Bool)?
+    private var statusAppearanceObservation: NSKeyValueObservation?
     private var panel: PopoverPanel?
     private var globalEventMonitor: Any?
     private var localEventMonitor: Any?
@@ -296,25 +397,38 @@ final class MenuBarController: NSObject {
 
     // MARK: - Status item
 
+    /// The button shows `MenuBarStatusImage`'s template picture as its own
+    /// image, so the system tints, dims and highlights it like every other
+    /// item (#140); clicks reach the button's action directly.
     private func configureStatusItem() {
         guard let button = statusItem.button else { return }
-
-        // Clear the native button content — we draw everything via NSHostingView.
-        button.title = ""
-        button.image = nil
         button.target = self
         button.action = #selector(handleClick(_:))
+        button.setAccessibilityLabel("Vibe Usage")
+        // The picture is drawn as tall as the button; a display with a
+        // taller or shorter menu bar redraws it, so it stays on whole pixels.
+        button.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(statusButtonFrameDidChange(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: button
+        )
+        // Light and dark menu bars get differently weighted pictures
+        // (`MenuBarStatusImage.image`); the appearance flips with the system
+        // setting and, since macOS 26, with the desktop picture under it.
+        statusAppearanceObservation = button.observe(\.effectiveAppearance) { [weak self] _, _ in
+            Task { @MainActor in self?.redrawStatusImage() }
+        }
+    }
 
-        let host = PassthroughHostingView(rootView: MenuBarLabel(icon: MenuBarLabel.statusIcon, lines: []))
-        host.translatesAutoresizingMaskIntoConstraints = false
-        button.addSubview(host)
-        NSLayoutConstraint.activate([
-            host.leadingAnchor.constraint(equalTo: button.leadingAnchor),
-            host.trailingAnchor.constraint(equalTo: button.trailingAnchor),
-            host.topAnchor.constraint(equalTo: button.topAnchor),
-            host.bottomAnchor.constraint(equalTo: button.bottomAnchor),
-        ])
-        self.hostingView = host
+    @objc private func statusButtonFrameDidChange(_ note: Notification) {
+        redrawStatusImage()
+    }
+
+    private func redrawStatusImage() {
+        guard let lines = statusImageInputs?.lines else { return }
+        showStatusImage(lines: lines)
     }
 
     /// Tracks AppState reads inside `refreshStatusItem`; re-fires on any change,
@@ -355,12 +469,18 @@ final class MenuBarController: NSObject {
     }
 
     private func refreshStatusItem() {
-        guard hostingView != nil else { return }
-        let lines = MenuBarLabel.lines(for: appState)
-        hostingView.rootView = MenuBarLabel(icon: MenuBarLabel.statusIcon, lines: lines)
-        // Force SwiftUI layout so fittingSize is current, then size the status item accordingly.
-        hostingView.layoutSubtreeIfNeeded()
-        let width = hostingView.fittingSize.width
+        showStatusImage(lines: MenuBarLabel.lines(for: appState))
+    }
+
+    /// Draws the picture again when the lines, the button's height or the
+    /// menu bar's appearance changed, and sizes the status item to it.
+    private func showStatusImage(lines: [String]) {
+        guard let button = statusItem.button else { return }
+        let height = MenuBarStatusImage.height(of: button)
+        let dark = MenuBarStatusImage.isDark(button.effectiveAppearance)
+        if let last = statusImageInputs, last.lines == lines, last.height == height, last.dark == dark { return }
+        statusImageInputs = (lines, height, dark)
+        let width = MenuBarStatusImage.apply(lines: lines, to: button)
         statusItem.length = width > 0 ? width : NSStatusItem.variableLength
     }
 
