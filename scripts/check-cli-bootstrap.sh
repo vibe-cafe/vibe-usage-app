@@ -7,6 +7,7 @@ set -euo pipefail
 # 2026-11-14, 《Mac 自带 Node 方案》§2.2). Change it there first, then copy it.
 #
 # Usage:
+#   ./scripts/check-cli-bootstrap.sh --worktree <Windows checkout>   # local, includes uncommitted edits
 #   ./scripts/check-cli-bootstrap.sh --github <ref>   # CI: compare with that ref on GitHub
 #   ./scripts/check-cli-bootstrap.sh --sibling        # release: compare with origin/main of
 #                                                     # the vibe-usage-windows checkout beside
@@ -22,6 +23,11 @@ EXPECTED="$(mktemp -t vibe-usage-bootstrap)"
 trap 'rm -f "$EXPECTED"' EXIT
 
 case "${1:-}" in
+    --worktree)
+        [[ $# -eq 2 ]] || { echo "Usage: $0 --worktree <Windows checkout>" >&2; exit 1; }
+        SOURCE="Windows worktree at $2"
+        cp "$2/$WINDOWS_PATH" "$EXPECTED"
+        ;;
     --github)
         [[ $# -eq 2 ]] || { echo "Usage: $0 --github <ref>" >&2; exit 1; }
         SOURCE="vibe-cafe/vibe-usage-windows@$2"
@@ -42,7 +48,7 @@ case "${1:-}" in
         git -C "$WINDOWS_REPO" show "origin/main:$WINDOWS_PATH" > "$EXPECTED"
         ;;
     *)
-        echo "Usage: $0 --github <ref> | --sibling" >&2
+        echo "Usage: $0 --github <ref> | --sibling | --worktree <Windows checkout>" >&2
         exit 1
         ;;
 esac

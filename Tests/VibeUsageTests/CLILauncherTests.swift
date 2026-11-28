@@ -88,12 +88,26 @@ struct CLILauncherTests {
     /// The shipped launcher run by a system Node with `fetch` stubbed, the
     /// way the Windows tests do it: what it prints is what the app classifies.
     /// Skipped where no Node is installed.
+    private var systemNode: String? {
+        let path = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
+        return (path + ["/opt/homebrew/bin", "/usr/local/bin"])
+            .map({ "\($0)/node" })
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+    }
+
+    private func launch(_ node: String, home: URL) async throws -> CLIProcessRunner.Output {
+        let stub = home.appendingPathComponent("stub.mjs")
+        return try await CLIProcessRunner.run(
+            executable: node,
+            arguments: ["--import=\(stub.absoluteString)", Self.launcher.path, "sync"],
+            environment: ["HOME": home.path, "PATH": "/usr/bin:/bin", "VIBE_USAGE_CONFIG_DIR": home.path],
+            timeout: 30
+        )
+    }
+
     @Test
     func realLauncherOutputIsClassifiedAsExpected() async throws {
-        let path = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        guard let node = (path + ["/opt/homebrew/bin", "/usr/local/bin"])
-            .map({ "\($0)/node" })
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return }
+        guard let node = systemNode else { return }
         let home = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: home) }
         let stub = home.appendingPathComponent("stub.mjs")
@@ -103,32 +117,63 @@ struct CLILauncherTests {
         };
         """.write(to: stub, atomically: true, encoding: .utf8)
 
-        func launch() async throws -> CLIProcessRunner.Output {
-            try await CLIProcessRunner.run(
-                executable: node,
-                arguments: ["--import=\(stub.absoluteString)", Self.launcher.path, "sync"],
-                environment: ["HOME": home.path, "PATH": "/usr/bin:/bin", "VIBE_USAGE_CONFIG_DIR": home.path],
-                timeout: 30
-            )
-        }
-
         // Nothing cached: the CLI never runs.
-        let empty = try await launch()
+        let empty = try await launch(node, home: home)
         #expect(empty.exitCode == 1)
         #expect(SyncEngine.outcome(for: empty)
             == .init(result: .launchFailed, reason: .launcherFailed, launcherStage: .network))
 
         // A cached version stands in and its own result counts.
         try cache(home, "0.14.11")
-        let cached = try await launch()
+        let cached = try await launch(node, home: home)
         #expect(cached.exitCode == 0)
         #expect(cached.stdout == "ran 0.14.11 sync\n")
         #expect(SyncEngine.outcome(for: cached) == .init(result: .success, cliFallback: .network))
 
         // The cached CLI's own failure stays the CLI's failure.
         try cache(home, "0.14.12", body: "export async function run() { process.stderr.write('✗ 同步失败: HTTP 502: bad gateway\\n'); process.exit(1); }\n")
-        let failing = try await launch()
+        let failing = try await launch(node, home: home)
         #expect(SyncEngine.outcome(for: failing)
             == .init(result: .failure, reason: .serverError, httpStatus: 502, cliFallback: .network))
+    }
+
+    @Test
+    func missingIntegrityFallsBackAndOnlyVerifiedInstallationPrunes() async throws {
+        guard let node = systemNode else { return }
+        let home = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let stub = home.appendingPathComponent("stub.mjs")
+        try cache(home, "0.16.0")
+        let source = home.appendingPathComponent("cli-cache/0.16.0")
+        let archive = home.appendingPathComponent("package.tgz")
+        let packed = try await CLIProcessRunner.run(executable: "/usr/bin/tar",
+            arguments: ["-czf", archive.path, "-C", source.path, "package"],
+            environment: ["COPYFILE_DISABLE": "1"], timeout: 30)
+        try #require(packed.exitCode == 0)
+        try FileManager.default.removeItem(at: source)
+        try cache(home, "0.14.11")
+        try cache(home, "0.14.12")
+        try cache(home, "0.14.9")
+        for verified in [false, true] {
+            try """
+            import { readFileSync } from 'node:fs';
+            import { createHash } from 'node:crypto';
+            const bytes = readFileSync(new URL('./package.tgz', import.meta.url));
+            const dist = { tarball: 'https://test.invalid/package.tgz' };
+            if (\(verified)) dist.integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64');
+            globalThis.fetch = async url => {
+              if (url !== dist.tarball) return Response.json({ version: '0.16.0', dist });
+              console.error('test: tarball requested');
+              return new Response(bytes);
+            };
+            """.write(to: stub, atomically: true, encoding: .utf8)
+            let result = try await launch(node, home: home)
+            #expect(result.exitCode == 0)
+            #expect(result.stderr.contains("test: tarball requested") == verified)
+            #expect(result.stdout == (verified ? "ran 0.16.0 sync\n" : "ran 0.14.12 sync\n"))
+            #expect(CLILauncher.fallbackStage(in: result.stderr) == (verified ? nil : .download))
+            let versions = try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("cli-cache").path)
+            #expect(versions.sorted() == (verified ? ["0.14.11", "0.14.12", "0.16.0"] : ["0.14.11", "0.14.12", "0.14.9"]))
+        }
     }
 }
