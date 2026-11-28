@@ -45,6 +45,57 @@ struct RangePrefetchTests {
         func clean() { UserDefaults(suiteName: domain)?.removePersistentDomain(forName: domain) }
     }
 
+    private func holdLaunchNetwork(_ state: AppState) -> AsyncStream<Void>.Continuation {
+        let (signal, release) = AsyncStream<Void>.makeStream()
+        state.launchProxyWait = Task { for await _ in signal {} }
+        return release
+    }
+
+    @Test(arguments: [InterfaceStyle.classic, .modern])
+    func loginLaunchAndFirstOpenWaitForTheSameNetwork(style: InterfaceStyle) async throws {
+        let f = Fixture()
+        defer { f.clean() }
+        let state = f.state(style)
+        let range = state.currentQueryRange
+        let network = holdLaunchNetwork(state)
+        defer { network.finish() }
+        state.saveConfig = { f.config = $0 }
+        state.runSync = { (.failure(.timeout), nil) }
+        state.configure(apiKey: "fixture", server: UsageServer(f.config.apiUrl))
+        try await waitForDashboard { state.isLoadingData || state.hasLoadedUsageData }
+        let opened = state.panelWillOpen()
+        // Give the independent activity and panel-open tasks time to run
+        // while the proxy is still down.
+        try await Task.sleep(for: .milliseconds(25))
+        #expect(state.isInitialDataLoad)
+        #expect(f.usage.isEmpty)
+        #expect(f.activity.isEmpty)
+
+        network.finish()
+        await opened.value
+        try await waitForDashboard { state.activity != nil && state.hasLoadedUsageData }
+        #expect(f.usage.filter { $0 == range }.count == 1)
+        #expect(f.activity.filter { $0 == range }.count == 1)
+    }
+
+    @Test(arguments: [InterfaceStyle.classic, .modern])
+    func unlinkWhileWaitingDropsBothDashboardRequests(style: InterfaceStyle) async throws {
+        let f = Fixture()
+        defer { f.clean() }
+        let state = f.state(style)
+        let network = holdLaunchNetwork(state)
+        defer { network.finish() }
+
+        let launch = Task { await state.fetchUsageData() }
+        try await waitForDashboard { state.isLoadingData || state.hasLoadedUsageData }
+        state.applyConfig(nil)
+        network.finish()
+        await launch.value
+        #expect(f.usage.isEmpty)
+        #expect(f.activity.isEmpty)
+        #expect(!state.hasLoadedUsageData && state.activity == nil)
+    }
+
     @Test func openWaitsForBothCurrentReadsAndDebouncesReopens() async throws {
         let f = Fixture()
         defer { f.clean() }

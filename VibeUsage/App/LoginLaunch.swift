@@ -4,7 +4,7 @@ import ServiceManagement
 
 /// Whether this launch is macOS starting the app as a login item. Such a
 /// launch behaves as any other on screen, but when a proxy is configured its
-/// network reads — the first sync and every live quota read — wait until that
+/// dashboard reads, sync and live quota reads wait until that
 /// proxy accepts connections (`waitForProxy`, at most two minutes), since the
 /// proxy client may not be running yet right after login (network-privacy
 /// principle, workspace AGENTS.md, rules 1, 2 and 6). With no proxy
@@ -35,7 +35,7 @@ enum LoginLaunch {
 
 extension LoginLaunch {
     /// The longest a login launch waits for the user's proxy before its
-    /// first sync.
+    /// network reads (sync, dashboard, live quotas) go ahead.
     static let proxyWaitLimit: TimeInterval = 120
     static let proxyPollInterval: TimeInterval = 2
 
