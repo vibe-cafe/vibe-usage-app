@@ -4,6 +4,22 @@ import SwiftUI
 struct PopoverView: View {
     @Environment(AppState.self) private var appState
     @EnvironmentObject var updaterViewModel: UpdaterViewModel
+    /// Prototype (#113): which reminder look a renderer asked for.
+    @Environment(\.legacyStyleReminderLook) private var reminderLook
+    @State private var reminderDismissed = false
+
+    private var shownReminder: LegacyStyleReminderLook? {
+        reminderDismissed ? nil : reminderLook
+    }
+
+    private func tryModernStyle() {
+        reminderDismissed = true
+        appState.selectInterfaceStyle(.modern)
+    }
+
+    private func dismissReminder() {
+        reminderDismissed = true
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,6 +52,23 @@ struct PopoverView: View {
                 }
             }
             .animation(.easeOut(duration: 0.12), value: payload?.key)
+        }
+        // Prototype (#113) B: the reminder hangs from 「设置」 in the same
+        // root layer, so it covers the content instead of moving it.
+        .overlayPreferenceValue(LegacyStyleReminderAnchorKey.self) { anchor in
+            GeometryReader { geo in
+                if shownReminder == .popover, let anchor {
+                    let button = geo[anchor]
+                    // Trailing edge on the button's, arrow at its middle.
+                    LegacyStyleReminderCallout(
+                        arrowFromTrailing: button.width / 2,
+                        tryModern: tryModernStyle,
+                        notNow: dismissReminder
+                    )
+                    .frame(width: button.maxX, alignment: .topTrailing)
+                    .offset(y: button.maxY + 3)
+                }
+            }
         }
     }
 
@@ -158,6 +191,11 @@ struct PopoverView: View {
             // Scrollable content
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
+                    // Prototype (#113) A: the first thing in the scrolling
+                    // content; the panel keeps its 620 pt.
+                    if shownReminder == .banner {
+                        LegacyStyleReminderBanner(tryModern: tryModernStyle, notNow: dismissReminder)
+                    }
                     if appState.isInitialDataLoad || (!appState.hasLoadedUsageData && appState.buckets.isEmpty) {
                         rateLimitSection
                         FilterTagsView()
@@ -280,6 +318,7 @@ struct PopoverView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.18), lineWidth: 0.5))
             }
             .buttonStyle(.plain)
+            .anchorPreference(key: LegacyStyleReminderAnchorKey.self, value: .bounds) { $0 }
         }
     }
 
