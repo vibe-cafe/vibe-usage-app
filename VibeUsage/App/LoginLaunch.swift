@@ -35,7 +35,7 @@ enum LoginLaunch {
 
 extension LoginLaunch {
     /// The longest a login launch waits for the user's proxy before its
-    /// first sync.
+    /// network reads (sync, dashboard, live quotas) go ahead.
     static let proxyWaitLimit: TimeInterval = 120
     static let proxyPollInterval: TimeInterval = 2
 

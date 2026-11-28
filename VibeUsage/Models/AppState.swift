@@ -584,8 +584,8 @@ final class AppState {
             }
         }
         if isConfigured {
-            // Only a login launch waits, for the proxy (`LoginLaunch`);
-            // linking later syncs at once.
+            // Only a login launch waits, for the proxy (`LoginLaunch`); a
+            // link made while that wait runs waits too.
             startScheduler()
         }
 
