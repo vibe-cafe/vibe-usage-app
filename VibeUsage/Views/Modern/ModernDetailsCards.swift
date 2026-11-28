@@ -272,14 +272,14 @@ private struct ModernDetailCard: View {
             VStack(spacing: 0) {
                 switch phase {
                 case .figures:
-                    centerValue(DetailsFormat.value(ranking?.total ?? 0, metric, cardTotal: ranking?.total ?? 0))
+                    centerValue(DetailsFormat.center(ranking?.total ?? 0, metric))
                 case .loading:
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(ModernTheme.placeholder)
                         .frame(width: 44, height: 10)
                         .frame(height: 16)
                 case .empty:
-                    centerValue(DetailsFormat.value(0, metric, cardTotal: 0)).opacity(0.3)
+                    centerValue(DetailsFormat.center(0, metric)).opacity(0.3)
                 case .unavailable:
                     centerValue("—", color: ModernTheme.secondaryText)
                 }
@@ -297,9 +297,8 @@ private struct ModernDetailCard: View {
             .font(ModernTheme.mono(13, .medium))
             .foregroundStyle(color)
             .lineLimit(1)
-            // A five-figure spend still fits inside the ticks.
             .minimumScaleFactor(0.75)
-            .frame(maxWidth: 62)
+            .frame(maxWidth: ModernDistributionRing.centerWidth)
             .frame(height: 16)
     }
 
@@ -514,6 +513,10 @@ struct ModernDistributionRing: View {
     }
 
     static let size: CGFloat = 88
+    /// The figure in the middle: six figures of whole dollars fit at 13 pt
+    /// with room to the ticks (inner radius 34); a longer figure shrinks
+    /// rather than reach them.
+    static let centerWidth: CGFloat = 56
     nonisolated static let tickCount = 72
     nonisolated private static let innerRadius: CGFloat = 34
     nonisolated private static let outerRadius: CGFloat = 43
@@ -647,6 +650,19 @@ enum DetailsFormat {
         let scaled = value / unit.divisor
         if value > 0 && scaled < 0.05 { return "<0.1" + unit.suffix }
         return String(format: scaled >= 99.95 ? "%.0f" : "%.1f", scaled) + unit.suffix
+    }
+
+    /// The ring's center: the card's total, with cost on 近期消耗's
+    /// big-number rule (134d, 134s): from $100 up without cents, rounded,
+    /// and nothing spent 「$0」. The two cards read the same figure, and a
+    /// six-figure spend stays at full size inside the ticks. Rows keep
+    /// `value`'s cents.
+    static func center(_ total: Double, _ metric: MetricMode) -> String {
+        let text = value(total, metric, cardTotal: total)
+        guard metric == .cost else { return text }
+        let parts = RecentUsageNumber.parts(text, dropsCentsFromHundred: true)
+        // Cents kept: as formatted. Dropped: the sign and the whole dollars.
+        return parts.contains { $0.role == .fraction } ? text : parts.map(\.text).joined()
     }
 
     /// Whole percent; a share too small to round to 1% still reads as present.

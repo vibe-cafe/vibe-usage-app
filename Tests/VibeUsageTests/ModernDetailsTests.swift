@@ -259,6 +259,49 @@ struct ModernDetailsTests {
     }
 
     @Test
+    func theRingsCenterDropsCentsFromAHundredLikeTheBigNumber() {
+        func center(_ cost: Double) -> String { DetailsFormat.center(cost, .cost) }
+        // Under $100 the cents stay, as on 近期消耗's big number.
+        #expect(center(41.2) == "$41.20")
+        #expect(center(99.99) == "$99.99")
+        #expect(center(0.0042) == "$0.0042")
+        // From $100 up: whole dollars, rounded.
+        #expect(center(100) == "$100")
+        #expect(center(268.6) == "$269")
+        #expect(center(999.49) == "$999")
+        #expect(center(999.99) == "$1000")
+        #expect(center(1_000) == "$1000")
+        #expect(center(71_711.27) == "$71711")
+        #expect(center(123_456.78) == "$123457")
+        #expect(center(1_234_567.89) == "$1234568")
+        // Nothing spent reads 「$0」 (134s).
+        #expect(center(0) == "$0")
+        // The same figure as the big number from $100 up.
+        let hero = RecentUsageNumber.parts(Formatters.formatCost(71_711.27), dropsCentsFromHundred: true)
+        #expect(center(71_711.27) == hero.map(\.text).joined())
+        // Token centers and every row keep their format.
+        #expect(DetailsFormat.center(65_500_000, .tokens) == "65.5M")
+        #expect(DetailsFormat.center(0, .tokens) == "0")
+        #expect(DetailsFormat.value(71_711.27, .cost, cardTotal: 71_711.27) == "$71711.27")
+    }
+
+    @Test @MainActor
+    func sixFiguresOfWholeDollarsFitTheRingsCenterAtFullSize() throws {
+        AppFonts.register(from: try #require(PanelTestResources.bundle))
+        let font = try #require(NSFont(name: "JetBrainsMono-Medium", size: 13))
+        func width(_ text: String) -> CGFloat {
+            NSAttributedString(string: text, attributes: [.font: font]).size().width
+        }
+        // The widest figures below a million (and the widest with cents)
+        // are drawn at 13 pt, without scaling.
+        for text in ["$999999", "$99.99", "$0.0042", "$71711"] {
+            #expect(width(text) <= ModernDistributionRing.centerWidth, "\(text)")
+        }
+        // With cents, five figures did not fit and were scaled down.
+        #expect(width("$71711.27") > ModernDistributionRing.centerWidth)
+    }
+
+    @Test
     func aLoneFourthRowIsListedAndTwoOrMoreCollapse() {
         let four = UsageRanking(values: ["A": 4, "B": 3, "C": 2, "D": 1])
         #expect(four.listed.map(\.name) == ["A", "B", "C", "D"])
