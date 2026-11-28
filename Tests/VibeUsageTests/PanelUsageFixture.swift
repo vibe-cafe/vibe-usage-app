@@ -17,6 +17,9 @@ enum PanelUsage {
     case many
     /// A period without usage.
     case none
+    /// Today's split (135a) with the costs scaled to this total: large
+    /// spends in the rings' centers and the rows.
+    case spend(Double)
 
     /// One tool × model × terminal over the whole period: millions of Token
     /// and dollars.
@@ -74,6 +77,12 @@ enum PanelUsage {
             }
         case .none:
             return []
+        case .spend(let total):
+            let lines = Self.todayLines(opus: "claude-opus-5-5")
+            let scale = total / lines.reduce(0) { $0 + $1.cost }
+            return lines.map {
+                Line(source: $0.source, model: $0.model, host: $0.host, millions: $0.millions, cost: $0.cost * scale)
+            }
         }
     }
 

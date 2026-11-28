@@ -111,20 +111,27 @@ struct PanelSnapshotTests {
             let usage: PanelUsage
             var open: UsageRanking.Dimension?
             var faded = false
+            var metrics: [UsageRanking.Dimension: MetricMode] = [:]
             /// The height of a scrolling area around the grid (a short screen).
             var viewport: CGFloat?
         }
+        let allCost: [UsageRanking.Dimension: MetricMode] = [.model: .cost, .terminal: .cost, .tool: .cost]
         let crops = [
             Crop(id: "135d", usage: .today, open: .model),
             Crop(id: "135d-viewport", usage: .today, open: .model, viewport: 252),
             Crop(id: "135d-up", usage: .many, open: .tool),
             Crop(id: "135d-scroll", usage: .many, open: .model),
             Crop(id: "135-faded", usage: .today, faded: true),
+            // Large spends in the rings' centers and the rows.
+            Crop(id: "135-cost-5", usage: .spend(71_711.27), metrics: allCost),
+            Crop(id: "135-cost-6", usage: .spend(123_456.78), metrics: allCost),
+            Crop(id: "135-cost-7", usage: .spend(1_234_567.89), metrics: allCost),
+            Crop(id: "135-cost-empty", usage: PanelUsage.none, metrics: allCost),
         ]
         let wanted = ProcessInfo.processInfo.environment["VIBE_USAGE_RENDER_SCENES"]
             .map { Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }) }
         for crop in crops where wanted?.contains(crop.id) ?? true {
-            let fixture = PanelFixture(PanelScene(id: crop.id, title: crop.id, usage: crop.usage))
+            let fixture = PanelFixture(PanelScene(id: crop.id, title: crop.id, usage: crop.usage, metrics: crop.metrics))
             defer { fixture.tearDown() }
             try await fixture.prepare()
             // A new period whose response has not come back yet.
@@ -247,6 +254,8 @@ struct PanelScene {
                    metrics: [.model: .cost]),
         PanelScene(id: "135c-all", title: "三个分布都按费用", expanded: true, usage: .today,
                    metrics: [.model: .cost, .terminal: .cost, .tool: .cost]),
+        PanelScene(id: "135-cost-large", title: "花了 $71,711.27：环中心和近期消耗都写 $71711", expanded: true,
+                   usage: .spend(71_711.27), metrics: [.model: .cost, .terminal: .cost, .tool: .cost]),
         PanelScene(id: "135e", title: "名字太长：中间省略", expanded: true, usage: .longNames),
         PanelScene(id: "135-selected", title: "点进 Claude：四张卡只算 Claude Code", selected: .claudeCode,
                    expanded: true, usage: .today),
