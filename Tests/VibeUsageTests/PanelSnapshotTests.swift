@@ -303,6 +303,8 @@ struct PanelScene {
             scene("134q", "第一次打开，还没读出来", .init(loading: .initial)),
             scene("134r", "换了周期，旧的变淡", .init(loading: .switching(.sevenDays))),
             scene("134s", "这段时间没有用量", .init(empty: true)),
+            scene("134s-subscription", "点进 Cursor：这 7 天没有用量", .init(range: .sevenDays, empty: true),
+                  selected: .cursor),
             scene("134-active-hover", "活跃当大数字，悬停看 AI 工时", .init(hero: .activeTime, preview: .init(hoveredSlot: 1))),
             scene("134-active-row", "悬停小数字「活跃」", .init(preview: .init(activityHovered: true))),
             scene("134-active-hero-hover", "活跃当大数字，悬停大数字", .init(hero: .activeTime, preview: .init(heroHovered: true))),

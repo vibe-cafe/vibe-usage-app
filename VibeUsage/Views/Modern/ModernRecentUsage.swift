@@ -211,25 +211,21 @@ struct ModernRecentUsageBody: View {
                                 units: units, rolling: builtRange == .oneDay, now: builtAt)
     }
 
-    /// 134s: 「暂无数据」 and the design's one line, which only fits when
-    /// nothing narrows the figures (a filter or a subscription would make
-    /// it wrong).
+    /// 134s: 「暂无数据」 alone, where 「加载中」 sits (centered on the
+    /// curve's area, 134q), so a read that ends empty swaps the words in
+    /// place. No axis and no second line (maintainer 2026-11-28: 选 A，去掉
+    /// 说明句; the design put the words at the top left in 13 pt medium, with
+    /// a line for new users under them).
     private var emptyMessage: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(spacing: RecentUsagePlotLayout.spacing) {
             Text("暂无数据")
-                .font(ModernTheme.text(13, .medium))
-                .foregroundStyle(ModernTheme.text)
-                .frame(height: 18)
-            if filters == UsagePanelFilters() {
-                Text("用了 AI 编程工具以后，数据会自动同步到这里。")
-                    .font(ModernTheme.text(11))
-                    .foregroundStyle(ModernTheme.secondaryText)
-                    .lineLimit(2)
-                    .frame(minHeight: 16, alignment: .topLeading)
-            }
+                .font(ModernTheme.text(13))
+                .foregroundStyle(ModernTheme.secondaryText)
+                .frame(maxWidth: .infinity)
+                .frame(height: RecentUsagePlotLayout.curveHeight)
+            Color.clear.frame(height: RecentUsagePlotLayout.axisHeight)
         }
-        .padding(.top, 3)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity)
     }
 }
 
