@@ -389,7 +389,7 @@ struct ModernOverviewRow: View {
                 .frame(width: 14, height: 14)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4.5 }
                 .padding(.trailing, 6)
-            Text(row.provider.displayName)
+            Text(row.provider.overviewName)
                 .font(ModernTheme.text(13, .medium))
                 .foregroundStyle(ModernTheme.text)
                 .lineLimit(1)
@@ -459,6 +459,18 @@ struct ModernOverviewRow: View {
         case .needsLogin, .loginExpired: ModernTheme.strongText
         default: ModernTheme.secondaryText
         }
+    }
+}
+
+extension ProviderRateLimit.Provider {
+    /// The name on an overview row, which shares its line with the
+    /// percentages: 「Antigravity」 without 「/ AGY」, whose two three-digit
+    /// windows otherwise sit 12 pt from the name, as close as the numbers sit
+    /// to each other (maintainer 2026-11-28: 「AGY 那一行」 crowded). The
+    /// detail header, the round button's tooltip, the folded marks, Settings
+    /// and the classic panel keep `displayName`.
+    var overviewName: String {
+        self == .antigravity ? "Antigravity" : displayName
     }
 }
 

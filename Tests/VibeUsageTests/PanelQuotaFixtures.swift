@@ -51,6 +51,11 @@ enum PanelQuotas: Sendable {
     case claudeWeeklyFable
     /// Claude Pro: 5h and 7d, no Fable.
     case claudePro
+    /// The external-test screenshot of 2026-11-28: Codex Pro with 7d only and
+    /// behind pace, Claude ahead of pace, Antigravity untouched in both
+    /// windows (the longest name with two three-digit numbers), Cursor and
+    /// Grok folded.
+    case agyCrowded
 
     func snapshots(now: Date) -> [ProviderRateLimit] {
         let b = Builder(now: now)
@@ -134,6 +139,10 @@ enum PanelQuotas: Sendable {
             set(claude)
         case .claudePro:
             set(b.snapshot(.claudeCode, b.window(58, 5, due: 40), b.window(74, 168, due: 60), plan: "Pro"))
+        case .agyCrowded:
+            set(b.snapshot(.codex, nil, b.window(53, 168, due: 64), plan: "Pro"))
+            set(b.snapshot(.claudeCode, b.window(99, 5, due: 88), b.window(39, 168, due: 21), plan: "Max"))
+            set(b.snapshot(.antigravity, .init(utilization: 0), b.window(100, 168, due: 91)))
         }
         return ProviderRateLimit.Provider.allCases.compactMap { byProvider[$0] }
     }
