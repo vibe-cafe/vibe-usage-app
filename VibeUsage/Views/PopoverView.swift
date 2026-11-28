@@ -57,6 +57,7 @@ struct PopoverView: View {
                 .background(Color(white: 0.16))
 
             VStack(alignment: .leading, spacing: 14) {
+                classicStyleReminder
                 rateLimitSection
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -158,6 +159,9 @@ struct PopoverView: View {
             // Scrollable content
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
+                    // An upgraded user's one-time banner: content, so the
+                    // panel keeps its 620 pt and the rest moves down.
+                    classicStyleReminder
                     if appState.isInitialDataLoad || (!appState.hasLoadedUsageData && appState.buckets.isEmpty) {
                         rateLimitSection
                         FilterTagsView()
@@ -206,6 +210,18 @@ struct PopoverView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: appState.isRefreshingData)
+    }
+
+    /// The upgraded user's banner (#113, `InterfaceStylePreference.showsClassicReminder`).
+    @ViewBuilder
+    private var classicStyleReminder: some View {
+        if appState.interfaceStyle.showsClassicReminder {
+            ClassicStyleReminderBanner {
+                appState.acceptClassicStyleReminder()
+            } notNow: {
+                appState.interfaceStyle.dismissClassicReminder()
+            }
+        }
     }
 
     @ViewBuilder

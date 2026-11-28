@@ -133,6 +133,21 @@ struct ModernPanelView: View {
 
     private var cards: some View {
         VStack(spacing: ModernTheme.cardSpacing) {
+            // After the classic banner's 「切换新版」 (#113): first in the
+            // scrolling middle, under the 概览 row (or the header with one
+            // subscription). It counts in the content height, so the panel
+            // is 44 pt taller while it shows and shrinks back once it ends.
+            if appState.interfaceStyle.showsSwitchBackReminder {
+                ModernSwitchBackBanner {
+                    appState.interfaceStyle.dismissSwitchBackReminder()
+                    SettingsWindowController.shared.show(
+                        appState: appState, updaterViewModel: updaterViewModel, destination: .general
+                    )
+                } dismiss: {
+                    appState.interfaceStyle.dismissSwitchBackReminder()
+                }
+            }
+
             ModernCard(title: "订阅配额") {
                 if let scope = appState.modernPanel.quotaRefreshScope(enabled: enabled) {
                     ModernRefreshQuotasButton(scope: scope)

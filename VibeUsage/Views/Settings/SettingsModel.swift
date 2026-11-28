@@ -41,6 +41,8 @@ enum SettingsDestination: Equatable {
     case lastPage
     /// The panel's gear (no product) or a grey product tab (that product).
     case quotas(focus: ProviderRateLimit.Provider?)
+    /// The new panel's switch-back banner (#113): 通用, where 「界面样式」 is.
+    case general
 }
 
 /// Which page is showing, persisted so the window reopens where the user left
@@ -78,6 +80,10 @@ final class SettingsNavigation {
     }
 
     func open(_ destination: SettingsDestination, zCodeKeyConfigured: Bool, cursorNeedsSignIn: Bool = false) {
+        if destination == .general {
+            page = .general
+            return
+        }
         guard case .quotas(let provider) = destination else { return }
         page = .quotas
         guard let provider else { return }

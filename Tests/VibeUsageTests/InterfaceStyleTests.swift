@@ -5,10 +5,11 @@ import Testing
 
 @MainActor
 struct InterfaceStyleTests {
+    /// A domain in a temporary folder (`TestPreferences`, issue #126).
     private func withPreferences(_ run: (String, UserDefaults) -> Void) {
-        let domain = "InterfaceStyleTests.\(UUID().uuidString)"
+        let domain = TestPreferences.makeDomain("InterfaceStyleTests")
         let defaults = UserDefaults(suiteName: domain)!
-        defer { defaults.removePersistentDomain(forName: domain) }
+        defer { TestPreferences.remove(domain) }
         run(domain, defaults)
     }
 
@@ -123,19 +124,190 @@ struct InterfaceStyleTests {
             #expect(InterfaceStylePreference(domain: domain, rollout: .released).current == opposite)
         }
     }
+
+    @Test
+    func testsThatNameNoRolloutKeepTheClosedOne() {
+        // Most tests build `AppState()` with the shared preference; they must
+        // not depend on what earlier runs left in the runner's preferences.
+        #expect(InterfaceStylePreference.Rollout.isTestProcess)
+        #expect(InterfaceStylePreference.Rollout.current == .unreleased)
+    }
     #else
     @Test
     func distributionBuildUsesItsOwnRollout() {
+        // Both distribution builds are open: a fresh domain starts modern.
         withPreferences { domain, _ in
             let preference = InterfaceStylePreference(domain: domain)
-            #if VIBE_USAGE_EXTERNAL_TEST
             #expect(preference.current == .modern)
             #expect(preference.canSelect)
-            #else
-            #expect(preference.current == .classic)
-            #expect(!preference.canSelect)
-            #endif
+            #expect(!preference.showsClassicReminder)
         }
     }
     #endif
+
+    // MARK: - The two one-time banners (#113)
+
+    /// An install that used a pre-style version (any of its keys), so the
+    /// first judgment keeps it on classic.
+    private func upgrade(_ defaults: UserDefaults) {
+        defaults.set(true, forKey: "showInDock")
+    }
+
+    @Test
+    func upgradeShowsTheClassicBannerUntilAnsweredAcrossRelaunches() {
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let first = InterfaceStylePreference(domain: domain, rollout: .released)
+            #expect(first.current == .classic)
+            #expect(first.showsClassicReminder)
+            #expect(!first.showsSwitchBackReminder)
+            // Closing the panel without an answer changes nothing; the next
+            // launch reads the banner back.
+            let relaunched = InterfaceStylePreference(domain: domain, rollout: .released)
+            #expect(relaunched.current == .classic)
+            #expect(relaunched.showsClassicReminder)
+        }
+    }
+
+    @Test
+    func freshInstallAndExternalTestNeverSeeTheClassicBanner() {
+        withPreferences { domain, _ in
+            let fresh = InterfaceStylePreference(domain: domain, rollout: .released)
+            #expect(fresh.current == .modern)
+            #expect(!fresh.showsClassicReminder)
+            #expect(!fresh.showsSwitchBackReminder)
+            fresh.select(.classic)
+            #expect(!fresh.showsClassicReminder)
+            #expect(!InterfaceStylePreference(domain: domain, rollout: .released).showsClassicReminder)
+        }
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let external = InterfaceStylePreference(domain: domain, rollout: .externalTest)
+            #expect(external.current == .modern)
+            external.select(.classic)
+            #expect(!external.showsClassicReminder)
+            #expect(!external.showsSwitchBackReminder)
+        }
+    }
+
+    @Test
+    func notNowEndsTheClassicBannerForGood() {
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let preference = InterfaceStylePreference(domain: domain, rollout: .released)
+            preference.dismissClassicReminder()
+            #expect(preference.current == .classic)
+            #expect(!preference.showsClassicReminder)
+            #expect(!preference.showsSwitchBackReminder)
+            #expect(defaults.object(forKey: InterfaceStylePreference.classicReminderKey) == nil)
+
+            let relaunched = InterfaceStylePreference(domain: domain, rollout: .released)
+            #expect(!relaunched.showsClassicReminder)
+            relaunched.select(.modern)
+            #expect(!relaunched.showsSwitchBackReminder)
+            relaunched.select(.classic)
+            #expect(!relaunched.showsClassicReminder)
+        }
+    }
+
+    @Test
+    func switchToModernShowsTheSwitchBackBannerUntilClosed() {
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let preference = InterfaceStylePreference(domain: domain, rollout: .released)
+            preference.acceptClassicReminder()
+            #expect(preference.current == .modern)
+            #expect(!preference.showsClassicReminder)
+            #expect(preference.showsSwitchBackReminder)
+
+            let relaunched = InterfaceStylePreference(domain: domain, rollout: .released)
+            #expect(relaunched.current == .modern)
+            #expect(relaunched.showsSwitchBackReminder)
+            // × and the path to Settings both end it.
+            relaunched.dismissSwitchBackReminder()
+            #expect(!relaunched.showsSwitchBackReminder)
+            #expect(defaults.object(forKey: InterfaceStylePreference.switchBackReminderKey) == nil)
+            #expect(!InterfaceStylePreference(domain: domain, rollout: .released).showsSwitchBackReminder)
+        }
+    }
+
+    @Test
+    func switchingTheStyleInSettingsEndsBothBanners() {
+        // Before the classic banner was answered.
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let preference = InterfaceStylePreference(domain: domain, rollout: .released)
+            preference.select(.modern)
+            #expect(!preference.showsSwitchBackReminder)
+            preference.select(.classic)
+            #expect(!preference.showsClassicReminder)
+        }
+        // While the switch-back banner shows.
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let preference = InterfaceStylePreference(domain: domain, rollout: .released)
+            preference.acceptClassicReminder()
+            preference.select(.classic)
+            #expect(!preference.showsClassicReminder)
+            preference.select(.modern)
+            #expect(!preference.showsSwitchBackReminder)
+            let relaunched = InterfaceStylePreference(domain: domain, rollout: .released)
+            #expect(!relaunched.showsClassicReminder)
+            #expect(!relaunched.showsSwitchBackReminder)
+        }
+    }
+
+    @Test
+    func choosingTheCurrentStyleAgainKeepsTheBanner() {
+        // The segmented control sends its current value again on a click.
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let preference = InterfaceStylePreference(domain: domain, rollout: .released)
+            preference.select(.classic)
+            #expect(preference.showsClassicReminder)
+        }
+    }
+
+    @Test
+    func closedRolloutNeverShowsOrWritesABanner() {
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let before = defaults.persistentDomain(forName: domain) as NSDictionary?
+            let preference = InterfaceStylePreference(domain: domain, rollout: .unreleased)
+            #expect(!preference.showsClassicReminder)
+            preference.acceptClassicReminder()
+            preference.dismissClassicReminder()
+            preference.dismissSwitchBackReminder()
+            #expect(preference.current == .classic)
+            #expect(!preference.showsSwitchBackReminder)
+            #expect(defaults.persistentDomain(forName: domain) as NSDictionary? == before)
+        }
+    }
+
+    @Test
+    func switchToModernFromTheBannerPutsThePeriodOnTheNewPanelsDefault() {
+        withPreferences { domain, defaults in
+            upgrade(defaults)
+            let state = AppState(
+                loadConfig: { nil },
+                usageFetcher: { _, _, _ in throw URLError(.notConnectedToInternet) },
+                activityFetcher: { _, _, _, _, _ in throw URLError(.notConnectedToInternet) },
+                quotaDefaults: defaults,
+                interfaceStyle: InterfaceStylePreference(domain: domain, rollout: .released)
+            )
+            state.applyDefaultTimeRangeForInterfaceStyle()
+            #expect(state.timeRange == .oneDay)
+            #expect(state.interfaceStyle.showsClassicReminder)
+
+            state.acceptClassicStyleReminder()
+            #expect(state.interfaceStyle.current == .modern)
+            #expect(state.timeRange == .today)
+            #expect(state.interfaceStyle.showsSwitchBackReminder)
+
+            state.selectInterfaceStyle(.classic)
+            #expect(state.timeRange == .oneDay)
+            #expect(!state.interfaceStyle.showsClassicReminder)
+            #expect(!state.interfaceStyle.showsSwitchBackReminder)
+        }
+    }
 }
