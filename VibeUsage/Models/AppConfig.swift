@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppConfig {
-    static let version = "0.8.1"
+    static let version = "0.9.0"
     static let interfaceStyleReleased = true
 
     #if VIBE_USAGE_EXTERNAL_TEST
