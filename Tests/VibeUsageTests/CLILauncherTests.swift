@@ -161,11 +161,15 @@ struct CLILauncherTests {
             const bytes = readFileSync(new URL('./package.tgz', import.meta.url));
             const dist = { tarball: 'https://test.invalid/package.tgz' };
             if (\(verified)) dist.integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64');
-            globalThis.fetch = async url => url === dist.tarball ? new Response(bytes)
-              : Response.json({ version: '0.16.0', dist });
+            globalThis.fetch = async url => {
+              if (url !== dist.tarball) return Response.json({ version: '0.16.0', dist });
+              console.error('test: tarball requested');
+              return new Response(bytes);
+            };
             """.write(to: stub, atomically: true, encoding: .utf8)
             let result = try await launch(node, home: home)
             #expect(result.exitCode == 0)
+            #expect(result.stderr.contains("test: tarball requested") == verified)
             #expect(result.stdout == (verified ? "ran 0.16.0 sync\n" : "ran 0.14.12 sync\n"))
             #expect(CLILauncher.fallbackStage(in: result.stderr) == (verified ? nil : .download))
             let versions = try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("cli-cache").path)

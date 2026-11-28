@@ -272,15 +272,14 @@ function runningVersions() {
 }
 
 function holdVersion(version) {
-  if (!SEMVER.test(version)) return; // Only version-named entries can be pruned.
+  if (!SEMVER.test(version)) return true; // Only version-named entries can be pruned.
   const marker = join(cacheRoot(), `.running-${process.pid}-${version}`);
   try {
     mkdirSync(cacheRoot(), { recursive: true });
     writeFileSync(marker, '');
   } catch (err) {
     // A read-only cache can still run and cannot be pruned by this user.
-    if (['EROFS', 'EACCES', 'EPERM'].includes(err.code)) return;
-    throw err;
+    return ['EROFS', 'EACCES', 'EPERM'].includes(err.code);
   }
   process.once('exit', () => {
     try { rmSync(marker, { force: true }); } catch {}
@@ -288,14 +287,21 @@ function holdVersion(version) {
   // Each cleaner creates an empty destination parent before reading the run
   // markers. If it already read them, removing that parent vetoes its rename.
   // If the rename won, the parent is nonempty and the cache lookup sees a miss.
-  for (const entry of readdirSync(cacheRoot(), { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = readdirSync(cacheRoot(), { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith('.pruning-')) continue;
     try {
       rmdirSync(join(cacheRoot(), entry.name, version));
     } catch (err) {
-      if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(err.code)) throw err;
+      if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(err.code)) return false;
     }
   }
+  return true;
 }
 
 function pruneCache(installed) {
@@ -336,7 +342,7 @@ function shortReason(err) {
  */
 function fallBackToCache(stage, err) {
   for (const version of cachedVersions()) {
-    holdVersion(version);
+    if (!holdVersion(version)) continue;
     const dir = cachedPackage(version);
     if (!dir) continue;
     process.stderr.write(
@@ -383,14 +389,13 @@ function extractTar(gz, destination) {
 
 /** The verified tarball bytes; any failure here is the `download` stage. */
 async function downloadTarball(version, tarball, integrity, timeoutMs) {
-  const res = await fetch(tarball, { signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new LauncherError('download', `download failed (${res.status}) for ${PACKAGE}@${version}`);
-  const bytes = Buffer.from(await res.arrayBuffer());
-
   const hashes = typeof integrity === 'string' ? integrity.split(/\s+/).filter(hash => hash.startsWith('sha512-')) : [];
   if (hashes.length === 0) {
     throw new LauncherError('download', `download failed (missing sha512 integrity) for ${PACKAGE}@${version}`);
   }
+  const res = await fetch(tarball, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new LauncherError('download', `download failed (${res.status}) for ${PACKAGE}@${version}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
   const digest = createHash('sha512').update(bytes).digest('base64');
   if (!hashes.includes(`sha512-${digest}`)) {
     throw new LauncherError('download', `integrity mismatch for ${PACKAGE}@${version}`);
@@ -449,8 +454,7 @@ async function resolvePackageDir() {
     return fallBackToCache(err?.stage ?? 'network', err);
   }
   const { version, tarball, integrity } = latest;
-  if (cachedPackage(version)) {
-    holdVersion(version);
+  if (cachedPackage(version) && holdVersion(version)) {
     const cached = cachedPackage(version);
     if (cached) return cached;
   }
@@ -466,7 +470,9 @@ async function resolvePackageDir() {
     return fallBackToCache(err?.stage ?? 'download', err);
   }
   try {
-    holdVersion(version);
+    if (!holdVersion(version)) {
+      throw new LauncherError('install', `could not install ${PACKAGE}@${version}: could not hold cache version in use`);
+    }
     const dir = install(version, bytes);
     pruneCache(version);
     return dir;
