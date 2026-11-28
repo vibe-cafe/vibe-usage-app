@@ -106,6 +106,21 @@ struct SettingsWindowTests {
         #expect(navigation.focusedProvider == nil)
     }
 
+    /// The new panel's switch-back banner (#113) opens 通用, where
+    /// 「界面样式」 is, whatever page was last.
+    @Test @MainActor
+    func switchBackBannerOpensGeneral() {
+        let suite = TestPreferences.makeDomain("SettingsWindowTests")
+        defer { TestPreferences.remove(suite) }
+        let navigation = SettingsNavigation(defaults: UserDefaults(suiteName: suite)!)
+        navigation.page = .about
+
+        navigation.open(.general, zCodeKeyConfigured: false)
+
+        #expect(navigation.page == .general)
+        #expect(navigation.focusedProvider == nil)
+    }
+
     @Test @MainActor
     func panelGearOpensQuotasWithoutFocusingARow() {
         let (defaults, suite) = defaults()

@@ -315,9 +315,20 @@ final class AppState {
     /// 「界面样式」: switch the style, then put the period on its default.
     /// A changed period is read again, the same read a period change makes.
     /// If just the effective tool or project changes, only active time is read again.
+    /// A real switch here ends both style reminders (`InterfaceStylePreference.select`).
     func selectInterfaceStyle(_ style: InterfaceStyle) {
+        switchInterfaceStyle { interfaceStyle.select(style) }
+    }
+
+    /// The classic panel's banner, 「切换新版」: the same switch, after which
+    /// the new panel says once where to switch back.
+    func acceptClassicStyleReminder() {
+        switchInterfaceStyle { interfaceStyle.acceptClassicReminder() }
+    }
+
+    private func switchInterfaceStyle(_ change: () -> Void) {
         let previous = interfaceStyle.current
-        interfaceStyle.select(style)
+        change()
         guard interfaceStyle.current != previous else { return }
         let range = timeRange
         applyDefaultTimeRangeForInterfaceStyle()

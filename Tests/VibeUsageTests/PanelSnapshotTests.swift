@@ -213,6 +213,10 @@ struct PanelScene {
     var quotas: PanelQuotas = .design
     /// 订阅配额 hover and fold states the renderer cannot reach with a pointer.
     var quotaPreview = ModernQuotaPreview()
+    /// The interface-style rollout of the scene's own preference domain.
+    /// `.released` makes it an upgrade (the fixture writes the old app's
+    /// quota keys first): classic, with the classic banner pending (#113).
+    var styleRollout: InterfaceStylePreference.Rollout = .externalTest
 
     enum SignIn: String {
         /// 「登录并链接数据」.
@@ -475,7 +479,8 @@ final class PanelFixture {
 
     init(_ scene: PanelScene, now: Date = Date()) {
         self.scene = scene
-        suite = "PanelSnapshot.\(UUID().uuidString)"
+        // A domain in a temporary folder, not ~/Library/Preferences (#126).
+        suite = TestPreferences.makeDomain("PanelSnapshot")
         defaults = UserDefaults(suiteName: suite)!
         defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
         defaults.set(scene.subscriptions.map(\.rawValue), forKey: QuotaSelectionPreferences.selectedIDsKey)
@@ -514,9 +519,10 @@ final class PanelFixture {
             quotaProductDiscoverer: {
                 QuotaProductRegistry.catalog.map { QuotaProduct(provider: $0.0, availability: $0.1, isDetected: true) }
             },
-            // Its own preference domain with the external-test rollout: a
-            // fresh domain starts on the new panel, in Debug and Release.
-            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: .externalTest),
+            // Its own preference domain with the external-test rollout (a
+            // fresh domain starts on the new panel, in Debug and Release)
+            // unless the scene names another (`styleRollout`).
+            interfaceStyle: InterfaceStylePreference(domain: suite, rollout: scene.styleRollout),
             deviceLinkService: .fixture(scene.signIn)
         )
         state.initializeQuotaProducts()
@@ -618,7 +624,7 @@ final class PanelFixture {
         pending.forEach { $0.cancel() }
         reads.release()
         state.deviceLink.cancel()
-        defaults.removePersistentDomain(forName: suite)
+        TestPreferences.remove(suite)
     }
 }
 

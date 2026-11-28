@@ -41,7 +41,7 @@ enum SettingsDestination: Equatable {
     case lastPage
     /// The panel's gear (no product) or a grey product tab (that product).
     case quotas(focus: ProviderRateLimit.Provider?)
-    /// Prototype (#113): the new panel's switch-back notice, 通用 (界面样式).
+    /// The new panel's switch-back banner (#113): 通用, where 「界面样式」 is.
     case general
 }
 

@@ -60,10 +60,6 @@ struct ModernPanelView: View {
     @State private var headerHeight: CGFloat?
     @State private var footerHeight: CGFloat?
     @State private var contentHeight: CGFloat?
-    /// Prototype (#113): the switch-back banner after the classic banner's
-    /// 「切换新版」; a renderer turns it on, × or the path ends it.
-    @Environment(\.modernSwitchBackNotice) private var showsSwitchBackNotice
-    @State private var switchBackNoticeDismissed = false
 
     private var enabled: [ProviderRateLimit.Provider] { appState.quotaCardProviders }
 
@@ -137,17 +133,18 @@ struct ModernPanelView: View {
 
     private var cards: some View {
         VStack(spacing: ModernTheme.cardSpacing) {
-            // Prototype (#113): first in the scrolling middle, under the 概览
-            // row (or the header with one subscription). It counts in the
-            // content height, so the panel grows by it and shrinks back on ×.
-            if showsSwitchBackNotice && !switchBackNoticeDismissed {
+            // After the classic banner's 「切换新版」 (#113): first in the
+            // scrolling middle, under the 概览 row (or the header with one
+            // subscription). It counts in the content height, so the panel
+            // is 44 pt taller while it shows and shrinks back once it ends.
+            if appState.interfaceStyle.showsSwitchBackReminder {
                 ModernSwitchBackBanner {
-                    switchBackNoticeDismissed = true
+                    appState.interfaceStyle.dismissSwitchBackReminder()
                     SettingsWindowController.shared.show(
                         appState: appState, updaterViewModel: updaterViewModel, destination: .general
                     )
                 } dismiss: {
-                    switchBackNoticeDismissed = true
+                    appState.interfaceStyle.dismissSwitchBackReminder()
                 }
             }
 
